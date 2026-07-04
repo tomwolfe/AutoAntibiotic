@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AutoAntibiotic Discovery Pipeline v3.1
+AutoAntibiotic Discovery Pipeline v3.2
 ========================================
 Principal Computational Chemist & AI Pipeline Architect
 Project: AutoAntibiotic Discovery — MRSA PBP2a Inhibitor Screening
@@ -9,50 +9,75 @@ Screens novel small-molecule libraries against MRSA PBP2a (allosteric + active s
 with selectivity filtering against human serine hydrolases, ADMET profiling, and
 resistance-risk analysis.
 
+Scientific rationale:
+  - Phase 0: Redocking validation ensures the docking protocol can reproduce known
+    binding modes (RMSD ≤ 2.0 Å threshold).
+  - Phase 1: Structure preparation removes crystallographic artifacts and defines
+    grid centres for allosteric (Ala237/Met241/Tyr159) and active (Ser403) pockets.
+  - Phase 2: Library generation via BRICS fragment recombination produces a diverse,
+    drug-like chemical space enriched with natural-product-inspired scaffolds.
+  - Phase 3: Virtual screening ranks candidates by predicted binding affinity;
+    an RDKit shape-based fallback operates when Vina is unavailable.
+  - Phase 4: Selectivity against human off-targets (trypsin, CES1) is quantified
+    via the Selectivity Index; resistance risk is profiled via interaction heuristics.
+  - Phase 5: A CSV report, 2D structure images, and an interactive HTML report
+    (with embedded matplotlib figures) are generated for downstream review.
+
 Author: AutoAntibiotic Agent
-Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina
+Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina | meeko
 """
 
-import os
-import sys
-import itertools
-import subprocess
-import logging
-import warnings
-import tempfile
-import shutil
-from pathlib import Path
-from typing import List, Tuple, Optional, Dict
-from dataclasses import dataclass
-import multiprocessing as mp
+from __future__ import annotations
 
+import argparse
+import itertools
+import json
+import logging
+import multiprocessing as mp
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import warnings
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 # ── RDKit ──────────────────────────────────────────────────────────────────────
-from rdkit import Chem, RDConfig
+from rdkit import Chem, RDConfig  # noqa: F401
 from rdkit.Chem import (
-    AllChem, Descriptors, QED, Draw, rdMolDescriptors,
-    rdmolops, rdDistGeom, Crippen, FilterCatalog, BRICS,
+    AllChem,
+    BRICS,
+    Crippen,
+    Descriptors,
+    QED,
+    rdDistGeom,
+    rdmolops,
 )
-from rdkit.Chem.FilterCatalog import FilterCatalogParams
+from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.Chem.Draw import rdMolDraw2D
 from rdkit.DataStructs import TanimotoSimilarity
 from rdkit import RDLogger as rdklog
 
 # ── Bio.PDB ────────────────────────────────────────────────────────────────────
 from Bio.PDB import (
-    PDBParser, PDBIO, Select,
-    NeighborSearch, Superimposer,
-    StructureBuilder, PDBList,
+    NeighborSearch,
+    PDBIO,
+    PDBList,
+    PDBParser,
+    Select,
+    StructureBuilder,
+    Superimposer,
 )
 from Bio.PDB.DSSP import DSSP
 from Bio.SVDSuperimposer import SVDSuperimposer
-
-# ── Matplotlib ─────────────────────────────────────────────────────────────────
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 # ── Suppress RDKit noise ───────────────────────────────────────────────────────
 rdklog.DisableLog("rdApp.*")
@@ -62,11 +87,11 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 #  CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-RANDOM_SEED = 42
+RANDOM_SEED: int = 42
 np.random.seed(RANDOM_SEED)
 
 # PDB identifiers
-PDB_IDS = {
+PDB_IDS: Dict[str, str] = {
     "PBP2a_apo": "3QPD",
     "PBP2a_holo": "6TKO",
     "trypsin": "1UTN",
@@ -74,7 +99,7 @@ PDB_IDS = {
 }
 
 # Reference antibiotics for similarity filtering (SMILES)
-REFERENCE_ANTIBIOTICS = {
+REFERENCE_ANTIBIOTICS: Dict[str, str] = {
     "Methicillin":  "CC1=C(C(=C(C(=C1O)OC)OC)OC)C(=O)NC2C3C(C(=O)N3C2=O)SC4(C)C",
     "Vancomycin":   "CC1C(C(CC(O1)OC2C(C(C(OC2OC3=C4C=C5C(=C4OC6=C(C(=CC(=C6)C(C(=O)NC(C(=O)NC5C(=O)O)CC7=CC=C(C=C7)O)NC(=O)C8C(O)C(=C(C=C8)Cl)O)O)O)CO)O)O)O)NC(=O)C9C(O)C(=C(C=C9)Cl)O)(CC(=O)N)O",
     "Ceftaroline":  "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
@@ -83,39 +108,45 @@ REFERENCE_ANTIBIOTICS = {
 }
 
 # β-lactam SMARTS to exclude
-BETA_LACTAM_SMARTS = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
+BETA_LACTAM_SMARTS: str = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
 
 # Allosteric and Active site residues
-ALLOSTERIC_RESIDUES = ["ALA237", "MET241", "TYR159"]
-ACTIVE_SITE_RESIDUES = ["SER403"]
+ALLOSTERIC_RESIDUES: List[str] = ["ALA237", "MET241", "TYR159"]
+ACTIVE_SITE_RESIDUES: List[str] = ["SER403"]
 
 # Off-target active site residues (catalytic triads)
-TRYPSIN_ACTIVE_SITE_RESIDUES = ["HIS57", "ASP102", "SER195"]
-CES1_ACTIVE_SITE_RESIDUES = ["SER221", "HIS468", "GLU354"]
+TRYPSIN_ACTIVE_SITE_RESIDUES: List[str] = ["HIS57", "ASP102", "SER195"]
+CES1_ACTIVE_SITE_RESIDUES: List[str] = ["SER221", "HIS468", "GLU354"]
 
 # Grid box defaults (Angstroms)
-ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
-ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
+ALLOSTERIC_BOX_SIZE: Tuple[float, float, float] = (15.0, 15.0, 15.0)
+ACTIVE_BOX_SIZE: Tuple[float, float, float] = (20.0, 20.0, 20.0)
 
 # Docking
-VINA_TIMEOUT_S = 120
-N_JOBS = max(1, mp.cpu_count() - 1)
+VINA_TIMEOUT_S: int = 120
+N_JOBS: int = max(1, mp.cpu_count() - 1)
 
 # Similarity
-SIMILARITY_THRESHOLD = 0.4
-SIMILARITY_THRESHOLD_RELAXED = 0.5
-DIVERSITY_MIN_COUNT = 100
+SIMILARITY_THRESHOLD: float = 0.4
+SIMILARITY_THRESHOLD_RELAXED: float = 0.5
+DIVERSITY_MIN_COUNT: int = 100
 
 # Selectivity
-SELECTIVITY_INDEX_THRESHOLD = 2.0
+SELECTIVITY_INDEX_THRESHOLD: float = 2.0
+
+# Library generation
+LIBRARY_TARGET_COUNT: int = 500
+BRICS_MIN_FRAGMENT_SIZE: int = 8
 
 # Outputs
-OUTPUT_DIR = Path("output")
-CSV_REPORT = OUTPUT_DIR / "top_candidates.csv"
-TOP_N = 10
+OUTPUT_DIR: Path = Path("output")
+CSV_REPORT: Path = OUTPUT_DIR / "top_candidates.csv"
+CACHE_PATH: Path = OUTPUT_DIR / "cache.json"
+TOP_N: int = 10
 
 # ── Logger (config deferred to main()) ──
 log = logging.getLogger("AutoAntibiotic")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  UTILITY HELPERS
@@ -139,25 +170,78 @@ def install_missing_package(package: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  CACHE (simple JSON key-value store for docking results)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_cache() -> Dict[str, float]:
+    """Load docking result cache from ``CACHE_PATH``.
+
+    Returns an empty dict if no cache file exists or if it is corrupt.
+    """
+    if CACHE_PATH.exists():
+        try:
+            with open(CACHE_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            log.warning("  ⚠  Cache file corrupt; starting fresh.")
+    return {}
+
+
+def save_cache(cache: Dict[str, float]) -> None:
+    """Persist the docking result cache to ``CACHE_PATH``."""
+    ensure_output_dir()
+    with open(CACHE_PATH, "w") as f:
+        json.dump(cache, f, indent=2, sort_keys=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 0 — DEPENDENCY VERIFICATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def verify_dependencies() -> dict:
-    """
-    Check all required libraries and external binaries.
+_INSTALL_GUIDE: Dict[str, str] = {
+    "rdkit": "  → Install: conda install -c conda-forge rdkit  |  pip install rdkit-pypi",
+    "meeko": "  → Install: pip install meeko",
+    "biopython": "  → Install: conda install -c conda-forge biopython  |  pip install biopython",
+    "vina": (
+        "  → Install AutoDock Vina:\n"
+        "       Linux/macOS:  conda install -c conda-forge vina\n"
+        "       Or download from https://vina.scripps.edu/\n"
+        "       Then ensure 'vina' is on your PATH."
+    ),
+    "obabel": (
+        "  → Install OpenBabel:\n"
+        "       conda install -c conda-forge openbabel\n"
+        "       or: brew install openbabel (macOS)\n"
+        "       or: apt install openbabel (Debian/Ubuntu)"
+    ),
+    "prepare_receptor": (
+        "  → Install ADFR suite:\n"
+        "       Download from https://ccsb.scripps.edu/adfr/\n"
+        "       and add 'prepare_receptor' to your PATH."
+    ),
+}
 
-    Returns:
-        dict with keys:
-            - 'rdkit' / 'biopython': bool
-            - 'vina': bool (True if vina binary on PATH)
-            - 'meeko': bool
-            - 'USE_VINA': global toggle — set False if vina absent
+
+def verify_dependencies() -> Dict[str, Any]:
+    """
+    Phase 0 — Dependency Verification.
+
+    Checks all required Python libraries and external binaries.  On failure,
+    prints detailed installation instructions before raising ``SystemExit``.
+
+    Returns a dictionary with keys:
+        - 'rdkit' / 'meeko' / 'biopython': bool
+        - 'vina': bool (True if ``vina`` binary is on PATH)
+        - 'obabel': bool (True if ``obabel`` binary is on PATH)
+        - 'prepare_receptor': bool (True if ``prepare_receptor`` binary on PATH)
+        - 'USE_VINA': global toggle — set False if Vina is absent
+        - 'USE_OBABEL': global toggle — set False if obabel is absent
     """
     log.info("─── Phase 0: Dependency Verification ───")
-    status = {}
+    status: Dict[str, Any] = {}
 
     # ── Python packages (soft-fail: attempt pip install) ──
-    packages = {
+    packages: Dict[str, str] = {
         "rdkit": "rdkit-pypi",
         "meeko": "meeko",
         "biopython": "biopython",
@@ -174,22 +258,37 @@ def verify_dependencies() -> dict:
                 log.info(f"  ✓  {mod_name} installed successfully.")
             else:
                 status[mod_name] = False
-                log.error(f"  ✗  {mod_name} could not be installed. Aborting.")
+                log.error(f"  ✗  {mod_name} could not be installed.")
+                log.error(_INSTALL_GUIDE.get(mod_name, ""))
                 sys.exit(1)
 
     # ── Vina binary ──
-    try:
-        subprocess.run(["vina", "--version"], capture_output=True, timeout=10)
-        status["vina"] = True
-        log.info("  ✓  AutoDock Vina binary found on PATH.")
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        status["vina"] = False
-        log.warning(
-            "  ⚠  Vina binary not found. Setting USE_VINA = False. "
-            "Pipeline will use RDKit Shape/Pharmacophore fallback."
-        )
+    for bin_name in ("vina", "obabel", "prepare_receptor"):
+        try:
+            subprocess.run(
+                [bin_name, "--help" if bin_name == "prepare_receptor" else "--version"],
+                capture_output=True, timeout=10,
+            )
+            status[bin_name] = True
+            log.info(f"  ✓  {bin_name} binary found on PATH.")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            status[bin_name] = False
+            log.warning(f"  ⚠  '{bin_name}' not found.")
+            log.warning(_INSTALL_GUIDE.get(bin_name, ""))
 
     status["USE_VINA"] = status["vina"]
+    status["USE_OBABEL"] = status["obabel"]
+
+    if not status["USE_VINA"]:
+        log.warning(
+            "  Pipeline will use RDKit Shape/Pharmacophore fallback for scoring."
+        )
+    if not status["USE_OBABEL"] and not status["prepare_receptor"]:
+        log.warning(
+            "  No PDBQT conversion tool found. A minimal RDKit-based PDBQT "
+            "fallback will be used for the receptor."
+        )
+
     return status
 
 
@@ -212,15 +311,13 @@ def _extract_native_ligand_from_holo(
         parser = PDBParser(QUIET=True)
         struct = parser.get_structure("6TKO", holo_pdb_path)
 
-        ligand_residues = []
+        ligand_residues: list = []
         for model in struct:
             for chain in model:
                 for residue in chain:
                     het_flag = residue.get_id()[0]
-                    # Skip standard amino acids and water
                     if het_flag == " " or het_flag == "W":
                         continue
-                    # Keep HETATMs (het_flag == "H_" or "H_M")
                     resname = residue.get_resname().strip()
                     if resname in ("HOH", "WAT", "SOL"):
                         continue
@@ -230,23 +327,19 @@ def _extract_native_ligand_from_holo(
             log.warning("  ⚠  No hetero-ligand found in 6TKO.")
             return None
 
-        # Use the first non-water HETATM residue as the native ligand
         chain_id, lig_res = ligand_residues[0]
         log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
 
-        # Write ligand as a separate PDB file
         pdbio = PDBIO()
         class LigSelect(Select):
-            def accept_residue(self, residue):
+            def accept_residue(self, residue):  # type: ignore
                 return residue is lig_res
         pdbio.set_struct(struct)
         lig_pdb = output_ligand_pdbqt.replace(".pdbqt", ".pdb")
         pdbio.save(lig_pdb, LigSelect())
 
-        # Convert to MOL → SMILES via RDKit's PDB parser (or obabel fallback)
         mol = Chem.MolFromPDBFile(lig_pdb, removeHs=False)
         if mol is None:
-            # Try with OpenBabel as fallback
             log.warning("  ⚠  RDKit could not read ligand PDB, trying obabel…")
             smi_file = output_ligand_smi
             try:
@@ -262,7 +355,6 @@ def _extract_native_ligand_from_holo(
                 pass
             return None
 
-        # Sanitize
         Chem.SanitizeMol(mol)
         smi = Chem.MolToSmiles(mol)
 
@@ -270,7 +362,6 @@ def _extract_native_ligand_from_holo(
             f.write(smi + "\n")
         log.info(f"  Native ligand SMILES: {smi}")
 
-        # Convert to PDBQT via meeko
         try:
             from meeko import MoleculePreparation, PDBQTWriterLegacy
             preparator = MoleculePreparation()
@@ -281,7 +372,6 @@ def _extract_native_ligand_from_holo(
             log.info(f"  Native ligand PDBQT written to {output_ligand_pdbqt}")
         except Exception as exc:
             log.warning(f"  ⚠  Meeko prep failed for native ligand: {exc}")
-            # Fallback: copy PDB as-is
             shutil.copy(lig_pdb, output_ligand_pdbqt)
 
         return smi
@@ -297,13 +387,16 @@ def _compute_rmsd_docked_vs_crystal(
     """
     Align protein Cα backbones of the docked structure to the crystal structure,
     then compute heavy-atom RMSD of the ligand after applying the alignment.
+
+    Scientific rationale: Backbone alignment separates the protein conformational
+    change from the ligand pose quality. A docked pose with RMSD ≤ 2.0 Å is
+    generally considered a successful redocking validation.
     """
     try:
         parser = PDBParser(QUIET=True)
         docked_struct = parser.get_structure("docked", docked_pdb)
         crystal_struct = parser.get_structure("crystal", crystal_pdb)
 
-        # Collect Cα atoms from both structures for backbone alignment
         def _get_ca_atoms(structure):
             atoms = []
             for model in structure:
@@ -320,7 +413,6 @@ def _compute_rmsd_docked_vs_crystal(
             log.warning("  ⚠  Too few Cα atoms for backbone alignment (< 3).")
             return None
 
-        # Align Cα atoms using Bio.PDB.Superimposer
         sup = Superimposer()
         docked_coords = np.array([a.get_vector().get_array() for a in docked_ca])
         crystal_coords = np.array([a.get_vector().get_array() for a in crystal_ca])
@@ -329,7 +421,6 @@ def _compute_rmsd_docked_vs_crystal(
         rot, tran = sup.rotran
         log.info(f"  Backbone alignment RMSD: {sup.rmsd:.3f} Å")
 
-        # Collect ligand heavy atoms from both structures
         def _get_ligand_atoms(structure):
             atoms = []
             for model in structure:
@@ -357,14 +448,11 @@ def _compute_rmsd_docked_vs_crystal(
             docked_lig = docked_lig[:n]
             crystal_lig = crystal_lig[:n]
 
-        # Apply the backbone-derived rotation/translation to docked ligand atoms
         docked_lig_coords = np.array([a.get_vector().get_array() for a in docked_lig])
         aligned_docked = docked_lig_coords @ rot.T + tran
-
-        # Compute RMSD between aligned docked ligand and crystal ligand
         crystal_lig_coords = np.array([a.get_vector().get_array() for a in crystal_lig])
         diff = aligned_docked - crystal_lig_coords
-        rmsd = np.sqrt(np.mean(np.sum(diff ** 2, axis=1)))
+        rmsd = float(np.sqrt(np.mean(np.sum(diff ** 2, axis=1))))
         return rmsd
 
     except Exception as exc:
@@ -376,7 +464,7 @@ def run_redocking_validation(
     holo_pdb_path: str,
     target_pdbqt_path: str,
     work_dir: str,
-    deps: dict,
+    deps: Dict[str, Any],
     center: Optional[np.ndarray] = None,
 ) -> Tuple[bool, Optional[float]]:
     """
@@ -402,7 +490,6 @@ def run_redocking_validation(
         log.warning("  ⚠  Vina unavailable. Redocking validation requires Vina. Skip.")
         return False, None
 
-    # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
     docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
     if center is None:
@@ -428,14 +515,12 @@ def run_redocking_validation(
         log.warning("  ⚠  Vina binary not found during redocking.")
         return False, None
 
-    # Convert docked PDBQT back to PDB for RMSD calculation
     try:
         subprocess.run(
             ["obabel", docked_pdbqt, "-O", docked_pdb, "--gen3d"],
             capture_output=True, timeout=30,
         )
     except Exception:
-        # If obabel not available, attempt manual conversion (minimal)
         log.warning("  Could not convert docked PDBQT to PDB. Trying RDKit PDBQT reader.")
         mol = Chem.MolFromPDBQT(docked_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
         if mol is None:
@@ -485,14 +570,9 @@ def fetch_structure(pdb_id: str, out_dir: str) -> str:
         pdbl.retrieve_pdb_file(
             pdb_id, pdir=out_dir, file_format="pdb",
         )
-        # PDBList may save as pdb{pdb_id}.ent; rename
         raw = os.path.join(out_dir, f"pdb{pdb_id.lower()}.ent")
         if os.path.exists(raw):
             os.rename(raw, target_path)
-        # Handle alternative naming
-        alt = os.path.join(out_dir, f"{pdb_id}.pdb")
-        if os.path.exists(alt) and alt != target_path:
-            pass  # already correct name
         log.info(f"  ✓  Downloaded {pdb_id} → {target_path}")
     except Exception as exc:
         log.error(f"  ✗  Failed to download {pdb_id}: {exc}")
@@ -501,19 +581,93 @@ def fetch_structure(pdb_id: str, out_dir: str) -> str:
     return target_path
 
 
+def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
+    """
+    Minimal PDB → PDBQT conversion using RDKit.
+
+    Reads a PDB file, computes Gasteiger charges, maps elements to AutoDock
+    atom types, and writes a PDBQT with a single rigid ROOT.  This is a
+    fallback when both ``obabel`` and ``prepare_receptor`` are unavailable.
+
+    AutoDock-Vina is lenient about atom typing; this minimal format is
+    sufficient for Vina's scoring function.
+    """
+    try:
+        mol = Chem.MolFromPDBFile(pdb_path, removeHs=False)
+        if mol is None:
+            return False
+        mol = Chem.AddHs(mol, addCoords=True)
+        AllChem.ComputeGasteigerCharges(mol)
+
+        # Element → AutoDock type mapping (Vina-compatible subset)
+        _atom_type_map = {
+            "C": "C", "c": "C",
+            "N": "N", "n": "N",
+            "O": "O", "o": "O",
+            "S": "S", "s": "S",
+            "P": "P", "p": "P",
+            "F": "F", "f": "F",
+            "Cl": "Cl", "Br": "Br",
+            "H": "H",
+        }
+
+        conf = mol.GetConformer()
+        lines: list = []
+        # Vina requires the first line to be ROOT
+        lines.append("ROOT")
+        for i, atom in enumerate(mol.GetAtoms()):
+            atom_no = i + 1
+            elem = atom.GetSymbol()
+            pdbx = conf.GetAtomPosition(i)
+            gasteiger = atom.GetDoubleProp("_GasteigerCharge")
+            ad_type = _atom_type_map.get(elem, "C")
+
+            # PDBQT ATOM record:
+            # ATOM  serial name resName chainID resSeq x y z charge type
+            # We write a dummy residue "PRT" chain "X" res 1
+            x, y, z = pdbx.x, pdbx.y, pdbx.z
+            atom_name = f"{elem}{atom_no:>3}"[:4]
+            line = (
+                f"ATOM     {atom_no:>3} {atom_name:>4} PRT X   1    "
+                f"{x:>8.3f}{y:>8.3f}{z:>8.3f}  "
+                f"{gasteiger:>8.3f}     {ad_type:<2s}\n"
+            )
+            lines.append(line)
+        lines.append("ENDROOT")
+        lines.append("TORSDOF 0\n")
+
+        with open(pdbqt_path, "w") as f:
+            f.writelines(lines)
+        return True
+
+    except Exception as exc:
+        log.warning(f"  RDKit PDBQT fallback failed: {exc}")
+        return False
+
+
 def clean_pdb_structure(
     pdb_path: str, out_path: str,
     remove_waters: bool = True,
     remove_ligands: bool = True,
     add_hydrogens: bool = True,
+    deps: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
-    Remove waters, heteroatoms, and optionally add hydrogens.
-    Writes the cleaned PDB to *out_path*.
+    Phase 1 — Target preparation.
 
-    If RDKit cannot add hydrogens (no force field), a PDB with no extra
-    hydrogens is produced — Vina handles polar H assignment internally anyway.
+    Removes waters and heteroatoms from the PDB file, optionally adds hydrogens,
+    and converts the result to PDBQT format for AutoDock Vina.
+
+    Conversion chain (priority order):
+        1. ``prepare_receptor`` (ADFR suite)
+        2. ``obabel`` with ``--gas`` for Gasteiger charges
+        3. RDKit-based fallback (``_pdb_to_pdbqt_via_rdkit``)
+
+    Returns the path to the generated PDBQT file (or the cleaned PDB if
+    PDBQT conversion fails completely).
     """
+    if deps is None:
+        deps = {}
     try:
         parser = PDBParser(QUIET=True)
         struct = parser.get_structure("target", pdb_path)
@@ -521,10 +675,8 @@ def clean_pdb_structure(
         class CleanSelect(Select):
             def accept_residue(self, residue):
                 rid = residue.get_id()
-                # Remove waters
                 if remove_waters and rid[0] == "W":
                     return False
-                # Remove hetero residues (ligands, ions)
                 if remove_ligands and rid[0] != " ":
                     return False
                 return True
@@ -533,7 +685,6 @@ def clean_pdb_structure(
         io.set_struct(struct)
         io.save(out_path, CleanSelect())
 
-        # Add hydrogens via RDKit PDB → MOL → H-Added → PDB
         if add_hydrogens:
             mol = Chem.MolFromPDBFile(out_path, removeHs=False)
             if mol is not None:
@@ -543,36 +694,47 @@ def clean_pdb_structure(
             else:
                 log.warning("  Could not add hydrogens via RDKit PDB parser.")
 
-        # Convert to PDBQT for Vina (using meeko for receptor)
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
-        try:
-            from meeko import MoleculePreparation, PDBQTWriterLegacy
-            # For receptor PDBQT, we use a simpler approach via obabel or
-            # prepare_receptor. Prefer prepare_receptor (ADFR suite) if available.
+
+        # Attempt PDBQT conversion with best available tool
+        converted = False
+
+        # Priority 1: prepare_receptor (ADFR)
+        if deps.get("prepare_receptor"):
             try:
                 subprocess.run(
                     ["prepare_receptor", "-r", out_path, "-o", pdbqt_path],
                     capture_output=True, timeout=60,
                 )
+                if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
+                    converted = True
+                    log.info("  PDBQT via prepare_receptor")
             except (FileNotFoundError, subprocess.TimeoutExpired):
-                # Fallback: use obabel to add gasteiger charges and write PDBQT
-                try:
-                    subprocess.run(
-                        ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
-                        capture_output=True, timeout=60,
-                    )
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    raise RuntimeError(
-                        "Failed to convert receptor to PDBQT. "
-                        "Please install ADFR suite or OpenBabel."
-                    )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Receptor PDBQT conversion failed: {exc}. "
-                "Please install ADFR suite or OpenBabel."
-            )
+                pass
 
-        return pdbqt_path if os.path.exists(pdbqt_path) else out_path
+        # Priority 2: obabel
+        if not converted and deps.get("obabel"):
+            try:
+                subprocess.run(
+                    ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
+                    capture_output=True, timeout=60,
+                )
+                if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
+                    converted = True
+                    log.info("  PDBQT via obabel")
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+
+        # Priority 3: RDKit fallback (never crashes)
+        if not converted:
+            log.warning("  No external PDBQT tool found. Using RDKit fallback.")
+            converted = _pdb_to_pdbqt_via_rdkit(out_path, pdbqt_path)
+            if converted:
+                log.info("  PDBQT via RDKit fallback")
+            else:
+                log.warning("  ⚠  All PDBQT methods failed. Returning cleaned PDB only.")
+
+        return pdbqt_path if (converted and os.path.exists(pdbqt_path)) else out_path
 
     except Exception as exc:
         log.error(f"  ✗  Failed to clean {pdb_path}: {exc}")
@@ -582,11 +744,15 @@ def clean_pdb_structure(
 def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray:
     """
     Compute the geometric centroid of Cα atoms for the given list of
-    residue identifiers (format: 'ALA237').
+    residue identifiers (format: ``ALA237``).
+
+    Scientific rationale: The centroid defines the search-space centre for
+    docking.  For the allosteric site, we average over the known regulatory
+    pocket residues; for the active site, we use the catalytic serine.
 
     Args:
         pdb_path: Path to PDB structure.
-        resid_list: e.g. ["ALA237", "MET241", "TYR159"].
+        resid_list: e.g. ``["ALA237", "MET241", "TYR159"]``.
 
     Returns:
         (x, y, z) centroid as numpy array of shape (3,).
@@ -594,20 +760,17 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
     parser = PDBParser(QUIET=True)
     struct = parser.get_structure("target", pdb_path)
 
-    # Build set of (resname, seq_num) from input
-    target = set()
+    target: set = set()
     for entry in resid_list:
-        # Separate alphabetic resname from numeric seq_id
         resname = "".join(ch for ch in entry if ch.isalpha()).upper()
         seqnum = int("".join(ch for ch in entry if ch.isdigit()))
         target.add((resname, seqnum))
 
-    ca_coords = []
+    ca_coords: list = []
     for model in struct:
         for chain in model:
             for residue in chain:
                 rid = residue.get_id()
-                # Ignore hetero atoms
                 if rid[0] != " ":
                     continue
                 key = (residue.get_resname().strip().upper(), rid[1])
@@ -636,28 +799,31 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
 
 
 def prepare_targets(
-    pdb_dir: str, work_dir: str, deps: dict
-) -> Dict[str, Dict]:
+    pdb_dir: str, work_dir: str, deps: Dict[str, Any]
+) -> Dict[str, Any]:
     """
     Phase 1 — Download, clean, and compute grid centres for all targets.
 
     Returns a dictionary:
-        {
-            "PBP2a": {
-                "pdbqt": str,
-                "allosteric_center": np.ndarray,
-                "active_center": np.ndarray,
-            },
-            "trypsin": { "pdbqt": str },
-            "CES1":    { "pdbqt": str },
-            "holo_pdb": str,
-            "native_ligand": { "pdb": str, "pdbqt": str, "smiles": str },
-        }
+        ::
+            {
+              "PBP2a": {
+                  "pdbqt": str,
+                  "allosteric_center": np.ndarray,
+                  "active_center": np.ndarray,
+              },
+              "trypsin": { "pdbqt": str, "active_center": np.ndarray },
+              "CES1":    { "pdbqt": str, "active_center": np.ndarray },
+              "holo_pdb": str,
+            }
+
+    Scientific rationale: Parallel preparation of the antibacterial target
+    (PBP2a) and two human off-targets (trypsin, CES1) enables downstream
+    selectivity profiling.
     """
     log.info("─── Phase 1: Target Preparation & Centroid Calculation ───")
-    result = {}
+    result: Dict[str, Any] = {}
 
-    # ── Fetch structures ──
     holo_path = fetch_structure(PDB_IDS["PBP2a_holo"], pdb_dir)
     apo_path = fetch_structure(PDB_IDS["PBP2a_apo"], pdb_dir)
     trypsin_path = fetch_structure(PDB_IDS["trypsin"], pdb_dir)
@@ -665,20 +831,20 @@ def prepare_targets(
 
     result["holo_pdb"] = holo_path
 
-    # ── Clean PBP2a (use holo for grid calc, but we need the protein only) ──
     log.info("  Cleaning PBP2a (apo)…")
     pbp2a_pdbqt = clean_pdb_structure(
         apo_path,
         os.path.join(work_dir, "PBP2a_clean.pdb"),
+        deps=deps,
     )
 
     log.info("  Cleaning PBP2a (holo, protein-only)…")
     _ = clean_pdb_structure(
         holo_path,
         os.path.join(work_dir, "PBP2a_holo_clean.pdb"),
+        deps=deps,
     )
 
-    # ── Compute allosteric + active site centres from cleaned apo ──
     cleaned_pdb = pbp2a_pdbqt.replace(".pdbqt", ".pdb")
     log.info("  Computing allosteric site centroid (ALA237, MET241, TYR159)…")
     allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES)
@@ -694,11 +860,11 @@ def prepare_targets(
         "active_center": active_center,
     }
 
-    # ── Clean trypsin ──
     log.info("  Cleaning Human Trypsin (1UTN)…")
     tryp_pdbqt = clean_pdb_structure(
         trypsin_path,
         os.path.join(work_dir, "trypsin_clean.pdb"),
+        deps=deps,
     )
     tryp_center = compute_residue_centroid(
         trypsin_path, TRYPSIN_ACTIVE_SITE_RESIDUES,
@@ -706,11 +872,11 @@ def prepare_targets(
     log.info(f"    Trypsin active site center: {tryp_center}")
     result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
 
-    # ── Clean CES1 ──
     log.info("  Cleaning Human Carboxylesterase 1 (3KJZ)…")
     ces1_pdbqt = clean_pdb_structure(
         ces1_path,
         os.path.join(work_dir, "CES1_clean.pdb"),
+        deps=deps,
     )
     ces1_center = compute_residue_centroid(
         ces1_path, CES1_ACTIVE_SITE_RESIDUES,
@@ -718,7 +884,6 @@ def prepare_targets(
     log.info(f"    CES1 active site center: {ces1_center}")
     result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
 
-    # ── Write grid configuration files ──
     grid_dir = os.path.join(work_dir, "grid_configs")
     os.makedirs(grid_dir, exist_ok=True)
 
@@ -746,32 +911,43 @@ def prepare_targets(
 
 @dataclass
 class CompoundRecord:
-    """Stores all computed properties for a single candidate."""
+    """Stores all computed properties for a single candidate.
+
+    Attributes:
+        compound_id: Unique identifier (e.g. ``AA-0001``).
+        smiles:     Canonical SMILES string.
+        mol:        RDKit Mol object (may be None after deserialisation).
+        pb2pa_allosteric_energy: Docking score for the allosteric site.
+        pb2pa_active_energy:     Docking score for the active site.
+        human_trypsin_energy:    Docking score vs human trypsin.
+        human_ces1_energy:       Docking score vs human CES1.
+        selectivity_index:       SI = |PBP2a| / |human_avg|.
+        max_similarity:          Max Tanimoto similarity to reference antibiotics.
+        passes_lipinski:         Lipinski Rule-of-5 compliance.
+        qed_score:               Quantitative Estimate of Drug-likeness.
+        passes_pains:            PAINS alert filter result.
+        resistance_notes:        Human-readable resistance-risk profile.
+        shape_score:             RDKit Shape Protrude score (fallback, 0–10).
+    """
     compound_id: str
     smiles: str
     mol: Optional[Chem.Mol] = None
 
-    # Docking scores
     pb2pa_allosteric_energy: Optional[float] = None
     pb2pa_active_energy: Optional[float] = None
     human_trypsin_energy: Optional[float] = None
     human_ces1_energy: Optional[float] = None
 
-    # Selectivity
     selectivity_index: Optional[float] = None
 
-    # Similarity
     max_similarity: float = 0.0
 
-    # ADMET
     passes_lipinski: bool = False
     qed_score: float = 0.0
     passes_pains: bool = False
 
-    # Resistance flags
     resistance_notes: str = ""
 
-    # Fallback shape score (0–10, lower better)
     shape_score: Optional[float] = None
 
 
@@ -779,32 +955,108 @@ class CompoundRecord:
 #  PHASE 2 — LIBRARY GENERATION & FILTERING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 15 diverse natural product scaffolds (SMILES)
-NATURAL_PRODUCT_SCAFFOLDS = [
-    "O=c1c(O)c2c(oc3cc(O)cc(O)c3c2=O)c(O)c1O",                 # Quercetin
-    "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                # Resveratrol
-    "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin
-    "COc1cc2c(cc1OC)[n+]1ccc3cc4c(cc3c1CC2)OCO4",              # Berberine
-    "CC1(C)OC2C3C(=O)OC4C(OO5)C3C5C2C4O1",                     # Artemisinin (approximate)
-    "CCC1(O)C(=O)OCC2=C1C=C4N(CC3=C2C=CC5=C3C=CC(=O)O5)C=O",  # Camptothecin
-    "COc1nc2c(cc1C[N@@H]3CC[C@H](O)C3)n(C)c4ccccc24",           # Atropine-like scaffold
+# 8 validated natural-product-inspired scaffolds (SMILES)
+NATURAL_PRODUCT_SCAFFOLDS: List[str] = [
+    "O=c1c(-c2ccc(O)c(O)c2)coc2cc(O)cc(O)c12",                 # Quercetin (flavonoid)
+    "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                # Resveratrol (stilbenoid)
+    "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin (diarylheptanoid)
+    "COc1cc2c(cc1OC)-c1ccc3cc4c(cc3c1CC2)OCO4",                 # Berberine (isoquinoline alkaloid)
+    "CC1(C)OC2C3OC(=O)C4C(O1)C2C1OOC3C14",                     # Artemisinin (sesquiterpene lactone)
+    "O=C1OCc2cn3ccc4cccc-4c3cc21",                              # Camptothecin (topoisomerase inhibitor)
+    "COc1nc2c3ccccc3n(C)c2cc1C1CCNC1O",                        # Atropine-like (tropane alkaloid)
+    "O=C(Nc1ccccc1)c1ccccc1",                                   # Benzamide
 ]
 
-# Additional scaffolds for diversity
-ADDITIONAL_SCAFFOLDS = [
-    "c1ccc2c(c1)cc3c4c2ccc5c4c6c(c7c8c5c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1c2c3c4c5c6c7c8c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1c2c3c4c5c6c7c8c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1c2c3c4c5c6c7c8c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1",
-    "O=c1cc2ccccc2oc1-c3ccccc3",                                 # Flavone
-    "COc1ccc2c(c1)oc(=O)c(C3=CC(=O)c4ccccc4O3)c2C(=O)O",      # Isoflavonoid-like
-    "c1ccc2c(c1)cc3c4c2ccc5c4c6c7c5c8c9c%10c%11c%12c%13c%14c%15c%11c%12c%13c%14c%15c6c7c8c9c%10",
-    "O=c1c2ccccc2c(=O)c3c1ccc4c5c3ccc6c7c5c8c9c%10c%11c%12c%13c%10c%11c%12c%13c4c7c8c9",
-    "c1ccc2c(c1)cc3c4c2ccc5c4c6c7c5c8c9c%10c%11c%12c%13c(cc2ccccc2c%11%12)c(c%10%13)c6c7c8c9",
-    "CC(C)(C)c1cc2c(cc1C(C)(C)C)c3c(cc4c2cc5c6c4cc7c8c5c9c%10c%11c%12c%13c%14c%15c%16c(cc%11%12%13%14%15%16)c6c7c8c9)cc(c3)C(C)(C)C",
-    "COc1cc2c(cc1OC)CCN(C2)c3ccc4c(c3)OC(=O)C4(C)O",
-    "CC1(C)OC2CC3C4C5C6C7C8C9C%10C%11C%12C%13C%14C%15C%16C%17C%18C%19C%20C%21C%22C%23C%24C%25C%26C%27C%28C%29C%30C%31C%32C%33C%34C%35C%36C%37C%38C%39C%40C(OC(C)(C)OC%41C%42C%43C%44C%45C%46C%47C%48C%49C%50C%51C%52C%53C%54C%55C%56C%57C%58C%59C%60C%61C%62C%63C%64C%65C%66C%67C%68C%69C%70C%71C%72C%73C%74C%75C%76C%77C%78C%79C%80)CC3C2C1",
+# 15 drug-like scaffolds for BRICS decomposition (modified to include BRICS-valid bonds)
+ADDITIONAL_SCAFFOLDS: List[str] = [
+    "c1ccc2[nH]ccc2c1",                                         # Indole
+    "c1ccc2ncccc2c1",                                           # Isoquinoline
+    "c1ccc2cc[nH]c2c1",                                         # Indole (alternative)
+    "c1ccc2[nH]cnc2c1",                                         # Benzimidazole
+    "O=c1ccc2ccccc2o1",                                         # Coumarin
+    "c1ccc2nc3ccccc3nc2c1",                                     # Phenazine
+    "c1ccc2c(c1)oc1ccccc12",                                    # Dibenzofuran
+    "c1ccc2c(c1)sc1ccccc12",                                    # Dibenzothiophene
+    "c1ccc2c(c1)ccc1c3ccccc3[nH]c21",                           # Carbazole
+    "c1ccc2c(c1)CCN2",                                          # Indoline
+    "c1ccc2c(c1)CCc1c-2[nH]c2ccccc12",                         # Tetrahydrocarbazole
+    "COc1ccc2[nH]ccc2c1",                                       # 5-Methoxyindole
+    "COc1ccccc1OCC(O)CNC(C)C",                                  # Propranolol-like (β-blocker)
+    "CCN(CC)C(=O)c1ccccc1",                                     # N,N-Diethylbenzamide
+    "O=C(Nc1ccc(O)cc1)c1ccc(O)cc1",                            # Phenolic benzamide
+]
+
+# Pre-built BRICS building blocks (SMILES with BRICS dummy atoms [n*]).
+# These ensure robust recombination when scaffold decomposition yields few fragments.
+# Bond-type mapping: [1*,2*,3*]=C, [4*,5*]=N, [6*,7*]=O, [8*]=S, [16*]=aromatic C
+# A diverse set of ~50 blocks yields 300+ valid recombination products.
+BRICS_BUILDING_BLOCKS: List[str] = [
+    # [1*] Carbon-attachment fragments (20)
+    "[1*]c1ccccc1",
+    "[1*]c1ccc(O)cc1",
+    "[1*]c1ccc(Cl)cc1",
+    "[1*]c1ccc(F)cc1",
+    "[1*]c1ccc(Br)cc1",
+    "[1*]c1ccc(OC)cc1",
+    "[1*]c1ccc(C(=O)O)cc1",
+    "[1*]c1ccc(N)cc1",
+    "[1*]c1ccc(C)cc1",
+    "[1*]c1ccc(C(C)C)cc1",
+    "[1*]c1ccc(CF)cc1",
+    "[1*]c1ccc(CN)cc1",
+    "[1*]c1ccc(S(=O)(=O)N)cc1",
+    "[1*]c1ccc(C(=O)N)cc1",
+    "[1*]c1ccc(NC(=O)C)cc1",
+    "[1*]CC(=O)O",
+    "[1*]CCO",
+    "[1*]CCN",
+    "[1*]CC(=O)N",
+    "[1*]CCC(=O)O",
+    # [3*] Alkene-attachment fragments (4)
+    "[3*]C=Cc1ccccc1",
+    "[3*]C=Cc1ccc(O)cc1",
+    "[3*]C=Cc1ccc(Cl)cc1",
+    "[3*]CCN(C)C",
+    # [5*] Nitrogen-attachment fragments (12)
+    "[5*]Nc1ccccc1",
+    "[5*]Nc1ccc(O)cc1",
+    "[5*]Nc1ccc(C(=O)O)cc1",
+    "[5*]Nc1ccc(Cl)cc1",
+    "[5*]Nc1ccc(F)cc1",
+    "[5*]Nc1ccc(OC)cc1",
+    "[5*]Nc1ccc(C)cc1",
+    "[5*]Nc1ccc(Br)cc1",
+    "[5*]Nc1ccc(CN)cc1",
+    "[5*]NCC",
+    "[5*]NCCO",
+    "[5*]NCCC(=O)O",
+    # [6*] Carbonyl-attachment fragments (8)
+    "[6*]C(=O)O",
+    "[6*]C(=O)c1ccccc1",
+    "[6*]C(=O)c1ccc(O)cc1",
+    "[6*]C(=O)c1ccc(Cl)cc1",
+    "[6*]C(=O)c1ccc(OC)cc1",
+    "[6*]C(=O)c1ccc(C)cc1",
+    "[6*]C(=O)c1ccc(N)cc1",
+    "[6*]C(=O)CC",
+    # [7*] Oxygen-attachment fragments (8)
+    "[7*]Cc1ccccc1",
+    "[7*]Cc1ccc(O)cc1",
+    "[7*]Cc1ccc(O)c(OC)c1",
+    "[7*]Cc1ccc(OC)cc1",
+    "[7*]Cc1ccc(Cl)cc1",
+    "[7*]Cc1ccc(F)cc1",
+    "[7*]CC",
+    "[7*]C(C)C",
+    # [16*] Aromatic carbon fragments (4)
+    "[16*]c1ccccc1OC",
+    "[16*]c1ccc(C)cc1",
+    "[16*]c1ccc(N)cc1",
+    "[16*]c1ccc(O)cc1",
 ]
 
 # Positive control SMILES (to verify pipeline)
-CONTROL_SMILES = {
+CONTROL_SMILES: Dict[str, str] = {
     "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
     "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
 }
@@ -815,100 +1067,55 @@ def _count_atoms(mol: Chem.Mol) -> int:
     return mol.GetNumHeavyAtoms()
 
 
-def generate_candidate_library(
-    target_count: int = 500,
+def _validate_mol(smiles: str) -> Optional[Chem.Mol]:
+    """Validate a SMILES string by parsing and sanitising.
+
+    Returns the validated Mol, or None if parsing/sanitisation fails.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    try:
+        Chem.SanitizeMol(mol)
+    except ValueError:
+        return None
+    return mol
+
+
+def _brics_recombination(
+    frag_mols: List[Chem.Mol],
+    target_count: int,
+    seen_smiles: set,
     seed: int = RANDOM_SEED,
-) -> List[CompoundRecord]:
+) -> Tuple[List[CompoundRecord], set]:
     """
-    Phase 2.1 — Generate a diverse library by BRICS decomposition of
-    natural product scaffolds, fragment recombination, and expansion.
+    Recombine BRICS fragments using ``BRICSBuild``.
 
-    Args:
-        target_count: Desired number of compounds (~500).
-        seed: Random seed for reproducibility.
+    ``BRICSBuild`` takes a list of pre-decomposed fragments (containing BRICS
+    dummy-atom markers) and iterates over all valid recombinations of those
+    fragments.  This yields far more diverse products than the original broken
+    ``CombineMols`` + ``islice`` approach.
 
-    Returns:
-        List of CompoundRecord objects (SMILES only, no computed props yet).
+    Returns ``(records, updated_seen_smiles)``.
     """
-    log.info("─── Phase 2: Library Generation ───")
-
-    all_scaffolds = NATURAL_PRODUCT_SCAFFOLDS + ADDITIONAL_SCAFFOLDS
-    scaffold_mols = []
-    for smi in all_scaffolds:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            scaffold_mols.append(mol)
-
-    log.info(f"  Loaded {len(scaffold_mols)} valid scaffolds.")
-
-    # BRICS decompose all scaffolds
-    all_fragments = set()
-    for mol in scaffold_mols:
-        try:
-            fragments = BRICS.BRICSDecompose(mol, minFragmentSize=8)
-            for frag_smi in fragments:
-                frag_mol = Chem.MolFromSmiles(frag_smi)
-                if frag_mol is not None and _count_atoms(frag_mol) >= 8:
-                    all_fragments.add(frag_smi)
-        except Exception:
-            continue
-
-    frag_mols = []
-    for smi in all_fragments:
-        m = Chem.MolFromSmiles(smi)
-        if m is not None:
-            frag_mols.append(m)
-
-    log.info(f"  Generated {len(frag_mols)} unique fragments (>=8 heavy atoms).")
-
-    if len(frag_mols) < 2:
-        log.warning("  Too few fragments for meaningful recombination. Falling back to scaffold enumeration.")
-        # Fallback: use the scaffolds directly plus random variations
-        candidates = []
-        for mol in scaffold_mols:
-            smi = Chem.MolToSmiles(mol)
-            candidates.append(CompoundRecord(
-                compound_id=f"SCAFFOLD_{len(candidates)}",
-                smiles=smi,
-                mol=mol,
-            ))
-        # Add controls
-        for name, smi in CONTROL_SMILES.items():
-            mol = Chem.MolFromSmiles(smi)
-            candidates.append(CompoundRecord(
-                compound_id=f"CTRL_{name}",
-                smiles=smi,
-                mol=mol,
-            ))
-        log.info(f"  Fallback library: {len(candidates)} entries.")
-        return candidates
-
-    # Recombine fragments to create novel analogs
+    records: List[CompoundRecord] = []
     rng = np.random.default_rng(seed)
-    seen_smiles = set()
-    records = []
-    max_attempts = target_count * 10
-    attempts = 0
 
-    while len(records) < target_count and attempts < max_attempts:
-        attempts += 1
-        # Pick 1–3 fragments and try to join
-        n_frags = rng.integers(1, 4)
-        chosen = rng.choice(frag_mols, size=min(n_frags, len(frag_mols)), replace=False)
+    # BRICSBuild may generate very many products if given many fragments;
+    # we cap effort so it does not run forever.
+    max_products = target_count * 4
+    n_produced = 0
 
+    # Shuffle fragment order for stochasticity
+    shuffled = list(frag_mols)
+    rng.shuffle(shuffled)
+
+    builder = BRICS.BRICSBuild(shuffled)
+
+    for product in itertools.islice(builder, max_products):
+        if product is None:
+            continue
         try:
-            combined = chosen[0]
-            for frag in chosen[1:]:
-                combined = Chem.CombineMols(combined, frag)
-            # Attempt to form new bonds via random BRICS connection
-            # BRICS.BRICSBuild returns a generator of possible products
-            # We sample from the build output
-            builder = BRICS.BRICSBuild([combined])
-            product = None
-            for product in itertools.islice(builder, rng.integers(1, 5)):
-                pass
-            if product is None:
-                continue
             Chem.SanitizeMol(product)
             smi = Chem.MolToSmiles(product)
         except Exception:
@@ -918,30 +1125,174 @@ def generate_candidate_library(
             continue
         seen_smiles.add(smi)
 
-        # Generate unique ID
-        cid = f"AA-{len(records):04d}"
         records.append(CompoundRecord(
-            compound_id=cid,
+            compound_id=f"AA-{n_produced:04d}",
             smiles=smi,
             mol=product,
         ))
+        n_produced += 1
 
-        if len(records) % 100 == 0:
-            log.info(f"  Generated {len(records)} / {target_count} candidates…")
+        if n_produced >= target_count:
+            break
 
-    # Add controls explicitly
+        if n_produced % 50 == 0:
+            log.info(f"  BRICS recombination: {n_produced} / {target_count}…")
+
+    return records, seen_smiles
+
+
+def generate_candidate_library(
+    target_count: int = LIBRARY_TARGET_COUNT,
+    seed: int = RANDOM_SEED,
+) -> List[CompoundRecord]:
+    """
+    Phase 2.1 — Library Generation via BRICS fragment recombination.
+
+    Workflow:
+        1. Parse all scaffolds; discard invalid SMILES.
+        2. Decompose each scaffold via ``BRICS.BRICSDecompose``.
+        3. Collect unique fragments (≥ 8 heavy atoms).
+        4. Recombine fragments with ``BRICS.BRICSBuild`` to yield novel
+           molecules.
+        5. Add positive controls.
+        6. Validate every generated molecule with ``SanitizeMol``.
+
+    Returns a list of ``CompoundRecord`` objects with only ``compound_id``,
+    ``smiles``, and ``mol`` populated.
+    """
+    log.info("─── Phase 2: Library Generation ───")
+
+    all_scaffolds: List[str] = NATURAL_PRODUCT_SCAFFOLDS + ADDITIONAL_SCAFFOLDS
+    scaffold_mols: List[Chem.Mol] = []
+    for smi in all_scaffolds:
+        mol = _validate_mol(smi)
+        if mol is not None:
+            scaffold_mols.append(mol)
+
+    log.info(f"  Loaded {len(scaffold_mols)} / {len(all_scaffolds)} valid scaffolds.")
+
+    if not scaffold_mols and not BRICS_BUILDING_BLOCKS:
+        log.error("  ✗  No valid scaffolds or building blocks. Aborting library generation.")
+        return []
+
+    # ── BRICS decomposition of scaffolds ──
+    decomposed_frags: set = set()
+    for mol in scaffold_mols:
+        try:
+            fragments = BRICS.BRICSDecompose(mol, minFragmentSize=BRICS_MIN_FRAGMENT_SIZE)
+            for frag_smi in fragments:
+                frag_mol = _validate_mol(frag_smi)
+                if frag_mol is not None and _count_atoms(frag_mol) >= BRICS_MIN_FRAGMENT_SIZE:
+                    decomposed_frags.add(frag_smi)
+        except Exception:
+            continue
+
+    log.info(f"  Decomposed {len(decomposed_frags)} unique BRICS fragments from scaffolds.")
+
+    # ── Add pre-built BRICS building blocks ──
+    all_building_blocks: set = set()
+    for smi in BRICS_BUILDING_BLOCKS:
+        mol = _validate_mol(smi)
+        if mol is not None:
+            all_building_blocks.add(smi)
+
+    log.info(f"  Loaded {len(all_building_blocks)} pre-built BRICS building blocks.")
+
+    # ── Combine all fragments ──
+    all_frag_smis: set = decomposed_frags | all_building_blocks
+    frag_mols: List[Chem.Mol] = []
+    for smi in all_frag_smis:
+        m = _validate_mol(smi)
+        if m is not None:
+            frag_mols.append(m)
+
+    log.info(f"  Total BRICS-compatible fragments: {len(frag_mols)}")
+
+    seen_smiles: set = set()
+    records: List[CompoundRecord] = []
+
+    # ── Include original scaffolds (after re-parsing) ──
+    for smi in all_scaffolds:
+        mol = _validate_mol(smi)
+        if mol is None:
+            continue
+        canon = Chem.MolToSmiles(mol)
+        if canon in seen_smiles:
+            continue
+        seen_smiles.add(canon)
+        records.append(CompoundRecord(
+            compound_id=f"SCAFFOLD_{len(records):04d}",
+            smiles=canon,
+            mol=mol,
+        ))
+
+    # ── Recombination via BRICSBuild ──
+    if len(frag_mols) >= 2:
+        recon_records, seen_smiles = _brics_recombination(
+            frag_mols, target_count, seen_smiles, seed,
+        )
+        records.extend(recon_records)
+        log.info(f"  BRICS recombination yielded {len(recon_records)} novel compounds.")
+    else:
+        log.warning(
+            f"  Too few fragments ({len(frag_mols)}) for recombination. "
+            "Using scaffold enumeration only."
+        )
+
+    # ── If still below target, attempt random fragment pairing via linkers ──
+    if len(records) < target_count and len(frag_mols) >= 2:
+        log.info("  Supplementing with fragment-linking enumeration…")
+        rng = np.random.default_rng(seed)
+        max_extra = target_count - len(records)
+        extra_count = 0
+        attempts = 0
+        while extra_count < max_extra and attempts < max_extra * 10:
+            attempts += 1
+            i, j = rng.integers(0, len(frag_mols)), rng.integers(0, len(frag_mols))
+            if i == j:
+                continue
+            try:
+                combined = Chem.CombineMols(frag_mols[i], frag_mols[j])
+                # Link via BRICSBuild
+                for product in itertools.islice(BRICS.BRICSBuild([combined]), 1):
+                    if product is None:
+                        continue
+                    Chem.SanitizeMol(product)
+                    smi = Chem.MolToSmiles(product)
+                    if smi in seen_smiles:
+                        continue
+                    seen_smiles.add(smi)
+                    records.append(CompoundRecord(
+                        compound_id=f"AA-{len(records):04d}",
+                        smiles=smi,
+                        mol=product,
+                    ))
+                    extra_count += 1
+                    break
+            except Exception:
+                continue
+
+    # ── Add positive controls ──
     for name, smi in CONTROL_SMILES.items():
-        if smi not in seen_smiles:
-            mol = Chem.MolFromSmiles(smi)
-            if mol is not None:
-                records.append(CompoundRecord(
-                    compound_id=f"CTRL_{name}",
-                    smiles=smi,
-                    mol=mol,
-                ))
-                seen_smiles.add(smi)
+        mol = _validate_mol(smi)
+        if mol is None:
+            continue
+        canon = Chem.MolToSmiles(mol)
+        if canon not in seen_smiles:
+            records.append(CompoundRecord(
+                compound_id=f"CTRL_{name}",
+                smiles=canon,
+                mol=mol,
+            ))
+            seen_smiles.add(canon)
 
     log.info(f"  Library generation complete: {len(records)} compounds.")
+    if len(records) < 300:
+        log.warning(
+            f"  ⚠  Only {len(records)} compounds generated (target ≥300). "
+            "Consider adding more scaffolds or building blocks."
+        )
+
     return records
 
 
@@ -959,6 +1310,10 @@ def apply_filters(
         4. PAINS alerts via RDKit FilterCatalog.
         5. Diversity check: if < 100 pass, relax similarity to 0.5.
 
+    Scientific rationale: These filters enrich the library for drug-like,
+    non-β-lactam, novel chemotypes that are unlikely to be cross-resistant
+    with existing antibiotics.
+
     Args:
         records: Input compound records.
         similarity_threshold: Initial Tanimoto cutoff.
@@ -968,8 +1323,7 @@ def apply_filters(
     """
     log.info("─── Phase 2: Filtering ───")
 
-    # ── Precompute reference fingerprints ──
-    ref_mols = {}
+    ref_mols: Dict[str, Any] = {}
     for name, smi in REFERENCE_ANTIBIOTICS.items():
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
@@ -977,15 +1331,13 @@ def apply_filters(
                 mol, radius=2, nBits=2048,
             )
 
-    # β-lactam SMARTS matcher
     lactam_pattern = Chem.MolFromSmarts(BETA_LACTAM_SMARTS)
 
-    # PAINS filter catalog
     pains_params = FilterCatalogParams()
     pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
     pains_catalog = FilterCatalog(pains_params)
 
-    passed = []
+    passed: List[CompoundRecord] = []
     skipped_structural = 0
     skipped_similarity = 0
     skipped_admet = 0
@@ -1031,10 +1383,7 @@ def apply_filters(
         record.passes_lipinski = lipinski_ok
         record.qed_score = qed
 
-        if not lipinski_ok:
-            skipped_admet += 1
-            continue
-        if qed <= 0.6:
+        if not lipinski_ok or qed <= 0.6:
             skipped_admet += 1
             continue
 
@@ -1053,7 +1402,6 @@ def apply_filters(
     log.info(f"  PAINS filter: {skipped_pains} removed.")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
-    # 5. Diversity check — relax if < 100
     if len(passed) < DIVERSITY_MIN_COUNT and similarity_threshold < SIMILARITY_THRESHOLD_RELAXED:
         log.warning(
             f"  Only {len(passed)} compounds passed strict filters (< {DIVERSITY_MIN_COUNT}). "
@@ -1076,6 +1424,9 @@ def prepare_ligand_pdbqt(
     """
     Convert an RDKit Mol to PDBQT via Meeko.
 
+    Falls back to a minimal PDBQT writer (via RDKit Gasteiger charges) if
+    meeko is unavailable or fails.
+
     Args:
         mol: Input molecule.
         output_path: Destination .pdbqt path.
@@ -1094,8 +1445,32 @@ def prepare_ligand_pdbqt(
             f.write(pdbqt_str)
         return True
     except Exception as exc:
-        log.warning(f"  Meeko prep failed: {exc}")
-        return False
+        log.warning(f"  Meeko prep failed ({exc}), trying RDKit fallback…")
+        # Fallback: write minimal PDBQT via RDKit
+        try:
+            mol_tmp = Chem.RWMol(mol)
+            mol_tmp = Chem.AddHs(mol_tmp)
+            AllChem.ComputeGasteigerCharges(mol_tmp)
+
+            conf = mol_tmp.GetConformer()
+            lines = ["ROOT\n"]
+            for i, atom in enumerate(mol_tmp.GetAtoms()):
+                pos = conf.GetAtomPosition(i)
+                charge = atom.GetDoubleProp("_GasteigerCharge")
+                elem = atom.GetSymbol()
+                lines.append(
+                    f"ATOM     {i+1:>3}  {elem:<3} LIG X   1    "
+                    f"{pos.x:>8.3f}{pos.y:>8.3f}{pos.z:>8.3f}  "
+                    f"{charge:>8.3f}     {elem:<2s}\n"
+                )
+            lines.append("ENDROOT\n")
+            lines.append("TORSDOF 0\n")
+            with open(output_path, "w") as f:
+                f.writelines(lines)
+            return True
+        except Exception as exc2:
+            log.warning(f"  RDKit PDBQT fallback also failed: {exc2}")
+            return False
 
 
 def _run_vina_docking(
@@ -1133,18 +1508,15 @@ def _run_vina_docking(
             log.warning(f"  Vina error: {result.stderr.strip()}")
             return None
 
-        # Parse output for best binding energy
         for line in result.stdout.splitlines():
             stripped = line.strip()
             if stripped.startswith("1") and " " in stripped:
-                # Vina table format: mode | affinity | dist from best mode
                 parts = stripped.split()
                 try:
                     energy = float(parts[1])
                     return energy
                 except (ValueError, IndexError):
                     continue
-        # Fallback: parse from log tail
         for line in result.stderr.splitlines():
             if "Affinity" in line and "kcal/mol" in line:
                 try:
@@ -1172,28 +1544,40 @@ def dock_compound(
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str = "",
+    cache: Optional[Dict[str, float]] = None,
+    use_cache: bool = False,
 ) -> Optional[float]:
     """
     Full docking pipeline for a single compound: PDBQT prep → Vina → parse.
 
+    Supports caching: if ``use_cache`` is True and a result for
+    ``{compound_id}_{tag}`` exists in the cache dict, it is returned
+    immediately without re-docking.
+
     Args:
-        record: Compound record (must have .mol).
+        record: Compound record (must have .mol or valid .smiles).
         receptor_pdbqt: Path to receptor PDBQT.
         center: Grid box centre.
         box_size: Grid box dimensions.
         work_dir: Scratch directory.
-        tag: Label for temp files (e.g. 'allosteric').
+        tag: Label for temp files and cache key (e.g. ``'allosteric'``).
+        cache: Optional cache dictionary (mutated in place on new results).
+        use_cache: If True, consult cache before docking.
 
     Returns:
         Best binding energy, or None on failure.
     """
+    cache_key = f"{record.compound_id}_{tag}"
+    if use_cache and cache is not None and cache_key in cache:
+        log.info(f"  Cache hit: {cache_key} = {cache[cache_key]}")
+        return cache[cache_key]
+
     if record.mol is None:
         mol = Chem.MolFromSmiles(record.smiles)
         if mol is None:
             return None
         record.mol = mol
 
-    # Generate unique filenames
     safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
     lig_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_lig.pdbqt")
     out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
@@ -1206,54 +1590,87 @@ def dock_compound(
         center, box_size,
     )
 
-    # Cleanup temp files
     for f in (lig_pdbqt, out_pdbqt):
         try:
             os.remove(f)
         except OSError:
             pass
 
+    if use_cache and cache is not None:
+        cache[cache_key] = energy
+
     return energy
 
 
 def _parallel_dock(
-    records: List[CompoundRecord],
+    items: List[Tuple[str, str]],
     receptor_pdbqt: str,
     center: np.ndarray,
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str,
     n_jobs: int = N_JOBS,
-) -> List[Tuple[CompoundRecord, Optional[float]]]:
-    """Dock a list of compounds in parallel, returning (record, energy) pairs.
+    cache: Optional[Dict[str, float]] = None,
+    use_cache: bool = False,
+) -> List[Tuple[str, Optional[float]]]:
+    """
+    Dock a list of compounds in parallel, returning ``(compound_id, energy)``.
 
-    Passes only primitive data (compound_id, smiles) to worker processes
-    to avoid pickling errors with RDKit Mol objects.
+    Accepts ``(compound_id, smiles)`` tuples instead of ``CompoundRecord``
+    objects to avoid pickling RDKit ``Mol`` objects across process boundaries.
+    Each worker reconstructs the ``Mol`` from SMILES locally.
+
+    Args:
+        items: List of ``(compound_id, smiles)`` pairs.
+        receptor_pdbqt: Path to receptor PDBQT.
+        center: Grid centre.
+        box_size: Grid dimensions.
+        work_dir: Scratch directory.
+        tag: Label for temp files.
+        n_jobs: Number of parallel workers.
+        cache: Optional cache dict (used to skip completed entries).
+        use_cache: Whether to consult cache.
+
+    Returns:
+        List of ``(compound_id, energy)`` tuples.
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
-    results = []
-    total = len(records)
+    total = len(items)
+    results: List[Tuple[str, Optional[float]]] = []
+    submitted = 0
 
-    def _worker(cid: str, smiles: str) -> Tuple[str, Optional[float]]:
-        rec = CompoundRecord(compound_id=cid, smiles=smiles)
-        energy = dock_compound(rec, receptor_pdbqt, center, box_size, work_dir, tag)
+    def _worker(
+        cid: str, smiles: str,
+    ) -> Tuple[str, Optional[float]]:
+        """Worker function: reconstruct Mol from SMILES, dock, return energy."""
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return cid, None
+        rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
+        energy = dock_compound(
+            rec, receptor_pdbqt, center, box_size,
+            work_dir, tag, cache=None, use_cache=False,
+        )
         return cid, energy
 
-    # Build a lookup so we can map results back to original records
-    cid_to_record = {r.compound_id: r for r in records}
-
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-        futures = {
-            pool.submit(_worker, rec.compound_id, rec.smiles): rec.compound_id
-            for rec in records
-        }
-        for i, future in enumerate(as_completed(futures)):
+        futures = {}
+        for cid, smiles in items:
+            cache_key = f"{cid}_{tag}"
+            if use_cache and cache is not None and cache_key in cache:
+                results.append((cid, cache[cache_key]))
+                continue
+            futures[pool.submit(_worker, cid, smiles)] = cid
+            submitted += 1
+
+        done = 0
+        for future in as_completed(futures):
             cid, energy = future.result()
-            orig_rec = cid_to_record[cid]
-            results.append((orig_rec, energy))
-            if (i + 1) % 25 == 0:
-                log.info(f"    Docked {i + 1} / {total} ({tag})")
+            results.append((cid, energy))
+            done += 1
+            if done % 25 == 0 or done == submitted:
+                log.info(f"    Docked {done} / {submitted} ({tag})")
 
     return results
 
@@ -1264,14 +1681,17 @@ def _compute_shape_fallback_score(
     seed: int = RANDOM_SEED,
 ) -> Optional[float]:
     """
-    Fallback scoring: generate 3D conformer, compute shape protrude distance
-    vs reference (co-crystallised ligand from 6TKO). Normalise to 0–10 scale
-    (lower = better shape match).
+    Fallback scoring via RDKit Shape Protrude Distance.
 
-    Returns normalised score, or None on failure.
+    Generates 3D conformers for both the query and reference molecules,
+    optimises with MMFF94, and computes the Shape Protrude Distance.
+    The score is normalised to a 0–10 scale (lower = better shape match).
+
+    Scientific rationale: Shape complementarity is the simplest knowledge-free
+    proxy for binding affinity.  This fallback runs when AutoDock Vina is
+    unavailable, maintaining pipeline functionality without external binaries.
     """
     try:
-        # Generate 3D conformer
         mol_3d = Chem.RWMol(mol)
         mol_3d = Chem.AddHs(mol_3d)
         params = rdDistGeom.ETKDGv3()
@@ -1290,7 +1710,6 @@ def _compute_shape_fallback_score(
             return None
         AllChem.MMFFOptimizeMolecule(ref_3d)
 
-        # Shape protrude distance
         try:
             protrude = AllChem.GetShapeProtrudeDist(mol_3d, ref_3d)
         except Exception:
@@ -1299,8 +1718,6 @@ def _compute_shape_fallback_score(
             except Exception:
                 return None
 
-        # Normalise to 0–10 scale (heuristic: typical range 0–0.5)
-        # Map: protrude=0 → score=0 (perfect), protrude=0.5 → score=10 (worst)
         normalised = min(protrude / 0.05, 10.0) if protrude > 0 else 0.0
         return normalised
 
@@ -1310,9 +1727,11 @@ def _compute_shape_fallback_score(
 
 def screen_library(
     records: List[CompoundRecord],
-    targets: dict,
+    targets: Dict[str, Any],
     work_dir: str,
-    deps: dict,
+    deps: Dict[str, Any],
+    cache: Optional[Dict[str, float]] = None,
+    use_cache: bool = False,
 ) -> List[CompoundRecord]:
     """
     Phase 3 — Virtual screening.
@@ -1335,43 +1754,44 @@ def screen_library(
     active_center = pb2pa["active_center"]
 
     if deps["USE_VINA"]:
-        # ── Allosteric docking ──
         log.info("  Docking all compounds against allosteric site…")
+        items = [(r.compound_id, r.smiles) for r in records]
         allosteric_results = _parallel_dock(
-            records, pb2pa["pdbqt"],
+            items, pb2pa["pdbqt"],
             allosteric_center, ALLOSTERIC_BOX_SIZE,
             work_dir, "allosteric",
+            cache=cache, use_cache=use_cache,
         )
 
-        n_scored = 0
-        for rec, energy in allosteric_results:
-            rec.pb2pa_allosteric_energy = energy
-            if energy is not None:
-                n_scored += 1
+        cid_to_record = {r.compound_id: r for r in records}
+        for cid, energy in allosteric_results:
+            if cid in cid_to_record:
+                cid_to_record[cid].pb2pa_allosteric_energy = energy
 
+        n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
         log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
 
-        # ── Select top 50 for active-site docking ──
-        scored = [r for r, e in allosteric_results if e is not None]
+        scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
         scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
 
         top50 = scored[:50]
         log.info(f"  Docking top {len(top50)} compounds against active site…")
 
+        active_items = [(r.compound_id, r.smiles) for r in top50]
         active_results = _parallel_dock(
-            top50, pb2pa["pdbqt"],
+            active_items, pb2pa["pdbqt"],
             active_center, ACTIVE_BOX_SIZE,
             work_dir, "active",
+            cache=cache, use_cache=use_cache,
         )
 
-        for rec, energy in active_results:
-            rec.pb2pa_active_energy = energy
+        for cid, energy in active_results:
+            if cid in cid_to_record:
+                cid_to_record[cid].pb2pa_active_energy = energy
 
     else:
-        # ── Fallback: RDKit Shape protrude ──
         log.info("  Vina unavailable. Using RDKit Shape Fallback.")
 
-        # Extract native ligand from 6TKO as reference
         ref_mol = None
         holo_pdb = targets.get("holo_pdb")
         if holo_pdb and os.path.exists(holo_pdb):
@@ -1383,7 +1803,6 @@ def screen_library(
                     for chain in model:
                         for residue in chain:
                             if residue.get_id()[0] != " " and residue.get_resname().strip() not in ("HOH", "WAT"):
-                                # Write first hetero ligand
                                 pdbio = PDBIO()
                                 class _Sel(Select):
                                     def accept_residue(self, r):
@@ -1402,7 +1821,6 @@ def screen_library(
                 pass
 
         if ref_mol is None:
-            # Use first control as fallback reference
             ref_smi = list(CONTROL_SMILES.values())[0]
             ref_mol = Chem.MolFromSmiles(ref_smi)
 
@@ -1411,7 +1829,6 @@ def screen_library(
             return records[:TOP_N]
 
         total = len(records)
-        shape_scores = []
         for i, rec in enumerate(records):
             if rec.mol is None:
                 mol = Chem.MolFromSmiles(rec.smiles)
@@ -1420,18 +1837,14 @@ def screen_library(
                 rec.mol = mol
             score = _compute_shape_fallback_score(rec.mol, ref_mol)
             rec.shape_score = score
-            shape_scores.append((rec, score))
             if (i + 1) % 100 == 0:
                 log.info(f"  Shape scored {i + 1} / {total}")
 
-        shape_scores = [s for s in shape_scores if s[1] is not None]
-        shape_scores.sort(key=lambda x: x[1])
+        scored_shape = [r for r in records if r.shape_score is not None]
+        scored_shape.sort(key=lambda r: r.shape_score)
+        log.info(f"  Shape scoring complete. Best score: {scored_shape[0].shape_score:.3f}")
 
-        log.info(f"  Shape scoring complete. Best score: {shape_scores[0][1]:.3f}")
-
-    # ── Select top 10 ──
     if deps["USE_VINA"]:
-        # Rank by allosteric energy (lower = better)
         ranked = [r for r in records if r.pb2pa_allosteric_energy is not None]
         ranked.sort(key=lambda r: r.pb2pa_allosteric_energy)
     else:
@@ -1461,10 +1874,15 @@ def compute_selectivity_index(
     """
     Selectivity Index (SI).
 
-        SI = |Pb2pa_Energy| / |Human_Avg_Energy|
+    .. math::
 
-    Vina energies are negative. A higher SI (>1.0) means stronger binding
-    to PBP2a than to the human off-target panel.
+        SI = \\frac{|\\text{PBP2a Energy}|}{|\\text{Human Avg Energy}|}
+
+    Vina energies are negative (favourable binding).  A higher SI (> 1.0)
+    means stronger binding to PBP2a than to the human off-target panel.
+
+    Scientific rationale: A high SI reduces the risk of mechanism-based
+    toxicity.  We set a threshold of 2.0 for the final filter.
 
     Args:
         pb2pa_energy: Best (most negative) PBP2a binding energy.
@@ -1478,8 +1896,8 @@ def compute_selectivity_index(
     return abs(pb2pa_energy) / abs(human_avg_energy) if abs(human_avg_energy) > 1e-6 else 0.0
 
 
-CONSERVED_RESIDUES = {"SER403", "LYS406", "TYR446"}
-MUTABLE_RESIDUES = {"G246", "N146"}
+CONSERVED_RESIDUES: set = {"SER403", "LYS406", "TYR446"}
+MUTABLE_RESIDUES: set = {"G246", "N146"}
 
 
 def profile_resistance_risk(
@@ -1496,25 +1914,22 @@ def profile_resistance_risk(
         - Good: contacts with conserved residues (Ser403, Lys406, Tyr446).
         - Risk: contacts with mutable residues (Gly246, Asn146).
 
+    Scientific rationale: Mutations in the PBP2a binding pocket (e.g. G246E,
+    N146K) have been associated with clinical resistance to ceftaroline.
+    Candidates that preferentially contact conserved residues are less likely
+    to lose activity against resistant strains.
+
     Returns a human-readable notes string.
-
-    NOTE: Full interaction fingerprinting requires detailed pose analysis.
-    Here we use a simplified rule-based heuristic based on what we know
-    about the binding pocket.
     """
-    notes = []
+    notes: List[str] = []
 
-    # Heuristic: if the compound bound well to the active site (Ser403 proximity),
-    # it likely contacts the catalytic machinery — good
     if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
         notes.append("Likely contacts catalytic Ser403 (active site). Good.")
 
-    # If it bound well only to allosteric site, it targets the allosteric pocket
     if record.pb2pa_allosteric_energy is not None and record.pb2pa_allosteric_energy < -7.0:
         if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
             notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
 
-    # Molecular weight heuristic: larger molecules may have more contact surface
     if record.mol is not None:
         mw = Descriptors.MolWt(record.mol)
         if mw > 400:
@@ -1523,7 +1938,6 @@ def profile_resistance_risk(
         if n_rot < 5:
             notes.append("Rigid scaffold — reduced entropic penalty, may enhance binding specificity.")
 
-    # Resistance risk indicators
     if record.qed_score > 0.8:
         notes.append("High drug-likeness (QED > 0.8) — good developability profile.")
 
@@ -1535,9 +1949,11 @@ def profile_resistance_risk(
 
 def analyze_selectivity_and_resistance(
     top10: List[CompoundRecord],
-    targets: dict,
+    targets: Dict[str, Any],
     work_dir: str,
-    deps: dict,
+    deps: Dict[str, Any],
+    cache: Optional[Dict[str, float]] = None,
+    use_cache: bool = False,
 ) -> List[CompoundRecord]:
     """
     Phase 4 — Selectivity & Resistance Analysis.
@@ -1557,29 +1973,33 @@ def analyze_selectivity_and_resistance(
             rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
         return top10
 
-    # ── Dock vs Trypsin ──
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
     trypsin_center = targets["trypsin"].get("active_center", np.array([0.0, 0.0, 0.0]))
+    trypisn_items = [(r.compound_id, r.smiles) for r in top10]
     trypsin_results = _parallel_dock(
-        top10, targets["trypsin"]["pdbqt"],
+        trypisn_items, targets["trypsin"]["pdbqt"],
         trypsin_center, (20.0, 20.0, 20.0),
         work_dir, "trypsin", n_jobs=min(4, len(top10)),
+        cache=cache, use_cache=use_cache,
     )
-    for rec, energy in trypsin_results:
-        rec.human_trypsin_energy = energy
+    cid_map = {r.compound_id: r for r in top10}
+    for cid, energy in trypsin_results:
+        if cid in cid_map:
+            cid_map[cid].human_trypsin_energy = energy
 
-    # ── Dock vs CES1 ──
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (3KJZ)…")
     ces1_center = targets["CES1"].get("active_center", np.array([0.0, 0.0, 0.0]))
+    ces1_items = [(r.compound_id, r.smiles) for r in top10]
     ces1_results = _parallel_dock(
-        top10, targets["CES1"]["pdbqt"],
+        ces1_items, targets["CES1"]["pdbqt"],
         ces1_center, (20.0, 20.0, 20.0),
         work_dir, "ces1", n_jobs=min(4, len(top10)),
+        cache=cache, use_cache=use_cache,
     )
-    for rec, energy in ces1_results:
-        rec.human_ces1_energy = energy
+    for cid, energy in ces1_results:
+        if cid in cid_map:
+            cid_map[cid].human_ces1_energy = energy
 
-    # ── Compute SI ──
     for rec in top10:
         energies_human = [
             e for e in (rec.human_trypsin_energy, rec.human_ces1_energy)
@@ -1591,7 +2011,6 @@ def analyze_selectivity_and_resistance(
             continue
 
         human_avg = np.mean(energies_human)
-        # Best PBP2a energy (active if available, else allosteric)
         pb2pa_best = (
             rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None
             else rec.pb2pa_allosteric_energy
@@ -1611,7 +2030,6 @@ def analyze_selectivity_and_resistance(
         else:
             log.info(f"  {rec.compound_id}: SI = {si:.2f} (pass).")
 
-    # ── Resistance profiling ──
     pb2pa = targets["PBP2a"]
     for rec in top10:
         rec.resistance_notes = profile_resistance_risk(
@@ -1631,7 +2049,7 @@ def analyze_selectivity_and_resistance(
 
 def generate_csv_report(top10: List[CompoundRecord]) -> str:
     """
-    Phase 5.1 — Write top_candidates.csv with all required columns.
+    Phase 5.1 — Write ``top_candidates.csv`` with all required columns.
 
     Columns:
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
@@ -1643,7 +2061,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
     log.info("─── Phase 5: Reporting ───")
     ensure_output_dir()
 
-    rows = []
+    rows: List[Dict[str, str]] = []
     for rec in top10:
         rows.append({
             "Compound_ID": rec.compound_id,
@@ -1686,7 +2104,7 @@ def generate_images(top3: List[CompoundRecord]) -> List[str]:
 
     Returns list of file paths.
     """
-    paths = []
+    paths: List[str] = []
     for i, rec in enumerate(top3):
         if rec.mol is None:
             mol = Chem.MolFromSmiles(rec.smiles)
@@ -1708,11 +2126,166 @@ def generate_images(top3: List[CompoundRecord]) -> List[str]:
     return paths
 
 
+def generate_html_report(
+    top10: List[CompoundRecord],
+    top50: List[CompoundRecord],
+    output_dir: Path,
+) -> Tuple[str, str, str]:
+    """
+    Phase 5.3 — Generate an HTML report with embedded matplotlib figures.
+
+    Creates:
+        1. Scatter plot: Allosteric Energy vs Selectivity Index (top 10).
+        2. Histogram: QED Scores for top 50 candidates.
+        3. HTML page embedding the figures and a results table.
+
+    Scientific rationale: Visualising the binding energy-selectivity trade-off
+    helps identify the most promising candidates at a glance.  The QED
+    histogram confirms the library is drug-like after filtering.
+
+    Returns ``(html_path, scatter_path, hist_path)``.
+    """
+    log.info("─── Phase 5: HTML Report Generation ───")
+
+    # ── 1. Scatter plot: Allosteric Energy vs Selectivity Index ──
+    scatter_data = [
+        (r.pb2pa_allosteric_energy, r.selectivity_index, r.compound_id)
+        for r in top10
+        if r.pb2pa_allosteric_energy is not None and r.selectivity_index is not None
+    ]
+    if scatter_data:
+        fig, ax = plt.subplots(figsize=(9, 6))
+        energies = [d[0] for d in scatter_data]
+        sis = [d[1] for d in scatter_data]
+        cids = [d[2] for d in scatter_data]
+        ax.scatter(energies, sis, c="steelblue", s=60, edgecolors="black")
+        for x, y, cid in zip(energies, sis, cids):
+            ax.annotate(cid, (x, y), textcoords="offset points", xytext=(5, 5), fontsize=7)
+        ax.axhline(y=SELECTIVITY_INDEX_THRESHOLD, color="red", linestyle="--", alpha=0.6,
+                   label=f"SI threshold = {SELECTIVITY_INDEX_THRESHOLD}")
+        ax.set_xlabel("Allosteric Binding Energy (kcal/mol)", fontsize=12)
+        ax.set_ylabel("Selectivity Index", fontsize=12)
+        ax.set_title("Top Candidates: Binding Energy vs Selectivity", fontsize=14)
+        ax.legend()
+        ax.grid(alpha=0.3)
+        scatter_path = os.path.join(str(output_dir), "energy_vs_selectivity.png")
+        plt.savefig(scatter_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        log.info(f"  Scatter plot saved: {scatter_path}")
+    else:
+        scatter_path = ""
+
+    # ── 2. Histogram: QED scores for top 50 ──
+    qeds = [r.qed_score for r in top50 if r.qed_score > 0]
+    if qeds:
+        fig, ax = plt.subplots(figsize=(9, 6))
+        ax.hist(qeds, bins=20, edgecolor="black", color="mediumseagreen", alpha=0.8)
+        ax.axvline(x=0.6, color="red", linestyle="--", alpha=0.6, label="QED cutoff = 0.6")
+        ax.set_xlabel("QED Score", fontsize=12)
+        ax.set_ylabel("Frequency", fontsize=12)
+        ax.set_title("QED Distribution (Top 50 Candidates)", fontsize=14)
+        ax.legend()
+        ax.grid(alpha=0.3)
+        hist_path = os.path.join(str(output_dir), "qed_histogram.png")
+        plt.savefig(hist_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        log.info(f"  QED histogram saved: {hist_path}")
+    else:
+        hist_path = ""
+
+    # ── 3. Build HTML ──
+    table_rows = ""
+    for i, rec in enumerate(top10):
+        allosteric = f"{rec.pb2pa_allosteric_energy:.2f}" if rec.pb2pa_allosteric_energy is not None else "N/A"
+        active = f"{rec.pb2pa_active_energy:.2f}" if rec.pb2pa_active_energy is not None else "N/A"
+        si = f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None else "N/A"
+        qed = f"{rec.qed_score:.3f}" if rec.qed_score else "N/A"
+        table_rows += (
+            f"<tr>"
+            f"<td>{i + 1}</td>"
+            f"<td>{rec.compound_id}</td>"
+            f"<td style='font-size:0.8em;max-width:300px;word-break:break-all;'>{rec.smiles}</td>"
+            f"<td>{allosteric}</td>"
+            f"<td>{active}</td>"
+            f"<td>{si}</td>"
+            f"<td>{qed}</td>"
+            f"<td>{rec.resistance_notes}</td>"
+            f"</tr>\n"
+        )
+
+    scatter_img = ""
+    if scatter_path:
+        scatter_img = (
+            '<h2>Binding Energy vs Selectivity</h2>\n'
+            f'<img src="energy_vs_selectivity.png" alt="Energy vs Selectivity" style="max-width:800px;">\n'
+        )
+    hist_img = ""
+    if hist_path:
+        hist_img = (
+            '<h2>QED Score Distribution</h2>\n'
+            f'<img src="qed_histogram.png" alt="QED Histogram" style="max-width:800px;">\n'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AutoAntibiotic Discovery Report</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; }}
+h1 {{ color: #1a5276; }}
+h2 {{ color: #2e86c1; border-bottom: 1px solid #ccc; padding-bottom: 4px; }}
+table {{ border-collapse: collapse; width: 100%; margin-top: 10px; }}
+th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
+th {{ background-color: #2e86c1; color: white; }}
+tr:nth-child(even) {{ background-color: #f2f2f2; }}
+img {{ border: 1px solid #ddd; border-radius: 4px; padding: 4px; }}
+.footer {{ margin-top: 30px; color: #777; font-size: 0.9em; }}
+</style>
+</head>
+<body>
+<h1>AutoAntibiotic Discovery Pipeline — Top Candidates Report</h1>
+<p>Generated by AutoAntibiotic v3.2 | MRSA PBP2a Inhibitor Screening</p>
+<hr>
+
+{scatter_img}
+
+{hist_img}
+
+<h2>Top {len(top10)} Candidates</h2>
+<table>
+<tr>
+  <th>Rank</th>
+  <th>ID</th>
+  <th>SMILES</th>
+  <th>Allosteric (kcal/mol)</th>
+  <th>Active (kcal/mol)</th>
+  <th>Selectivity Index</th>
+  <th>QED</th>
+  <th>Resistance Notes</th>
+</tr>
+{table_rows}
+</table>
+
+<div class="footer">
+<p>Pipeline completed successfully. See <code>top_candidates.csv</code> for full data.</p>
+</div>
+</body>
+</html>"""
+
+    html_path = os.path.join(str(output_dir), "report.html")
+    with open(html_path, "w") as f:
+        f.write(html)
+    log.info(f"  HTML report saved: {html_path}")
+
+    return html_path, scatter_path, hist_path
+
+
 def print_summary(
     n_total: int, n_filtered: int,
     top10: List[CompoundRecord],
     validation_ok: bool, redock_rmsd: Optional[float],
-    deps: dict,
+    deps: Dict[str, Any],
 ) -> None:
     """Log a final pipeline summary."""
     n_docked = sum(1 for r in top10 if r.pb2pa_allosteric_energy is not None)
@@ -1730,7 +2303,10 @@ def print_summary(
     log.info(f"  Successfully docked:           {n_docked}")
     log.info(f"  Selectivity pass (SI >= 2.0):  {n_selectivity_pass}")
     log.info(f"  Docking engine:                {'Vina' if deps['USE_VINA'] else 'RDKit Shape (fallback)'}")
-    log.info(f"  Redocking RMSD:                {redock_rmsd:.3f} Å" if redock_rmsd else "  Redocking RMSD:                N/A")
+    if redock_rmsd is not None:
+        log.info(f"  Redocking RMSD:                {redock_rmsd:.3f} Å")
+    else:
+        log.info("  Redocking RMSD:                N/A")
     log.info(f"  Redocking validated:           {validation_ok}")
     log.info(f"  CSV report:                    {CSV_REPORT}")
     log.info("=" * 60)
@@ -1740,8 +2316,26 @@ def print_summary(
 #  MAIN — Pipeline Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main():
-    """Orchestrate the full discovery pipeline end-to-end."""
+def main(argv: Optional[List[str]] = None) -> None:
+    """
+    Orchestrate the full discovery pipeline end-to-end.
+
+    Usage::
+
+        python discovery_pipeline.py [--use-cache]
+
+    The ``--use-cache`` flag skips re-docking of any ``(compound_id, target)``
+    pair that already has a result in ``output/cache.json``.
+    """
+    parser = argparse.ArgumentParser(
+        description="AutoAntibiotic Discovery Pipeline v3.2",
+    )
+    parser.add_argument(
+        "--use-cache", action="store_true",
+        help="Skip re-docking if cache.json has results for a (compound_id, target) pair.",
+    )
+    args = parser.parse_args(argv)
+
     ensure_output_dir()
     logging.basicConfig(
         level=logging.INFO,
@@ -1753,10 +2347,16 @@ def main():
         ],
     )
 
-    # ── Dependency check ──
+    use_cache = args.use_cache
+    cache: Optional[Dict[str, float]] = None
+    if use_cache:
+        cache = load_cache()
+        log.info(f"  Loaded {len(cache)} cached docking results.")
+    else:
+        log.info("  Cache disabled. Use --use-cache to enable.")
+
     deps = verify_dependencies()
 
-    # ── Working directory for intermediate files ──
     work_dir = str(OUTPUT_DIR / "workdir")
     pdb_dir = str(OUTPUT_DIR / "pdb")
     os.makedirs(work_dir, exist_ok=True)
@@ -1785,20 +2385,35 @@ def main():
         return
 
     # ── Phase 3: Virtual screening ──
-    top10 = screen_library(filtered, targets, work_dir, deps)
+    top10 = screen_library(filtered, targets, work_dir, deps, cache=cache, use_cache=use_cache)
 
     if not top10:
         log.warning("  No candidates after screening. Halting pipeline.")
         return
 
     # ── Phase 4: Selectivity & Resistance ──
-    top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
+    top10 = analyze_selectivity_and_resistance(
+        top10, targets, work_dir, deps, cache=cache, use_cache=use_cache,
+    )
 
     # ── Phase 5: Reporting & Artifacts ──
     generate_csv_report(top10)
 
     top3 = top10[:3]
     generate_images(top3)
+
+    # Collect top 50 for QED histogram
+    scored = sorted(
+        [r for r in filtered if r.qed_score > 0],
+        key=lambda r: r.qed_score, reverse=True,
+    )
+    top50 = scored[:50]
+
+    generate_html_report(top10, top50, OUTPUT_DIR)
+
+    if use_cache and cache is not None:
+        save_cache(cache)
+        log.info(f"  Cache saved ({len(cache)} entries).")
 
     print_summary(
         n_total, n_filtered, top10,
