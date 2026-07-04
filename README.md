@@ -8,7 +8,7 @@ A virtual screening pipeline for discovering novel MRSA PBP2a inhibitors. The pi
 - **Target Preparation (Phase 1)** — Downloads PDB structures, removes crystallographic artifacts, adds hydrogens, and converts to PDBQT. Grid centres are auto-computed for allosteric (Ala237/Met241/Tyr159) and active (Ser403) pockets.
 - **Library Generation (Phase 2)** — Generates a diverse, drug-like library via BRICS fragment recombination from natural-product-inspired scaffolds and synthetic building blocks.
 - **Filtering (Phase 2)** — Applies β-lactam exclusion, Tanimoto similarity vs reference antibiotics, Lipinski Rule-of-5, QED ≥ 0.6, PAINS alerts, and **Synthetic Accessibility (SA) Score** (SA ≤ 6.0).
-- **Virtual Screening (Phase 3)** — AutoDock Vina docking against allosteric (full library) and active (top 50) sites. Falls back to RDKit Shape Protrude scoring when Vina is unavailable.
+- **Virtual Screening (Phase 3)** — AutoDock Vina or GNINA (deep-learning) docking against allosteric (full library) and active (top 50) sites. Supports ensemble docking against multiple receptor structures with consensus scoring. Falls back to RDKit Shape Protrude scoring when Vina/GNINA is unavailable.
 - **Selectivity Profiling (Phase 4)** — Docks top candidates against human trypsin (1UTN) and CES1 (3KJZ) off-targets; computes Selectivity Index and resistance-risk profile.
 - **Reporting (Phase 5)** — Generates a CSV report, 2D structure images (top 3), and an interactive HTML report with embedded matplotlib figures.
 
@@ -18,6 +18,7 @@ A virtual screening pipeline for discovering novel MRSA PBP2a inhibitors. The pi
 - **Conda** (recommended) or **pip**
 - **Optional external binaries**:
   - [AutoDock Vina](https://vina.scripps.edu/) — molecular docking
+  - [GNINA](https://github.com/gnina/gnina) — deep-learning CNN-based docking (higher accuracy)
   - [OpenBabel](https://openbabel.org/) — file format conversion
   - [ADFR Suite](https://ccsb.scripps.edu/adfr/) — `prepare_receptor` for PDBQT conversion
 
@@ -71,6 +72,22 @@ brew install openbabel  # macOS
 apt install openbabel   # Debian/Ubuntu
 ```
 
+#### GNINA (deep-learning docking)
+
+```bash
+# Conda (Linux only)
+conda install -c conda-forge gnina
+```
+
+Or download the precompiled binary from [https://github.com/gnina/gnina/releases](https://github.com/gnina/gnina/releases) and ensure `gnina` is on your `PATH`.
+
+```bash
+# Verify installation
+gnina --help
+```
+
+> GNINA provides CNN-based scoring (`CNNscore` / `CNNaffinity`) that correlates better with experimental binding affinities than AutoDock Vina. Enable with `--use-gnina`.
+
 #### ADFR Suite (prepare_receptor)
 
 Download from [https://ccsb.scripps.edu/adfr/](https://ccsb.scripps.edu/adfr/) and add the `prepare_receptor` binary to your `PATH`.
@@ -101,10 +118,27 @@ python -m autoantibiotic --use-cache
 
 Re-uses previously computed docking results stored in `output/cache.json` to avoid re-docking identical compound–target pairs.
 
+### Using GNINA (deep-learning docking)
+
+```bash
+python -m autoantibiotic --use-gnina
+```
+
+Uses GNINA's CNN-based scoring instead of AutoDock Vina. Falls back to Vina if GNINA fails.
+
+### Ensemble docking (multiple receptor structures)
+
+```bash
+python -m autoantibiotic --ensemble-dir /path/to/receptor/structures
+```
+
+Docks against every receptor in the directory and computes a consensus score (mean by default). The directory should contain PDB or PDBQT files.
+
 ### Combining options
 
 ```bash
 python -m autoantibiotic --dry-run --use-cache
+python -m autoantibiotic --use-gnina --ensemble-dir /path/to/structures
 ```
 
 ## Output
@@ -131,9 +165,14 @@ Key parameters are defined in the `PipelineConfig` dataclass (`autoantibiotic/co
 | `similarity_threshold` | 0.4 | Max Tanimoto similarity to reference antibiotics |
 | `qed_threshold` | 0.6 | Minimum QED score |
 | `sa_score_threshold` | 6.0 | Maximum Synthetic Accessibility score (lower = easier to synthesise) |
-| `vina_exhaustiveness` | 8 | Vina exhaustiveness parameter |
+| `vina_exhaustiveness` | 8 | Vina/GNINA exhaustiveness parameter |
 | `n_jobs` | CPU count − 1 | Parallel worker count |
 | `top_n` | 10 | Number of final candidates to report |
+| `use_gnina` | `False` | Enable GNINA deep-learning docking |
+| `gnina_binary_path` | `"gnina"` | Path to the GNINA binary |
+| `ensemble_mode` | `False` | Enable ensemble docking against multiple receptor structures |
+| `ensemble_structures_dir` | `None` | Directory containing receptor PDB/PDBQT files for ensemble docking |
+| `consensus_scoring_method` | `"mean"` | Consensus scoring: `"mean"`, `"median"`, or `"min"` |
 
 ## Troubleshooting
 
@@ -144,6 +183,14 @@ Key parameters are defined in the `PipelineConfig` dataclass (`autoantibiotic/co
 ```
 
 Install AutoDock Vina (see Installation step 5). Verify with `vina --version`.
+
+### "gnina not found"
+
+```text
+GNINA execution failed: Tool gnina ... timed out or returned non-zero.
+```
+
+Install GNINA (see Installation step 5). Verify with `gnina --help`. The pipeline falls back to AutoDock Vina automatically.
 
 ### "prepare_receptor" not found
 

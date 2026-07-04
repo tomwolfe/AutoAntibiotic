@@ -4,6 +4,7 @@ import gc
 import hashlib
 import os
 import shutil
+import statistics
 from concurrent.futures import ProcessPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -12,7 +13,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
 from .config import CONFIG, CompoundRecord
-from .io_utils import CacheManager, log, parse_vina_energy, run_tool
+from .io_utils import CacheManager, log, parse_gnina_energy, parse_vina_energy, run_tool
 
 try:
     from .ml_scoring import rescore_with_ml as _rescore_with_ml
@@ -389,6 +390,63 @@ def _run_vina_docking(
         return None
 
 
+def _run_gnina_docking(
+    receptor_pdbqt: str,
+    ligand_pdbqt: str,
+    output_pdbqt: str,
+    center: np.ndarray,
+    box_size: Tuple[float, float, float],
+    timeout: int = CONFIG.vina_timeout_s,
+) -> Optional[float]:
+    """Run a single GNINA docking job.
+
+    Constructs the ``gnina`` command line and parses the CNNscore
+    (0–1, higher = better) from the output.
+
+    Args:
+        receptor_pdbqt: Path to the receptor PDBQT file.
+        ligand_pdbqt: Path to the ligand PDBQT file.
+        output_pdbqt: Path to write the docked-pose PDBQT file.
+        center: 3-element array of (x, y, z) box centre coordinates.
+        box_size: Tuple of (x, y, z) box dimensions in Ångström.
+        timeout: Maximum wall-clock seconds for the GNINA subprocess.
+
+    Returns:
+        CNNscore (0–1), or None if docking failed.
+    """
+    if CONFIG.dry_run:
+        return float(np.random.uniform(0.5, 0.95))
+
+    cmd = [
+        CONFIG.gnina_binary_path,
+        "--receptor", receptor_pdbqt,
+        "--ligand", ligand_pdbqt,
+        "--out", output_pdbqt,
+        "--center_x", f"{center[0]:.3f}",
+        "--center_y", f"{center[1]:.3f}",
+        "--center_z", f"{center[2]:.3f}",
+        "--size_x", f"{box_size[0]:.1f}",
+        "--size_y", f"{box_size[1]:.1f}",
+        "--size_z", f"{box_size[2]:.1f}",
+        "--exhaustiveness", str(CONFIG.vina_exhaustiveness),
+        "--num_modes", str(CONFIG.vina_num_modes),
+    ]
+
+    try:
+        result = run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
+        if result.returncode != 0:
+            log.warning(f"  GNINA error: {result.stderr.strip()}")
+            return None
+        score = parse_gnina_energy(result.stdout)
+        if score is not None:
+            return score
+        score = parse_gnina_energy(result.stderr)
+        return score
+    except RuntimeError as exc:
+        log.warning(f"  GNINA execution failed: {exc}")
+        return None
+
+
 def dock_compound(
     record: CompoundRecord,
     receptor_pdbqt: str,
@@ -421,10 +479,22 @@ def dock_compound(
     if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
         return None
 
-    energy = _run_vina_docking(
-        receptor_pdbqt, lig_pdbqt, out_pdbqt,
-        center, box_size,
-    )
+    if CONFIG.use_gnina:
+        energy = _run_gnina_docking(
+            receptor_pdbqt, lig_pdbqt, out_pdbqt,
+            center, box_size,
+        )
+        if energy is None:
+            log.warning("  GNINA docking failed, falling back to Vina.")
+            energy = _run_vina_docking(
+                receptor_pdbqt, lig_pdbqt, out_pdbqt,
+                center, box_size,
+            )
+    else:
+        energy = _run_vina_docking(
+            receptor_pdbqt, lig_pdbqt, out_pdbqt,
+            center, box_size,
+        )
 
     for f in (lig_pdbqt, out_pdbqt):
         try:
@@ -436,6 +506,52 @@ def dock_compound(
         cache[cache_key] = energy
 
     return energy
+
+
+def dock_compound_ensemble(
+    record: CompoundRecord,
+    receptor_pdbqt_list: List[str],
+    center_list: List[np.ndarray],
+    box_size: Tuple[float, float, float],
+    work_dir: str,
+    tag: str = "",
+) -> Optional[float]:
+    """Dock a compound against an ensemble of receptor structures.
+
+    Each receptor structure is docked independently.  The final score
+    is aggregated via ``CONFIG.consensus_scoring_method`` ("mean",
+    "median", or "min").
+
+    Args:
+        record: Compound record to dock.
+        receptor_pdbqt_list: Paths to receptor PDBQT files.
+        center_list: Search-box centres, one per receptor.
+        box_size: Shared box dimensions for all receptors.
+        work_dir: Working directory for intermediate files.
+        tag: Label for cache keys and file names.
+
+    Returns:
+        Consensus score, or None if all individual dockings failed.
+    """
+    energies: List[float] = []
+    for i, (rec_pdbqt, ctr) in enumerate(zip(receptor_pdbqt_list, center_list)):
+        e = dock_compound(
+            record, rec_pdbqt, ctr, box_size,
+            work_dir, f"{tag}_ens{i}",
+        )
+        if e is not None:
+            energies.append(e)
+
+    if not energies:
+        return None
+
+    method = CONFIG.consensus_scoring_method
+    if method == "min":
+        return min(energies)
+    elif method == "median":
+        return statistics.median(energies)
+    else:
+        return statistics.mean(energies)
 
 
 def _worker_dock_wrapper(
@@ -586,6 +702,41 @@ def _compute_shape_fallback_score(
         return None
 
 
+def _parallel_dock_ensemble(
+    items: List[Tuple[str, str]],
+    receptor_pdbqt_list: List[str],
+    center_list: List[np.ndarray],
+    box_size: Tuple[float, float, float],
+    work_dir: str,
+    tag: str,
+    n_jobs: int = CONFIG.n_jobs,
+    cache: _CacheLike = None,
+    use_cache: bool = False,
+) -> List[Tuple[str, Optional[float]]]:
+    """Dock a list of compounds against an ensemble of receptors.
+
+    Each compound is docked independently against every receptor,
+    then a consensus score is computed via ``CONFIG.consensus_scoring_method``.
+
+    Returns list of ``(compound_id, consensus_energy)`` tuples.
+    """
+    results: List[Tuple[str, Optional[float]]] = []
+
+    for cid, smiles in items:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            results.append((cid, None))
+            continue
+        rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
+        energy = dock_compound_ensemble(
+            rec, receptor_pdbqt_list, center_list,
+            box_size, work_dir, tag,
+        )
+        results.append((cid, energy))
+
+    return results
+
+
 def screen_library(
     records: List[CompoundRecord],
     targets: Dict[str, Any],
@@ -596,7 +747,8 @@ def screen_library(
 ) -> List[CompoundRecord]:
     """Phase 3 — Virtual screening.
 
-    Primary (Vina): dock against allosteric site, select top 50 for active site.
+    Primary (Vina/GNINA): dock against allosteric site, select top 50 for active site.
+    Ensemble mode: dock against multiple receptor structures and compute consensus.
     Fallback (RDKit Shape): shape scoring vs native ligand.
 
     Returns top 10 candidates.
@@ -607,8 +759,64 @@ def screen_library(
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
 
+    # Check for ensemble mode
+    ensemble_targets = targets.get("PBP2a_ensemble")
+    ensemble_active = ensemble_targets is not None and len(ensemble_targets) > 0
+
     use_vina = deps.get("USE_VINA", False)
     if use_vina:
+        if ensemble_active:
+            log.info(f"  Ensemble docking (method={CONFIG.consensus_scoring_method}) against {len(ensemble_targets)} structures…")
+            receptor_pdbqt_list = [t["pdbqt"] for t in ensemble_targets]
+            allosteric_center_list = [t["allosteric_center"] for t in ensemble_targets]
+            active_center_list = [t["active_center"] for t in ensemble_targets]
+
+            allosteric_results = _parallel_dock_ensemble(
+                [(r.compound_id, r.smiles) for r in records],
+                receptor_pdbqt_list,
+                allosteric_center_list,
+                CONFIG.allosteric_box_size,
+                work_dir, "allosteric",
+                cache=cache, use_cache=use_cache,
+            )
+
+            cid_to_record = {r.compound_id: r for r in records}
+            for cid, energy in allosteric_results:
+                if cid in cid_to_record:
+                    cid_to_record[cid].pb2pa_allosteric_energy = energy
+
+            n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
+            log.info(f"  Ensemble allosteric docking complete: {n_scored}/{len(records)} scored.")
+
+            scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
+            scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+
+            top50 = scored[:CONFIG.top_n_for_active]
+            if top50 and ensemble_targets:
+                log.info(f"  Ensemble docking top {len(top50)} against active site…")
+                active_results = _parallel_dock_ensemble(
+                    [(r.compound_id, r.smiles) for r in top50],
+                    receptor_pdbqt_list,
+                    active_center_list,
+                    CONFIG.active_box_size,
+                    work_dir, "active",
+                    cache=cache, use_cache=use_cache,
+                )
+                for cid, energy in active_results:
+                    if cid in cid_to_record:
+                        cid_to_record[cid].pb2pa_active_energy = energy
+
+            scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
+            scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+            top10 = scored[:CONFIG.top_n]
+
+            log.info(f"  Top {len(top10)} candidates (ensemble) selected.")
+            for i, r in enumerate(top10):
+                log.info(f"    {i + 1}. {r.compound_id}: {r.pb2pa_allosteric_energy:.4f} kcal/mol")
+
+            log.info("─── Phase 3 complete ───")
+            return top10
+
         log.info("  Docking all compounds against allosteric site…")
         items = [(r.compound_id, r.smiles) for r in records]
         allosteric_results = _parallel_dock(

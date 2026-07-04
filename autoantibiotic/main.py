@@ -14,6 +14,7 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import CONFIG
@@ -49,11 +50,26 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--dry-run", action="store_true",
         help="Limit library to 10 compounds and use mock docking energies.",
     )
+    parser.add_argument(
+        "--use-gnina", action="store_true",
+        help="Use GNINA (deep-learning docking) instead of AutoDock Vina.",
+    )
+    parser.add_argument(
+        "--ensemble-dir", type=str, default=None,
+        help="Path to directory containing multiple receptor structures for ensemble docking.",
+    )
     args = parser.parse_args(argv)
 
     if args.dry_run:
         CONFIG.dry_run = True
         CONFIG.library_target_count = 10
+
+    if args.use_gnina:
+        CONFIG.use_gnina = True
+
+    if args.ensemble_dir:
+        CONFIG.ensemble_mode = True
+        CONFIG.ensemble_structures_dir = Path(args.ensemble_dir)
 
     ensure_output_dir()
     logging.basicConfig(

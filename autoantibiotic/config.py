@@ -177,6 +177,15 @@ class PipelineConfig:
     pharmacophore_min_matches: int = 2
     pharmacophore_tolerance: float = 2.0
 
+    # GNINA deep-learning docking (Phase 6)
+    use_gnina: bool = False
+    gnina_binary_path: str = "gnina"
+
+    # Ensemble docking (Phase 6)
+    ensemble_mode: bool = False
+    ensemble_structures_dir: Optional[Path] = None
+    consensus_scoring_method: str = "mean"  # "mean", "min", or "median"
+
     # Analysis thresholds (Phase 4)
     resistance_energy_active_threshold: float = -6.0
     resistance_energy_allosteric_threshold: float = -7.0

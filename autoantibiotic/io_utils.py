@@ -65,6 +65,12 @@ _INSTALL_GUIDE: Dict[str, str] = {
         "       Or download from https://vina.scripps.edu/\n"
         "       Then ensure 'vina' is on your PATH."
     ),
+    "gnina": (
+        "  → Install GNINA:\n"
+        "       Download from https://github.com/gnina/gnina/releases\n"
+        "       or build from source: https://github.com/gnina/gnina\n"
+        "       Then ensure 'gnina' is on your PATH."
+    ),
     "obabel": (
         "  → Install OpenBabel:\n"
         "       conda install -c conda-forge openbabel\n"
@@ -359,6 +365,35 @@ def parse_vina_energy(vina_stdout: str) -> Optional[float]:
     return None
 
 
+def parse_gnina_energy(gnina_stdout: str) -> Optional[float]:
+    """Extract the best CNNscore from GNINA stdout.
+
+    GNINA output contains lines like::
+
+        CNNscore    :   0.8567
+        CNNaffinity :   7.2345
+
+    Returns CNNscore (0-1, higher = better) or None if parsing fails.
+    """
+    for line in gnina_stdout.splitlines():
+        stripped = line.strip()
+        m = re.search(r"CNNscore\s*:\s*(\d+\.?\d*)", stripped)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    for line in gnina_stdout.splitlines():
+        stripped = line.strip()
+        m = re.search(r"CNNaffinity\s*:\s*(-?\d+\.?\d*)", stripped)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
+
+
 def download_with_retry(
     pdb_id: str,
     out_dir: str,
@@ -436,7 +471,7 @@ def verify_dependencies() -> Dict[str, Any]:
                 f"Please run: pip install -r requirements.txt"
             )
 
-    for bin_name in ("vina", "obabel", "prepare_receptor"):
+    for bin_name in ("vina", "gnina", "obabel", "prepare_receptor"):
         try:
             run_tool(
                 [bin_name, "--help" if bin_name == "prepare_receptor" else "--version"],
