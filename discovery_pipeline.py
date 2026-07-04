@@ -42,7 +42,7 @@ import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
@@ -269,8 +269,11 @@ def load_cache() -> Dict[str, float]:
 def save_cache(cache: Dict[str, float]) -> None:
     """Persist the docking result cache to ``CONFIG.output_dir / "cache.json"``."""
     ensure_output_dir()
-    with open(CONFIG.output_dir / "cache.json", "w") as f:
-        json.dump(cache, f, indent=2, sort_keys=True)
+    try:
+        with open(CONFIG.output_dir / "cache.json", "w") as f:
+            json.dump(cache, f, indent=2, sort_keys=True)
+    except (OSError, IOError):
+        log.warning("  ⚠  Failed to save cache file — pipeline will continue without persistence.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1622,7 +1625,6 @@ def dock_compound(
     """
     cache_key = f"{record.compound_id}_{tag}"
     if use_cache and cache is not None and cache_key in cache:
-        log.info(f"  Cache hit: {cache_key} = {cache[cache_key]}")
         return cache[cache_key]
 
     if record.mol is None:
@@ -1976,11 +1978,17 @@ def profile_resistance_risk(
     box_size: Tuple[float, float, float],
 ) -> str:
     """
-    Rule-based resistance profiling.
+    Energy-based heuristic proxy for resistance-risk profiling.
 
-    Flags candidates based on predicted interactions:
-        - Good: contacts with conserved residues (Ser403, Lys406, Tyr446).
-        - Risk: contacts with mutable residues (Gly246, Asn146).
+    Flags candidates based on predicted interaction proxies:
+        - Good: energy profile suggests interaction with conserved residues
+          (Ser403, Lys406, Tyr446).
+        - Risk: energy profile suggests interaction with mutable residues
+          (Gly246, Asn146).
+
+    Note: This is an energy-based heuristic proxy.  No actual 3D pose parsing
+    or interaction fingerprinting is performed; the heuristic infers contacts
+    from binding-energy cutoffs alone.
 
     Scientific rationale: Mutations in the PBP2a binding pocket (e.g. G246E,
     N146K) have been associated with clinical resistance to ceftaroline.
@@ -1992,7 +2000,7 @@ def profile_resistance_risk(
     notes: List[str] = []
 
     if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
-        notes.append("Likely contacts catalytic Ser403 (active site). Good.")
+        notes.append("Energy profile suggests interaction near catalytic Ser403 (heuristic proxy).")
 
     if record.pb2pa_allosteric_energy is not None and record.pb2pa_allosteric_energy < -7.0:
         if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
@@ -2162,7 +2170,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
 
     df = pd.DataFrame(rows)
     df.to_csv(CONFIG.output_dir / "top_candidates.csv", index=False)
-    log.info(f"  CSV report saved: {CONFIG.output_dir / "top_candidates.csv"}")
+    log.info(f'  CSV report saved: {CONFIG.output_dir / "top_candidates.csv"}')
     return str(CONFIG.output_dir / "top_candidates.csv")
 
 
@@ -2376,7 +2384,7 @@ def print_summary(
     else:
         log.info("  Redocking RMSD:                N/A")
     log.info(f"  Redocking validated:           {validation_ok}")
-    log.info(f"  CSV report:                    {CONFIG.output_dir / "top_candidates.csv"}")
+    log.info(f'  CSV report:                    {CONFIG.output_dir / "top_candidates.csv"}')
     log.info("=" * 60)
 
 
