@@ -5,13 +5,9 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from discovery_pipeline import (
-    compute_selectivity_index,
-    _validate_mol,
-    parse_vina_energy,
-    generate_candidate_library,
-    apply_filters,
-)
+from autoantibiotic.analysis import compute_selectivity_index
+from autoantibiotic.library_gen import _validate_mol, generate_candidate_library, apply_filters
+from autoantibiotic.io_utils import parse_vina_energy
 from tests.conftest import BETA_LACTAM_SMARTS
 
 

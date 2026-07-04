@@ -14,12 +14,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from discovery_pipeline import (
-    CONFIG,
-    main,
-    generate_candidate_library,
-    apply_filters,
-)
+from autoantibiotic.config import CONFIG
+from autoantibiotic.main import main
+from autoantibiotic.library_gen import generate_candidate_library, apply_filters
 
 
 def _mock_prepare_targets(pdb_dir, work_dir, deps):
@@ -70,9 +67,9 @@ def mock_deps_and_targets():
         "vina": True, "obabel": True, "prepare_receptor": True,
         "USE_VINA": True, "USE_OBABEL": True,
     }
-    with patch("discovery_pipeline.verify_dependencies", return_value=deps):
-        with patch("discovery_pipeline.prepare_targets", side_effect=_mock_prepare_targets):
-            with patch("discovery_pipeline.run_redocking_validation", return_value=(False, None)):
+    with patch("autoantibiotic.main.verify_dependencies", return_value=deps):
+        with patch("autoantibiotic.main.prepare_targets", side_effect=_mock_prepare_targets):
+            with patch("autoantibiotic.main.run_redocking_validation", return_value=(False, None)):
                 yield
 
 

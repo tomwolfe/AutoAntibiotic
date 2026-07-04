@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from discovery_pipeline import compute_residue_centroid
+from autoantibiotic.structure_prep import compute_residue_centroid
 
 
 class TestResidueCentroidShape:

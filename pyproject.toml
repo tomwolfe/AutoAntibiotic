@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "autoantibiotic"
+version = "3.2.0"
+description = "MRSA PBP2a Inhibitor Screening Pipeline"
+requires-python = ">=3.9"
+dependencies = [
+    "rdkit-pypi>=2023.9.6",
+    "biopython>=1.83",
+    "pandas>=2.1.5",
+    "numpy>=1.26.2",
+    "matplotlib>=3.8.3",
+    "meeko>=0.5.0",
+    "tqdm>=4.66.2",
+    "sascore>=1.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["autoantibiotic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
