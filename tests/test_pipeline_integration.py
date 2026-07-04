@@ -158,6 +158,23 @@ class TestFullPipelineDryRun:
         html_path = CONFIG.output_dir / "report.html"
         assert html_path.exists(), "HTML report not found"
 
+    def test_dry_run_html_report_contains_plotly(self) -> None:
+        """HTML report should embed interactive Plotly charts."""
+        main(["--dry-run"])
+        html_path = CONFIG.output_dir / "report.html"
+        content = html_path.read_text()
+        assert "plotly" in content, "HTML report missing Plotly JavaScript"
+        assert "Plotly" in content, "HTML report missing Plotly traces"
+        assert "PCA" in content, "HTML report missing PCA diversity plot"
+
+    def test_dry_run_html_report_contains_candidate_table(self) -> None:
+        """HTML report should contain the top-candidates table."""
+        main(["--dry-run"])
+        html_path = CONFIG.output_dir / "report.html"
+        content = html_path.read_text()
+        assert "<table>" in content, "HTML report missing candidates table"
+        assert "TEST-" in content, "HTML report missing compound IDs"
+
     def test_dry_run_log_file_generated(self) -> None:
         """Pipeline log file should exist."""
         main(["--dry-run"])

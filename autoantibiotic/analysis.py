@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
-from rdkit.Chem import Descriptors
+from rdkit import Chem
+from rdkit.Chem import AllChem, Descriptors, rdDistGeom, rdMolAlign
 
 from .config import CONFIG, CompoundRecord
 from .docking import _parallel_dock
@@ -30,6 +31,85 @@ def compute_consensus_score(
     if shape_score is not None:
         return shape_score
     return None
+
+
+def compute_pharmacophore_score(
+    mol: Chem.Mol,
+    ref_mol: Chem.Mol,
+    tolerance: float = 2.0,
+) -> Optional[float]:
+    """Compute a pharmacophore feature matching score between two molecules.
+
+    Generates 3D conformations, aligns *mol* to *ref_mol* via
+    :func:`AllChem.AlignMol`, then counts H-bond donor and acceptor atoms
+    in both molecules.  A feature in *mol* is considered matched if it lies
+    within *tolerance* Å of the same feature type in *ref_mol*.
+
+    Returns the fraction of reference features matched (0.0 – 1.0),
+    or ``None`` if scoring fails (e.g. 3D embedding unsuccessful).
+    """
+    try:
+        mol_3d = Chem.RWMol(mol)
+        mol_3d = Chem.AddHs(mol_3d)
+        params = rdDistGeom.ETKDGv3()
+        params.randomSeed = CONFIG.random_seed
+        if rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
+            return None
+        AllChem.MMFFOptimizeMolecule(mol_3d)
+
+        ref_3d = Chem.RWMol(ref_mol)
+        ref_3d = Chem.AddHs(ref_3d)
+        params_ref = rdDistGeom.ETKDGv3()
+        params_ref.randomSeed = CONFIG.random_seed
+        if rdDistGeom.EmbedMolecule(ref_3d, params_ref) < 0:
+            return None
+        AllChem.MMFFOptimizeMolecule(ref_3d)
+
+        o3a = rdMolAlign.GetO3A(mol_3d, ref_3d)
+        o3a.Align()
+
+        def _is_hbd(atom: Chem.Atom) -> bool:
+            if atom.GetAtomicNum() not in (7, 8):
+                return False
+            return (
+                atom.GetTotalNumHs() > 0
+                or any(n.GetAtomicNum() == 1 for n in atom.GetNeighbors())
+            )
+
+        def _is_hba(atom: Chem.Atom) -> bool:
+            return atom.GetAtomicNum() in (7, 8)
+
+        conf_mol = mol_3d.GetConformer()
+        query_donors = [conf_mol.GetAtomPosition(i) for i, a in enumerate(mol_3d.GetAtoms()) if _is_hbd(a)]
+        query_acceptors = [conf_mol.GetAtomPosition(i) for i, a in enumerate(mol_3d.GetAtoms()) if _is_hba(a)]
+
+        conf_ref = ref_3d.GetConformer()
+        ref_donors = [conf_ref.GetAtomPosition(i) for i, a in enumerate(ref_3d.GetAtoms()) if _is_hbd(a)]
+        ref_acceptors = [conf_ref.GetAtomPosition(i) for i, a in enumerate(ref_3d.GetAtoms()) if _is_hba(a)]
+
+        def _count_matches(
+            ref_positions: List[Chem.Point3D],
+            query_positions: List[Chem.Point3D],
+        ) -> int:
+            matched = 0
+            for rp in ref_positions:
+                for qp in query_positions:
+                    if rp.Distance(qp) <= tolerance:
+                        matched += 1
+                        break
+            return matched
+
+        donor_matches = _count_matches(ref_donors, query_donors)
+        acceptor_matches = _count_matches(ref_acceptors, query_acceptors)
+
+        total_ref = len(ref_donors) + len(ref_acceptors)
+        if total_ref == 0:
+            return 1.0
+
+        return (donor_matches + acceptor_matches) / total_ref
+
+    except Exception:
+        return None
 
 
 def compute_selectivity_index(

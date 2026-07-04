@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from rdkit import Chem
@@ -9,6 +9,37 @@ from rdkit.Chem import AllChem
 
 from .config import CONFIG
 from .io_utils import download_with_retry, log, run_tool
+
+
+def calculate_adaptive_box_size(
+    coords: np.ndarray,
+    padding: float = 5.0,
+    minimum: float = 10.0,
+) -> Tuple[float, float, float]:
+    """Compute adaptive grid box dimensions from atomic coordinates.
+
+    For each axis the box size is ``(max - min) + 2 * padding``, clamped
+    to at least *minimum* Å.
+
+    Args:
+        coords: (N, 3) array of atomic coordinates.
+        padding: Extra space (Å) added on each side.
+        minimum: Minimum allowed box dimension (Å).
+
+    Returns:
+        Tuple of (size_x, size_y, size_z).
+    """
+    if coords.ndim != 2 or coords.shape[1] != 3:
+        raise ValueError(f"Expected (N, 3) array, got {coords.shape}")
+
+    if coords.shape[0] < 2:
+        log.warning("  Fewer than 2 coordinates provided to adaptive box sizing. Using default minimum.")
+        return (minimum, minimum, minimum)
+
+    lo = coords.min(axis=0)
+    hi = coords.max(axis=0)
+    sizes = np.maximum(hi - lo + 2.0 * padding, minimum)
+    return (float(sizes[0]), float(sizes[1]), float(sizes[2]))
 
 
 def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
@@ -150,8 +181,11 @@ def clean_pdb_structure(
         raise
 
 
-def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray:
-    """Compute the geometric centroid of Cα atoms for the given list of residue identifiers."""
+def _get_residue_ca_coords(pdb_path: str, resid_list: List[str]) -> np.ndarray:
+    """Extract Cα atom coordinates for the given residue identifiers.
+
+    Returns an (N, 3) array of Cα coordinates.
+    """
     from Bio.PDB import PDBParser
 
     parser = PDBParser(QUIET=True)
@@ -191,8 +225,13 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
         )
         raise ValueError(f"No matching residues found in {pdb_path}")
 
-    centroid = np.mean(ca_coords, axis=0)
-    return centroid
+    return np.asarray(ca_coords)
+
+
+def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray:
+    """Compute the geometric centroid of Cα atoms for the given list of residue identifiers."""
+    ca_coords = _get_residue_ca_coords(pdb_path, resid_list)
+    return ca_coords.mean(axis=0)
 
 
 def prepare_targets(
@@ -231,6 +270,23 @@ def prepare_targets(
     log.info("  Computing active site centroid (SER403)…")
     active_center = compute_residue_centroid(cleaned_pdb, CONFIG.active_site_residues)
     log.info(f"    Active site center: {active_center}")
+
+    allosteric_coords = _get_residue_ca_coords(cleaned_pdb, CONFIG.allosteric_residues)
+    active_coords = _get_residue_ca_coords(cleaned_pdb, CONFIG.active_site_residues)
+
+    for site_name, coords, box in [
+        ("allosteric", allosteric_coords, CONFIG.allosteric_box_size),
+        ("active", active_coords, CONFIG.active_box_size),
+    ]:
+        spread = coords.max(axis=0) - coords.min(axis=0)
+        for dim, label in enumerate("XYZ"):
+            required = spread[dim] + 4.0
+            if box[dim] < required:
+                log.warning(
+                    f"  ⚠  {site_name.capitalize()} site box size ({box[dim]:.1f} Å "
+                    f"along {label}) may be smaller than residue spread "
+                    f"({spread[dim]:.1f} Å). Consider increasing to ≥ {required:.1f} Å."
+                )
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,

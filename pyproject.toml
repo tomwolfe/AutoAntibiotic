@@ -17,6 +17,8 @@ dependencies = [
     "tqdm>=4.66.2",
     "sascore>=1.0.0",
     "pyyaml>=6.0",
+    "plotly>=5.18.0",
+    "scikit-learn>=1.3.0",
 ]
 
 [tool.setuptools.packages.find]

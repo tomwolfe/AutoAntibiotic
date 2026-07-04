@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+import plotly.io as pio
 from rdkit import Chem
+from rdkit.Chem import AllChem, Descriptors
 from rdkit.Chem.Draw import rdMolDraw2D
+from sklearn.decomposition import PCA
 
 from .config import CONFIG, CompoundRecord
 from .io_utils import ensure_output_dir, log
@@ -89,61 +90,211 @@ def generate_images(top3: List[CompoundRecord]) -> List[str]:
     return paths
 
 
+def _make_scatter_plot(top10: List[CompoundRecord]) -> str:
+    """Create an interactive scatter plot of Binding Energy vs Selectivity."""
+    scatter_data = [
+        (r.pb2pa_allosteric_energy, r.selectivity_index, r.compound_id, r.qed_score)
+        for r in top10
+        if r.pb2pa_allosteric_energy is not None and r.selectivity_index is not None
+    ]
+    if not scatter_data:
+        return ""
+
+    energies = [d[0] for d in scatter_data]
+    sis = [d[1] for d in scatter_data]
+    cids = [d[2] for d in scatter_data]
+    qeds = [d[3] for d in scatter_data]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=energies,
+        y=sis,
+        mode="markers+text",
+        text=cids,
+        textposition="top center",
+        textfont=dict(size=9),
+        marker=dict(
+            size=10,
+            color=qeds,
+            colorscale="Viridis",
+            showscale=True,
+            colorbar=dict(title="QED"),
+            line=dict(width=1, color="black"),
+        ),
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "Energy: %{x:.2f} kcal/mol<br>"
+            "SI: %{y:.2f}<br>"
+            "QED: %{customdata:.3f}"
+            "<extra></extra>"
+        ),
+        customdata=np.array(qeds),
+    ))
+
+    fig.add_hline(
+        y=CONFIG.selectivity_index_threshold,
+        line_dash="dash",
+        line_color="red",
+        opacity=0.6,
+        annotation_text=f"SI threshold = {CONFIG.selectivity_index_threshold}",
+        annotation_position="right",
+    )
+
+    fig.update_layout(
+        title="Top Candidates: Binding Energy vs Selectivity",
+        xaxis_title="Allosteric Binding Energy (kcal/mol)",
+        yaxis_title="Selectivity Index",
+        template="plotly_white",
+        height=500,
+        hovermode="closest",
+    )
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
+
+    return pio.to_html(fig, include_plotlyjs=False, full_html=False)
+
+
+def _make_qed_histogram(top50: List[CompoundRecord]) -> str:
+    """Create an interactive histogram of QED scores."""
+    qeds = [r.qed_score for r in top50 if r.qed_score > 0]
+    if not qeds:
+        return ""
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Histogram(
+        x=qeds,
+        nbinsx=20,
+        marker=dict(
+            color="mediumseagreen",
+            line=dict(color="black", width=1),
+        ),
+        hovertemplate="QED: %{x:.3f}<br>Count: %{y}<extra></extra>",
+    ))
+
+    fig.add_vline(
+        x=CONFIG.qed_threshold,
+        line_dash="dash",
+        line_color="red",
+        opacity=0.6,
+        annotation_text=f"QED cutoff = {CONFIG.qed_threshold}",
+        annotation_position="top",
+    )
+
+    fig.update_layout(
+        title="QED Distribution (Top 50 Candidates)",
+        xaxis_title="QED Score",
+        yaxis_title="Frequency",
+        template="plotly_white",
+        height=400,
+        bargap=0.1,
+    )
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
+
+    return pio.to_html(fig, include_plotlyjs=False, full_html=False)
+
+
+def _make_pca_plot(top50: List[CompoundRecord]) -> str:
+    """Create a PCA projection of Morgan fingerprints coloured by QED score.
+
+    Uses :class:`sklearn.decomposition.PCA` to reduce 2048-bit Morgan
+    fingerprints to two principal components for visualising chemical
+    diversity.
+    """
+    valid: List[CompoundRecord] = []
+    fps: List[np.ndarray] = []
+
+    for r in top50:
+        mol = r.mol
+        if mol is None:
+            mol = Chem.MolFromSmiles(r.smiles)
+            if mol is None:
+                continue
+            r.mol = mol
+        fp = AllChem.GetMorganFingerprintAsBitVect(
+            mol, CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+        )
+        fps.append(np.array(fp, dtype=np.float64))
+        valid.append(r)
+
+    if len(valid) < 3:
+        log.warning(f"  PCA plot requires ≥3 compounds, got {len(valid)}. Skipping.")
+        return ""
+
+    X = np.vstack(fps)
+    pca = PCA(n_components=2, random_state=CONFIG.random_seed)
+    coords = pca.fit_transform(X)
+
+    var_ratio = pca.explained_variance_ratio_
+    cids = [r.compound_id for r in valid]
+    qeds = [r.qed_score for r in valid]
+    energies = [
+        r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None
+        else (r.shape_score or 0.0)
+        for r in valid
+    ]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=coords[:, 0],
+        y=coords[:, 1],
+        mode="markers",
+        text=cids,
+        marker=dict(
+            size=8,
+            color=qeds,
+            colorscale="Viridis",
+            showscale=True,
+            colorbar=dict(title="QED"),
+            line=dict(width=0.5, color="black"),
+        ),
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "PC1: %{x:.2f}<br>"
+            "PC2: %{y:.2f}<br>"
+            "QED: %{marker.color:.3f}<br>"
+            "Energy: %{customdata:.2f}"
+            "<extra></extra>"
+        ),
+        customdata=np.array(energies),
+    ))
+
+    fig.update_layout(
+        title="Chemical Diversity (PCA of Morgan Fingerprints, Top 50)",
+        xaxis_title=f"PC1 ({var_ratio[0] * 100:.1f}% variance)",
+        yaxis_title=f"PC2 ({var_ratio[1] * 100:.1f}% variance)",
+        template="plotly_white",
+        height=500,
+        hovermode="closest",
+    )
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
+
+    return pio.to_html(fig, include_plotlyjs=False, full_html=False)
+
+
 def generate_html_report(
     top10: List[CompoundRecord],
     top50: List[CompoundRecord],
     output_dir: Path,
 ) -> Tuple[str, str, str]:
-    """Phase 5.3 — Generate an HTML report with embedded matplotlib figures.
+    """Phase 5.3 — Generate an HTML report with interactive Plotly charts.
 
-    Creates scatter plot, QED histogram, and HTML page.
-    Returns (html_path, scatter_path, hist_path).
+    Creates scatter plot (Energy vs Selectivity), QED histogram, and
+    PCA diversity plot as interactive Plotly charts embedded directly in
+    the HTML page.
+
+    Returns (html_path, scatter_path, hist_path).  The *scatter_path* and
+    *hist_path* are empty strings since charts are now embedded inline.
     """
     log.info("─── Phase 5: HTML Report Generation ───")
 
-    scatter_data = [
-        (r.pb2pa_allosteric_energy, r.selectivity_index, r.compound_id)
-        for r in top10
-        if r.pb2pa_allosteric_energy is not None and r.selectivity_index is not None
-    ]
-    if scatter_data:
-        fig, ax = plt.subplots(figsize=(9, 6))
-        energies = [d[0] for d in scatter_data]
-        sis = [d[1] for d in scatter_data]
-        cids = [d[2] for d in scatter_data]
-        ax.scatter(energies, sis, c="steelblue", s=60, edgecolors="black")
-        for x, y, cid in zip(energies, sis, cids):
-            ax.annotate(cid, (x, y), textcoords="offset points", xytext=(5, 5), fontsize=7)
-        ax.axhline(y=CONFIG.selectivity_index_threshold, color="red", linestyle="--", alpha=0.6,
-                   label=f"SI threshold = {CONFIG.selectivity_index_threshold}")
-        ax.set_xlabel("Allosteric Binding Energy (kcal/mol)", fontsize=12)
-        ax.set_ylabel("Selectivity Index", fontsize=12)
-        ax.set_title("Top Candidates: Binding Energy vs Selectivity", fontsize=14)
-        ax.legend()
-        ax.grid(alpha=0.3)
-        scatter_path = os.path.join(str(output_dir), CONFIG.scatter_plot_name)
-        plt.savefig(scatter_path, dpi=150, bbox_inches="tight")
-        plt.close()
-        log.info(f"  Scatter plot saved: {scatter_path}")
-    else:
-        scatter_path = ""
-
-    qeds = [r.qed_score for r in top50 if r.qed_score > 0]
-    if qeds:
-        fig, ax = plt.subplots(figsize=(9, 6))
-        ax.hist(qeds, bins=20, edgecolor="black", color="mediumseagreen", alpha=0.8)
-        ax.axvline(x=CONFIG.qed_threshold, color="red", linestyle="--", alpha=0.6, label=f"QED cutoff = {CONFIG.qed_threshold}")
-        ax.set_xlabel("QED Score", fontsize=12)
-        ax.set_ylabel("Frequency", fontsize=12)
-        ax.set_title("QED Distribution (Top 50 Candidates)", fontsize=14)
-        ax.legend()
-        ax.grid(alpha=0.3)
-        hist_path = os.path.join(str(output_dir), CONFIG.qed_histogram_name)
-        plt.savefig(hist_path, dpi=150, bbox_inches="tight")
-        plt.close()
-        log.info(f"  QED histogram saved: {hist_path}")
-    else:
-        hist_path = ""
+    scatter_div = _make_scatter_plot(top10)
+    hist_div = _make_qed_histogram(top50)
+    pca_div = _make_pca_plot(top50)
 
     table_rows = ""
     for i, rec in enumerate(top10):
@@ -164,24 +315,21 @@ def generate_html_report(
             f"</tr>\n"
         )
 
-    scatter_img = ""
-    if scatter_path:
-        scatter_img = (
-            '<h2>Binding Energy vs Selectivity</h2>\n'
-            f'<img src="energy_vs_selectivity.png" alt="Energy vs Selectivity" style="max-width:800px;">\n'
-        )
-    hist_img = ""
-    if hist_path:
-        hist_img = (
-            '<h2>QED Score Distribution</h2>\n'
-            f'<img src="qed_histogram.png" alt="QED Histogram" style="max-width:800px;">\n'
-        )
+    plotly_js = (
+        '<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>'
+    )
+
+    def _section(title: str, content: str) -> str:
+        if not content:
+            return ""
+        return f"<h2>{title}</h2>\n{content}\n"
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>AutoAntibiotic Discovery Report</title>
+{plotly_js}
 <style>
 body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; }}
 h1 {{ color: #1a5276; }}
@@ -190,7 +338,7 @@ table {{ border-collapse: collapse; width: 100%; margin-top: 10px; }}
 th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
 th {{ background-color: #2e86c1; color: white; }}
 tr:nth-child(even) {{ background-color: #f2f2f2; }}
-img {{ border: 1px solid #ddd; border-radius: 4px; padding: 4px; }}
+.plotly-graph-div {{ margin: 10px 0; }}
 .footer {{ margin-top: 30px; color: #777; font-size: 0.9em; }}
 </style>
 </head>
@@ -199,9 +347,11 @@ img {{ border: 1px solid #ddd; border-radius: 4px; padding: 4px; }}
 <p>Generated by AutoAntibiotic v3.2 | MRSA PBP2a Inhibitor Screening</p>
 <hr>
 
-{scatter_img}
+{_section("Binding Energy vs Selectivity", scatter_div)}
 
-{hist_img}
+{_section("QED Score Distribution", hist_div)}
+
+{_section("Chemical Diversity (PCA of Morgan Fingerprints)", pca_div)}
 
 <h2>Top {len(top10)} Candidates</h2>
 <table>
@@ -229,7 +379,7 @@ img {{ border: 1px solid #ddd; border-radius: 4px; padding: 4px; }}
         f.write(html)
     log.info(f"  HTML report saved: {html_path}")
 
-    return html_path, scatter_path, hist_path
+    return html_path, "", ""
 
 
 def print_summary(

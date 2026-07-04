@@ -532,7 +532,12 @@ def _compute_shape_fallback_score(
     ref_mol: Chem.Mol,
     seed: int = CONFIG.random_seed,
 ) -> Optional[float]:
-    """Fallback scoring via RDKit Shape Protrude Distance."""
+    """Fallback scoring via RDKit Shape Protrude Distance and Pharmacophore matching.
+
+    Combines shape and pharmacophore scores with a 0.5 / 0.5 weight when
+    both are available.  Falls back to shape score alone if the
+    pharmacophore calculation fails.
+    """
     try:
         mol_3d = Chem.RWMol(mol)
         mol_3d = Chem.AddHs(mol_3d)
@@ -560,8 +565,15 @@ def _compute_shape_fallback_score(
             except Exception:
                 return None
 
-        normalised = min(protrude / CONFIG.shape_score_norm_factor, 10.0) if protrude > 0 else 0.0
-        return normalised
+        shape_score = min(protrude / CONFIG.shape_score_norm_factor, 10.0) if protrude > 0 else 0.0
+
+        from .analysis import compute_pharmacophore_score
+
+        pharm_score = compute_pharmacophore_score(mol, ref_mol)
+        if pharm_score is not None:
+            return 0.5 * shape_score + 0.5 * (1.0 - pharm_score)
+
+        return shape_score
 
     except Exception:
         return None

@@ -46,6 +46,8 @@ RUN conda install -c conda-forge \
     matplotlib==3.8.3 \
     biopython==1.83 \
     pyyaml \
+    plotly>=5.18.0 \
+    scikit-learn>=1.3.0 \
     && conda clean --all -f -y
 
 # ── Python packages (pip) ───────────────────────────────────────────

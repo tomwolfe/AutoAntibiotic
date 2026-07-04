@@ -5,7 +5,7 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from autoantibiotic.analysis import compute_selectivity_index
+from autoantibiotic.analysis import compute_pharmacophore_score, compute_selectivity_index
 from autoantibiotic.library_gen import _validate_mol, generate_candidate_library, apply_filters
 from autoantibiotic.io_utils import parse_vina_energy
 from tests.conftest import BETA_LACTAM_SMARTS
@@ -165,3 +165,49 @@ class TestLibraryLipinskiCompliance:
             assert mol is not None
             hba = Descriptors.NumHAcceptors(mol)
             assert hba <= 10, f"{rec.compound_id} HBA {hba} > 10"
+
+
+class TestPharmacophoreScore:
+    """``compute_pharmacophore_score`` returns sensible values."""
+
+    def test_identical_molecules_score_near_one(self) -> None:
+        mol = Chem.MolFromSmiles("c1ccccc1O")
+        assert mol is not None
+        score = compute_pharmacophore_score(mol, mol)
+        assert score is not None
+        assert 0.0 <= score <= 1.0
+        # identical molecules should score near 1.0
+        assert score > 0.8
+
+    def test_very_different_molecules_score_low(self) -> None:
+        phenol = Chem.MolFromSmiles("c1ccccc1O")
+        decane = Chem.MolFromSmiles("CCCCCCCCCC")
+        assert phenol is not None and decane is not None
+        score = compute_pharmacophore_score(phenol, decane)
+        # decane has no N/O atoms → no features → should return 1.0
+        assert score is not None
+        assert score == 1.0
+
+    def test_ethanol_and_methanol_similar(self) -> None:
+        ethanol = Chem.MolFromSmiles("CCO")
+        methanol = Chem.MolFromSmiles("CO")
+        assert ethanol is not None and methanol is not None
+        score = compute_pharmacophore_score(ethanol, methanol)
+        assert score is not None
+        assert 0.0 <= score <= 1.0
+
+    def test_returns_none_on_invalid_mol(self) -> None:
+        mol = Chem.MolFromSmiles("c1ccccc1O")
+        assert mol is not None
+        # pass a string that isn't a Mol to force an error
+        score = compute_pharmacophore_score(mol, "not_a_mol")  # type: ignore
+        assert score is None
+
+    def test_hbd_and_hba_feature_types(self) -> None:
+        """Molecules with shared donors/acceptors produce intermediate scores."""
+        ethanol = Chem.MolFromSmiles("CCO")
+        acetic_acid = Chem.MolFromSmiles("CC(=O)O")
+        assert ethanol is not None and acetic_acid is not None
+        score = compute_pharmacophore_score(ethanol, acetic_acid)
+        assert score is not None
+        assert 0.0 <= score <= 1.0
