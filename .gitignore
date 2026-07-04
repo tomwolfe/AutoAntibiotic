@@ -1,0 +1,26 @@
+# Pipeline outputs (PDBs, PDBQTs, CSVs, PNGs, logs, working intermediates)
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.so
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# macOS
+.DS_Store
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
