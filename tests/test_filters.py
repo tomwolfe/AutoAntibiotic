@@ -1,0 +1,109 @@
+"""Unit tests for AutoAntibiotic filter and validation logic."""
+
+import numpy as np
+import pytest
+from rdkit import Chem
+from rdkit.Chem import AllChem
+
+from discovery_pipeline import (
+    compute_selectivity_index,
+    _validate_mol,
+    parse_vina_energy,
+)
+from tests.conftest import BETA_LACTAM_SMARTS
+
+
+class TestSMILESValidation:
+    """``_validate_mol`` ensures SMILES parse and sanitise correctly."""
+
+    def test_valid_smiles(self) -> None:
+        mol = _validate_mol("c1ccccc1O")
+        assert mol is not None
+        assert mol.GetNumAtoms() > 0
+
+    def test_invalid_smiles_returns_none(self) -> None:
+        assert _validate_mol("this_is_not_a_smiles") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        result = _validate_mol("")
+        assert result is None or result.GetNumAtoms() == 0
+
+
+class TestBetaLactamFilter:
+    """Beta-lactam SMARTS pattern correctly identifies reactive warheads."""
+
+    @pytest.fixture
+    def lactam_pattern(self) -> Chem.Mol:
+        pat = Chem.MolFromSmarts(BETA_LACTAM_SMARTS)
+        assert pat is not None, "Beta-lactam SMARTS should compile"
+        return pat
+
+    def test_beta_lactam_matches(self, beta_lactam_mol: Chem.Mol,
+                                 lactam_pattern: Chem.Mol) -> None:
+        assert beta_lactam_mol.HasSubstructMatch(lactam_pattern)
+
+    def test_non_beta_lactam_does_not_match(self, non_beta_lactam_mol: Chem.Mol,
+                                            lactam_pattern: Chem.Mol) -> None:
+        assert not non_beta_lactam_mol.HasSubstructMatch(lactam_pattern)
+
+
+class TestSelectivityIndex:
+    """``compute_selectivity_index`` handles edge cases correctly."""
+
+    def test_normal_case(self) -> None:
+        si = compute_selectivity_index(-8.0, -4.0)
+        assert si == pytest.approx(2.0)
+
+    def test_division_by_zero_safe(self) -> None:
+        si = compute_selectivity_index(-8.0, 0.0)
+        assert si == 0.0
+
+    def test_both_positive_returns_zero(self) -> None:
+        si = compute_selectivity_index(1.0, 2.0)
+        assert si == 0.0
+
+    def test_pb2pa_positive_returns_zero(self) -> None:
+        si = compute_selectivity_index(0.5, -4.0)
+        assert si == 0.0
+
+    def test_human_positive_returns_zero(self) -> None:
+        si = compute_selectivity_index(-8.0, 0.5)
+        assert si == 0.0
+
+    def test_very_small_human_energy(self) -> None:
+        si = compute_selectivity_index(-8.0, -1e-8)
+        assert si == 0.0
+
+    def test_negative_energies(self) -> None:
+        si = compute_selectivity_index(-10.0, -5.0)
+        assert si == pytest.approx(2.0)
+
+    def test_zero_inputs(self) -> None:
+        si = compute_selectivity_index(0.0, 0.0)
+        assert si == 0.0
+
+
+class TestVinaEnergyParsing:
+    """``parse_vina_energy`` extracts binding energies from Vina output."""
+
+    def test_stdout_mode_line(self) -> None:
+        stdout = (
+            "mode |   affinity | dist from best mode\n"
+            "     | (kcal/mol) | rmsd l.b.| rmsd u.b.\n"
+            "-----+------------+----------+----------\n"
+            "   1       -8.123       0.000      0.000\n"
+            "   2       -7.500       1.234      2.345\n"
+        )
+        energy = parse_vina_energy(stdout)
+        assert energy == pytest.approx(-8.123)
+
+    def test_affinity_fallback(self) -> None:
+        stdout = "Affinity: -9.456 (kcal/mol)"
+        energy = parse_vina_energy(stdout)
+        assert energy == pytest.approx(-9.456)
+
+    def test_no_energy_returns_none(self) -> None:
+        assert parse_vina_energy("No docking results") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert parse_vina_energy("") is None

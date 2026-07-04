@@ -30,15 +30,18 @@ Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina | meeko
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import logging
 import multiprocessing as mp
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -106,7 +109,7 @@ class PipelineConfig:
         "Methicillin":  "CC1=C(C(=C(C(=C1O)OC)OC)OC)C(=O)NC2C3C(C(=O)N3C2=O)SC4(C)C",
         "Vancomycin":   "CC1C(C(CC(O1)OC2C(C(C(OC2OC3=C4C=C5C(=C4OC6=C(C(=CC(=C6)C(C(=O)NC(C(=O)NC5C(=O)O)CC7=CC=C(C=C7)O)NC(=O)C8C(O)C(=C(C=C8)Cl)O)O)O)CO)O)O)O)NC(=O)C9C(O)C(=C(C=C9)Cl)O)(CC(=O)N)O",
         "Ceftaroline":  "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
-        "Meropenem":    "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
+        "Meropenem":    "CC1C2C(C(=O)N2C(=C1SC3CC(NCC3)C(=O)O)C(=O)O)(C)O",
         "Oxacillin":    "CC1=C(C(=NO1)C2=CC=CC=C2)C(=O)NC3C4C(C(=O)N4C3=O)SC5(C)C",
     })
     beta_lactam_smarts: str = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
@@ -126,6 +129,19 @@ class PipelineConfig:
     brics_min_fragment_size: int = 8
     output_dir: Path = Path("output")
     top_n: int = 10
+    qed_threshold: float = 0.6
+    lipinski_mw_max: float = 500.0
+    lipinski_logp_max: float = 5.0
+    lipinski_hbd_max: int = 5
+    lipinski_hba_max: int = 10
+    redocking_rmsd_cutoff: float = 2.0
+    shape_score_norm_factor: float = 0.05
+    diversity_pool_multiplier: int = 5
+    morgan_radius: int = 2
+    morgan_nbits: int = 2048
+    pdb_retry_max_attempts: int = 3
+    pdb_retry_base_delay: float = 2.0
+    obabel_timeout_s: int = 60
     natural_product_scaffolds: List[str] = field(default_factory=lambda: [
         "O=c1c(-c2ccc(O)c(O)c2)coc2cc(O)cc(O)c12",
         "Oc1ccc(C=Cc2ccc(O)cc2)cc1",
@@ -213,11 +229,19 @@ class PipelineConfig:
     ])
     control_smiles: Dict[str, str] = field(default_factory=lambda: {
         "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
-        "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
+        "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NCC3)C(=O)O)C(=O)O)(C)O",
     })
     conserved_residues: set = field(default_factory=lambda: {"SER403", "LYS406", "TYR446"})
     mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
     dry_run: bool = False
+
+    @property
+    def work_dir(self) -> Path:
+        return self.output_dir / "workdir"
+
+    @property
+    def pdb_dir(self) -> Path:
+        return self.output_dir / "pdb"
 
 
 CONFIG = PipelineConfig()
@@ -249,6 +273,137 @@ def install_missing_package(package: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  EXTERNAL TOOL EXECUTION WRAPPER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class ToolResult:
+    """Result from an external tool execution."""
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+
+def run_tool(
+    cmd: List[str],
+    timeout: int = 120,
+    check: bool = True,
+) -> ToolResult:
+    """Execute an external binary with timeout and exit-code checking.
+
+    Args:
+        cmd: Command and arguments.
+        timeout: Maximum wall-clock seconds.
+        check: If True, a non-zero exit code raises ``RuntimeError``.
+
+    Returns:
+        ``ToolResult`` with parsed stdout/stderr.
+
+    Raises:
+        RuntimeError: If *check* is True and the process exits non-zero.
+    """
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+        )
+        result = ToolResult(
+            returncode=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
+        if check and proc.returncode != 0:
+            raise RuntimeError(
+                f"Tool {' '.join(cmd)} failed (code {proc.returncode}):\n"
+                f"  stderr: {proc.stderr.strip()}"
+            )
+        return result
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"Tool {' '.join(cmd)} timed out after {timeout}s"
+        )
+
+
+def parse_vina_energy(vina_stdout: str) -> Optional[float]:
+    """Extract the best (lowest) binding energy from Vina stdout.
+
+    Uses a robust regex: looks for the first line starting with a mode
+    number followed by whitespace and a float.
+    """
+    for line in vina_stdout.splitlines():
+        stripped = line.strip()
+        m = re.match(r"^\s*1\s+(-?\d+\.?\d*)", stripped)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    # Fallback: try stderr-style "Affinity" line
+    for line in vina_stdout.splitlines():
+        m = re.search(r"Affinity:\s*(-?\d+\.?\d*)\s*\(?kcal/mol\)?", line)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
+
+
+def download_with_retry(
+    pdb_id: str,
+    out_dir: str,
+    max_attempts: int = 3,
+    base_delay: float = 2.0,
+) -> str:
+    """Download a PDB structure with exponential-backoff retry.
+
+    Args:
+        pdb_id: 4-character PDB identifier.
+        out_dir: Local output directory.
+        max_attempts: Number of download attempts (default 3).
+        base_delay: Initial delay in seconds (doubles each retry).
+
+    Returns:
+        Local file path to the downloaded PDB.
+
+    Raises:
+        RuntimeError: If all attempts fail.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    target_path = os.path.join(out_dir, f"{pdb_id}.pdb")
+
+    if os.path.exists(target_path):
+        return target_path
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            log.info(f"  Downloading {pdb_id} (attempt {attempt}/{max_attempts})…")
+            pdbl = PDBList()
+            pdbl.retrieve_pdb_file(
+                pdb_id, pdir=out_dir, file_format="pdb",
+            )
+            raw = os.path.join(out_dir, f"pdb{pdb_id.lower()}.ent")
+            if os.path.exists(raw):
+                os.rename(raw, target_path)
+            if os.path.exists(target_path):
+                log.info(f"  ✓  Downloaded {pdb_id} → {target_path}")
+                return target_path
+        except Exception as exc:
+            last_exc = exc
+            log.warning(f"  ✗  Attempt {attempt} failed: {exc}")
+            if attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                log.info(f"  Retrying in {delay:.0f}s…")
+                time.sleep(delay)
+
+    raise RuntimeError(
+        f"Failed to download {pdb_id} after {max_attempts} attempts. "
+        f"Last error: {last_exc}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  CACHE (simple JSON key-value store for docking results)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -257,7 +412,7 @@ def load_cache() -> Dict[str, float]:
 
     Returns an empty dict if no cache file exists or if it is corrupt.
     """
-    if CONFIG.output_dir / "cache.json".exists():
+    if (CONFIG.output_dir / "cache.json").exists():
         try:
             with open(CONFIG.output_dir / "cache.json") as f:
                 return json.load(f)
@@ -347,13 +502,13 @@ def verify_dependencies() -> Dict[str, Any]:
     # ── Vina binary ──
     for bin_name in ("vina", "obabel", "prepare_receptor"):
         try:
-            subprocess.run(
+            run_tool(
                 [bin_name, "--help" if bin_name == "prepare_receptor" else "--version"],
-                capture_output=True, timeout=10,
+                timeout=10,
             )
             status[bin_name] = True
             log.info(f"  ✓  {bin_name} binary found on PATH.")
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        except (RuntimeError, OSError):
             status[bin_name] = False
             log.warning(f"  ⚠  '{bin_name}' not found.")
             log.warning(_INSTALL_GUIDE.get(bin_name, ""))
@@ -425,15 +580,12 @@ def _extract_native_ligand_from_holo(
             log.warning("  ⚠  RDKit could not read ligand PDB, trying obabel…")
             smi_file = output_ligand_smi
             try:
-                subprocess.run(
-                    ["obabel", lig_pdb, "-O", smi_file],
-                    capture_output=True, timeout=30,
-                )
+                run_tool(["obabel", lig_pdb, "-O", smi_file], timeout=CONFIG.obabel_timeout_s)
                 with open(smi_file) as f:
                     smi = f.readline().strip()
                 if smi:
                     return smi
-            except Exception:
+            except (RuntimeError, OSError):
                 pass
             return None
 
@@ -589,20 +741,17 @@ def run_redocking_validation(
     ]
 
     try:
-        subprocess.run(vina_cmd, capture_output=True, timeout=CONFIG.vina_timeout_s)
-    except subprocess.TimeoutExpired:
-        log.warning("  ⚠  Vina redocking timed out (>120s).")
-        return False, None
-    except FileNotFoundError:
-        log.warning("  ⚠  Vina binary not found during redocking.")
+        run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s)
+    except RuntimeError as exc:
+        log.warning(f"  ⚠  Vina redocking failed: {exc}")
         return False, None
 
     try:
-        subprocess.run(
+        run_tool(
             ["obabel", docked_pdbqt, "-O", docked_pdb, "--gen3d"],
-            capture_output=True, timeout=30,
+            timeout=CONFIG.obabel_timeout_s,
         )
-    except Exception:
+    except RuntimeError:
         log.warning("  Could not convert docked PDBQT to PDB. Trying RDKit PDBQT reader.")
         mol = Chem.MolFromPDBQT(docked_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
         if mol is None:
@@ -618,16 +767,17 @@ def run_redocking_validation(
         return False, None
 
     log.info(f"  Redocking RMSD = {rmsd:.3f} Å")
-    if rmsd > 2.0:
+    cutoff = CONFIG.redocking_rmsd_cutoff
+    if rmsd > cutoff:
         log.warning(
-            f"  ⚠  Redocking RMSD ({rmsd:.3f} Å) exceeds 2.0 Å threshold. "
+            f"  ⚠  Redocking RMSD ({rmsd:.3f} Å) exceeds {cutoff} Å threshold. "
             "The docking protocol may not accurately reproduce known binding modes. "
             "Proceeding with pipeline — interpret results with caution."
         )
     else:
-        log.info(f"  ✓  Redocking validated (RMSD = {rmsd:.3f} Å ≤ 2.0 Å).")
+        log.info(f"  ✓  Redocking validated (RMSD = {rmsd:.3f} Å ≤ {cutoff} Å).")
 
-    return (rmsd <= 2.0 if rmsd is not None else False), rmsd
+    return (rmsd <= cutoff if rmsd is not None else False), rmsd
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -637,30 +787,14 @@ def run_redocking_validation(
 def fetch_structure(pdb_id: str, out_dir: str) -> str:
     """
     Download a PDB structure by *pdb_id* (if not already present) into *out_dir*.
+    Uses a 3-pass retry with exponential backoff.
     Returns the local file path.
     """
-    os.makedirs(out_dir, exist_ok=True)
-    target_path = os.path.join(out_dir, f"{pdb_id}.pdb")
-
-    if os.path.exists(target_path):
-        log.info(f"  Structure {pdb_id} already local: {target_path}")
-        return target_path
-
-    log.info(f"  Downloading {pdb_id} from PDB…")
-    try:
-        pdbl = PDBList()
-        pdbl.retrieve_pdb_file(
-            pdb_id, pdir=out_dir, file_format="pdb",
-        )
-        raw = os.path.join(out_dir, f"pdb{pdb_id.lower()}.ent")
-        if os.path.exists(raw):
-            os.rename(raw, target_path)
-        log.info(f"  ✓  Downloaded {pdb_id} → {target_path}")
-    except Exception as exc:
-        log.error(f"  ✗  Failed to download {pdb_id}: {exc}")
-        raise
-
-    return target_path
+    return download_with_retry(
+        pdb_id, out_dir,
+        max_attempts=CONFIG.pdb_retry_max_attempts,
+        base_delay=CONFIG.pdb_retry_base_delay,
+    )
 
 
 def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
@@ -784,27 +918,27 @@ def clean_pdb_structure(
         # Priority 1: prepare_receptor (ADFR)
         if deps.get("prepare_receptor"):
             try:
-                subprocess.run(
+                run_tool(
                     ["prepare_receptor", "-r", out_path, "-o", pdbqt_path],
-                    capture_output=True, timeout=60,
+                    timeout=60,
                 )
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
                     converted = True
                     log.info("  PDBQT via prepare_receptor")
-            except (FileNotFoundError, subprocess.TimeoutExpired):
+            except RuntimeError:
                 pass
 
         # Priority 2: obabel
         if not converted and deps.get("obabel"):
             try:
-                subprocess.run(
+                run_tool(
                     ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
-                    capture_output=True, timeout=60,
+                    timeout=60,
                 )
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
                     converted = True
                     log.info("  PDBQT via obabel")
-            except (FileNotFoundError, subprocess.TimeoutExpired):
+            except RuntimeError:
                 pass
 
         # Priority 3: RDKit fallback (never crashes)
@@ -1037,111 +1171,8 @@ class CompoundRecord:
 #  PHASE 2 — LIBRARY GENERATION & FILTERING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 8 validated natural-product-inspired scaffolds (SMILES)
-CONFIG.natural_product_scaffolds: List[str] = [
-    "O=c1c(-c2ccc(O)c(O)c2)coc2cc(O)cc(O)c12",                 # Quercetin (flavonoid)
-    "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                # Resveratrol (stilbenoid)
-    "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin (diarylheptanoid)
-    "COc1cc2c(cc1OC)-c1ccc3cc4c(cc3c1CC2)OCO4",                 # Berberine (isoquinoline alkaloid)
-    "CC1(C)OC2C3OC(=O)C4C(O1)C2C1OOC3C14",                     # Artemisinin (sesquiterpene lactone)
-    "O=C1OCc2cn3ccc4cccc-4c3cc21",                              # Camptothecin (topoisomerase inhibitor)
-    "COc1nc2c3ccccc3n(C)c2cc1C1CCNC1O",                        # Atropine-like (tropane alkaloid)
-    "O=C(Nc1ccccc1)c1ccccc1",                                   # Benzamide
-]
-
-# 15 drug-like scaffolds for BRICS decomposition (modified to include BRICS-valid bonds)
-CONFIG.additional_scaffolds: List[str] = [
-    "c1ccc2[nH]ccc2c1",                                         # Indole
-    "c1ccc2ncccc2c1",                                           # Isoquinoline
-    "c1ccc2cc[nH]c2c1",                                         # Indole (alternative)
-    "c1ccc2[nH]cnc2c1",                                         # Benzimidazole
-    "O=c1ccc2ccccc2o1",                                         # Coumarin
-    "c1ccc2nc3ccccc3nc2c1",                                     # Phenazine
-    "c1ccc2c(c1)oc1ccccc12",                                    # Dibenzofuran
-    "c1ccc2c(c1)sc1ccccc12",                                    # Dibenzothiophene
-    "c1ccc2c(c1)ccc1c3ccccc3[nH]c21",                           # Carbazole
-    "c1ccc2c(c1)CCN2",                                          # Indoline
-    "c1ccc2c(c1)CCc1c-2[nH]c2ccccc12",                         # Tetrahydrocarbazole
-    "COc1ccc2[nH]ccc2c1",                                       # 5-Methoxyindole
-    "COc1ccccc1OCC(O)CNC(C)C",                                  # Propranolol-like (β-blocker)
-    "CCN(CC)C(=O)c1ccccc1",                                     # N,N-Diethylbenzamide
-    "O=C(Nc1ccc(O)cc1)c1ccc(O)cc1",                            # Phenolic benzamide
-]
-
-# Pre-built BRICS building blocks (SMILES with BRICS dummy atoms [n*]).
-# These ensure robust recombination when scaffold decomposition yields few fragments.
-# Bond-type mapping: [1*,2*,3*]=C, [4*,5*]=N, [6*,7*]=O, [8*]=S, [16*]=aromatic C
-# A diverse set of ~50 blocks yields 300+ valid recombination products.
-CONFIG.brics_building_blocks: List[str] = [
-    # [1*] Carbon-attachment fragments (20)
-    "[1*]c1ccccc1",
-    "[1*]c1ccc(O)cc1",
-    "[1*]c1ccc(Cl)cc1",
-    "[1*]c1ccc(F)cc1",
-    "[1*]c1ccc(Br)cc1",
-    "[1*]c1ccc(OC)cc1",
-    "[1*]c1ccc(C(=O)O)cc1",
-    "[1*]c1ccc(N)cc1",
-    "[1*]c1ccc(C)cc1",
-    "[1*]c1ccc(C(C)C)cc1",
-    "[1*]c1ccc(CF)cc1",
-    "[1*]c1ccc(CN)cc1",
-    "[1*]c1ccc(S(=O)(=O)N)cc1",
-    "[1*]c1ccc(C(=O)N)cc1",
-    "[1*]c1ccc(NC(=O)C)cc1",
-    "[1*]CC(=O)O",
-    "[1*]CCO",
-    "[1*]CCN",
-    "[1*]CC(=O)N",
-    "[1*]CCC(=O)O",
-    # [3*] Alkene-attachment fragments (4)
-    "[3*]C=Cc1ccccc1",
-    "[3*]C=Cc1ccc(O)cc1",
-    "[3*]C=Cc1ccc(Cl)cc1",
-    "[3*]CCN(C)C",
-    # [5*] Nitrogen-attachment fragments (12)
-    "[5*]Nc1ccccc1",
-    "[5*]Nc1ccc(O)cc1",
-    "[5*]Nc1ccc(C(=O)O)cc1",
-    "[5*]Nc1ccc(Cl)cc1",
-    "[5*]Nc1ccc(F)cc1",
-    "[5*]Nc1ccc(OC)cc1",
-    "[5*]Nc1ccc(C)cc1",
-    "[5*]Nc1ccc(Br)cc1",
-    "[5*]Nc1ccc(CN)cc1",
-    "[5*]NCC",
-    "[5*]NCCO",
-    "[5*]NCCC(=O)O",
-    # [6*] Carbonyl-attachment fragments (8)
-    "[6*]C(=O)O",
-    "[6*]C(=O)c1ccccc1",
-    "[6*]C(=O)c1ccc(O)cc1",
-    "[6*]C(=O)c1ccc(Cl)cc1",
-    "[6*]C(=O)c1ccc(OC)cc1",
-    "[6*]C(=O)c1ccc(C)cc1",
-    "[6*]C(=O)c1ccc(N)cc1",
-    "[6*]C(=O)CC",
-    # [7*] Oxygen-attachment fragments (8)
-    "[7*]Cc1ccccc1",
-    "[7*]Cc1ccc(O)cc1",
-    "[7*]Cc1ccc(O)c(OC)c1",
-    "[7*]Cc1ccc(OC)cc1",
-    "[7*]Cc1ccc(Cl)cc1",
-    "[7*]Cc1ccc(F)cc1",
-    "[7*]CC",
-    "[7*]C(C)C",
-    # [16*] Aromatic carbon fragments (4)
-    "[16*]c1ccccc1OC",
-    "[16*]c1ccc(C)cc1",
-    "[16*]c1ccc(N)cc1",
-    "[16*]c1ccc(O)cc1",
-]
-
-# Positive control SMILES (to verify pipeline)
-CONFIG.control_smiles: Dict[str, str] = {
-    "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
-    "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
-}
+# Scaffold and control-SMILES data are defined in PipelineConfig above.
+# (No module-level reassignment needed — the dataclass fields are authoritative.)
 
 
 def _count_atoms(mol: Chem.Mol) -> int:
@@ -1171,29 +1202,31 @@ def _brics_recombination(
     seed: int = CONFIG.random_seed,
 ) -> Tuple[List[CompoundRecord], set]:
     """
-    Recombine BRICS fragments using ``BRICSBuild``.
+    Recombine BRICS fragments using ``BRICSBuild``, then pick a maximally
+    diverse subset via MaxMin on Morgan fingerprints.
 
-    ``BRICSBuild`` takes a list of pre-decomposed fragments (containing BRICS
-    dummy-atom markers) and iterates over all valid recombinations of those
-    fragments.  This yields far more diverse products than the original broken
-    ``CombineMols`` + ``islice`` approach.
+    Workflow:
+        1. Generate a pool of up to ``target_count * diversity_pool_multiplier``
+           recombination products.
+        2. Reject any molecule with 0 rings.
+        3. Compute Morgan fingerprints (radius=2, 2048 bits) for the pool.
+        4. Use RDKit's ``MaxMinPicker`` to select the final ``target_count``
+           compounds maximising structural diversity.
 
     Returns ``(records, updated_seen_smiles)``.
     """
-    records: List[CompoundRecord] = []
     rng = np.random.default_rng(seed)
 
-    # BRICSBuild may generate very many products if given many fragments;
-    # we cap effort so it does not run forever.
-    max_products = target_count * 20
+    pool_mult = CONFIG.diversity_pool_multiplier
+    max_products = target_count * pool_mult * 4
     n_produced = 0
 
-    # Shuffle fragment order for stochasticity
     shuffled = list(frag_mols)
     rng.shuffle(shuffled)
 
     builder = BRICS.BRICSBuild(shuffled)
 
+    pool_records: List[CompoundRecord] = []
     for product in itertools.islice(builder, max_products):
         if product is None:
             continue
@@ -1205,21 +1238,55 @@ def _brics_recombination(
 
         if smi in seen_smiles:
             continue
+
+        # Reject molecules with 0 rings
+        ring_info = product.GetRingInfo()
+        if ring_info.NumRings() == 0:
+            continue
+
         seen_smiles.add(smi)
 
-        records.append(CompoundRecord(
+        pool_records.append(CompoundRecord(
             compound_id=f"AA-{n_produced:04d}",
             smiles=smi,
             mol=product,
         ))
         n_produced += 1
 
-        if n_produced >= target_count:
+        target_pool = target_count * pool_mult
+        if n_produced >= target_pool:
             break
 
-        if n_produced % 50 == 0:
-            log.info(f"  BRICS recombination: {n_produced} / {target_count}…")
+        if n_produced % 100 == 0:
+            log.info(f"  BRICS pool: {n_produced} / {target_pool}…")
 
+    if not pool_records:
+        return [], seen_smiles
+
+    log.info(f"  BRICS pool size: {len(pool_records)}")
+
+    # MaxMin diversity pick
+    if len(pool_records) <= target_count:
+        return pool_records, seen_smiles
+
+    fps = [
+        AllChem.GetMorganFingerprintAsBitVect(
+            r.mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+        )
+        for r in pool_records
+    ]
+
+    from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
+    picker = MaxMinPicker()
+    pick_ids = picker.LazyBitVectorPick(
+        fps, len(fps), target_count, seed=seed,
+    )
+
+    records = [pool_records[i] for i in pick_ids]
+    log.info(
+        f"  MaxMin selected {len(records)} diverse compounds "
+        f"from pool of {len(pool_records)}."
+    )
     return records, seen_smiles
 
 
@@ -1377,7 +1444,7 @@ def apply_filters(
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             ref_mols[name] = AllChem.GetMorganFingerprintAsBitVect(
-                mol, radius=2, nBits=2048,
+                mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
             )
 
     lactam_pattern = Chem.MolFromSmarts(CONFIG.beta_lactam_smarts)
@@ -1407,7 +1474,7 @@ def apply_filters(
             continue
 
         # 2. Similarity — max Tc vs reference antibiotics
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits)
         max_sim = 0.0
         for ref_fp in ref_mols.values():
             sim = TanimotoSimilarity(fp, ref_fp)
@@ -1424,7 +1491,12 @@ def apply_filters(
             logp = Crippen.MolLogP(mol)
             hbd = Descriptors.NumHDonors(mol)
             hba = Descriptors.NumHAcceptors(mol)
-            lipinski_ok = (mw <= 500) and (logp <= 5.0) and (hbd <= 5) and (hba <= 10)
+            lipinski_ok = (
+                mw <= CONFIG.lipinski_mw_max
+                and logp <= CONFIG.lipinski_logp_max
+                and hbd <= CONFIG.lipinski_hbd_max
+                and hba <= CONFIG.lipinski_hba_max
+            )
             qed = QED.qed(mol)
         except Exception:
             continue
@@ -1432,7 +1504,7 @@ def apply_filters(
         record.passes_lipinski = lipinski_ok
         record.qed_score = qed
 
-        if not lipinski_ok or qed <= 0.6:
+        if not lipinski_ok or qed <= CONFIG.qed_threshold:
             skipped_admet += 1
             continue
 
@@ -1531,8 +1603,8 @@ def _run_vina_docking(
     timeout: int = CONFIG.vina_timeout_s,
 ) -> Optional[float]:
     """
-    Run a single Vina docking job. Returns best binding energy (kcal/mol)
-    or None on failure.
+    Run a single Vina docking job via the external tool wrapper.
+    Returns best binding energy (kcal/mol) or None on failure.
 
     When ``CONFIG.dry_run`` is ``True``, the Vina subprocess is skipped
     and a mock random energy in the range [-10.0, -5.0] kcal/mol is returned,
@@ -1557,39 +1629,17 @@ def _run_vina_docking(
     ]
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-        )
+        result = run_tool(cmd, timeout=timeout, check=False)
         if result.returncode != 0:
             log.warning(f"  Vina error: {result.stderr.strip()}")
             return None
-
-        for line in result.stdout.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("1") and " " in stripped:
-                parts = stripped.split()
-                try:
-                    energy = float(parts[1])
-                    return energy
-                except (ValueError, IndexError):
-                    continue
-        for line in result.stderr.splitlines():
-            if "Affinity" in line and "kcal/mol" in line:
-                try:
-                    energy = float(line.split()[1])
-                    return energy
-                except (ValueError, IndexError):
-                    continue
-        return None
-
-    except subprocess.TimeoutExpired:
-        log.warning(f"  Vina timeout ({timeout}s).")
-        return None
-    except FileNotFoundError:
-        log.warning("  Vina binary not found.")
-        return None
-    except Exception as exc:
-        log.warning(f"  Vina exception: {exc}")
+        energy = parse_vina_energy(result.stdout)
+        if energy is not None:
+            return energy
+        energy = parse_vina_energy(result.stderr)
+        return energy
+    except RuntimeError as exc:
+        log.warning(f"  Vina execution failed: {exc}")
         return None
 
 
@@ -1607,7 +1657,7 @@ def dock_compound(
     Full docking pipeline for a single compound: PDBQT prep → Vina → parse.
 
     Supports caching: if ``use_cache`` is True and a result for
-    ``{compound_id}_{tag}`` exists in the cache dict, it is returned
+    ``MD5(canonical_SMILES)_{tag}`` exists in the cache dict, it is returned
     immediately without re-docking.
 
     Args:
@@ -1623,7 +1673,8 @@ def dock_compound(
     Returns:
         Best binding energy, or None on failure.
     """
-    cache_key = f"{record.compound_id}_{tag}"
+    smiles_md5 = hashlib.md5(record.smiles.encode("utf-8")).hexdigest()
+    cache_key = f"{smiles_md5}_{tag}"
     if use_cache and cache is not None and cache_key in cache:
         return cache[cache_key]
 
@@ -1729,18 +1780,24 @@ def _parallel_dock(
 
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
         futures = {}
+        keys: Dict[Any, str] = {}
         for cid, smiles in items:
-            cache_key = f"{cid}_{tag}"
+            smiles_md5 = hashlib.md5(smiles.encode("utf-8")).hexdigest()
+            cache_key = f"{smiles_md5}_{tag}"
             if use_cache and cache is not None and cache_key in cache:
                 results.append((cid, cache[cache_key]))
                 continue
-            futures[pool.submit(worker_fn, cid, smiles)] = cid
+            future = pool.submit(worker_fn, cid, smiles)
+            futures[future] = cid
+            keys[future] = cache_key
             submitted += 1
 
         done = 0
         for future in as_completed(futures):
             cid, energy = future.result()
             results.append((cid, energy))
+            if use_cache and cache is not None:
+                cache[keys[future]] = energy
             done += 1
             if done % 25 == 0 or done == submitted:
                 log.info(f"    Docked {done} / {submitted} ({tag})")
@@ -1791,7 +1848,7 @@ def _compute_shape_fallback_score(
             except Exception:
                 return None
 
-        normalised = min(protrude / 0.05, 10.0) if protrude > 0 else 0.0
+        normalised = min(protrude / CONFIG.shape_score_norm_factor, 10.0) if protrude > 0 else 0.0
         return normalised
 
     except Exception:
@@ -2444,8 +2501,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     deps = verify_dependencies()
 
-    work_dir = str(CONFIG.output_dir / "workdir")
-    pdb_dir = str(CONFIG.output_dir / "pdb")
+    work_dir = str(CONFIG.work_dir)
+    pdb_dir = str(CONFIG.pdb_dir)
     os.makedirs(work_dir, exist_ok=True)
 
     # ── Phase 1: Target preparation ──
@@ -2489,12 +2546,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     top3 = top10[:3]
     generate_images(top3)
 
-    # Collect top 50 for QED histogram
-    scored = sorted(
-        [r for r in filtered if r.qed_score > 0],
-        key=lambda r: r.qed_score, reverse=True,
-    )
-    top50 = scored[:50]
+    # Collect the actual top 50 high-affinity candidates from Phase 3 for QED histogram
+    # (these are the compounds that were selected by allosteric energy ranking)
+    scored_for_top50 = [
+        r for r in filtered
+        if r.pb2pa_allosteric_energy is not None
+    ]
+    scored_for_top50.sort(key=lambda r: r.pb2pa_allosteric_energy)
+    top50 = scored_for_top50[:50] if len(scored_for_top50) >= 50 else scored_for_top50
 
     generate_html_report(top10, top50, CONFIG.output_dir)
 
