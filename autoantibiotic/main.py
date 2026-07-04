@@ -58,7 +58,20 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--ensemble-dir", type=str, default=None,
         help="Path to directory containing multiple receptor structures for ensemble docking.",
     )
+    parser.add_argument(
+        "--benchmark", action="store_true",
+        help="Run enrichment benchmark instead of full library screening.",
+    )
+    parser.add_argument(
+        "--use-mm-gbsa", action="store_true",
+        help="Use MM-GB/SA rescoring (requires OpenMM + AmberTools).",
+    )
     args = parser.parse_args(argv)
+
+    if args.benchmark:
+        CONFIG.benchmark_mode = True
+    if args.use_mm_gbsa:
+        CONFIG.use_mm_gbsa = True
 
     if args.dry_run:
         CONFIG.dry_run = True
@@ -70,6 +83,34 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.ensemble_dir:
         CONFIG.ensemble_mode = True
         CONFIG.ensemble_structures_dir = Path(args.ensemble_dir)
+
+    if args.benchmark:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s | %(levelname)-8s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                logging.FileHandler(CONFIG.output_dir / CONFIG.pipeline_log_name),
+            ],
+        )
+        log.info("─── Benchmark Mode ───")
+        try:
+            from benchmarks.run_enrichment_test import run_enrichment_test
+            results = run_enrichment_test(
+                n_decoys_per_active=CONFIG.benchmark_n_decoys,
+                use_vina=CONFIG.use_gnina,
+            )
+            log.info(f"  Benchmark complete: EF1%={results['ef1']:.3f}, "
+                     f"ROC-AUC={results['roc_auc']:.3f}")
+        except Exception as exc:
+            log.error(f"  Benchmark failed: {exc}")
+        log.info("Benchmark mode complete. Exiting.")
+        return
+
+    if args.use_mm_gbsa:
+        CONFIG.use_mm_gbsa = True
+        log.info("  MM-GB/SA rescoring enabled.")
 
     ensure_output_dir()
     logging.basicConfig(

@@ -30,7 +30,7 @@ class PipelineConfig:
         "CES1": "3KJZ",
     })
     reference_antibiotics: Dict[str, str] = field(default_factory=lambda: {
-        "Methicillin":  "CC1=C(C(=C(C(=C1O)OC)OC)OC)C(=O)NC2C3C(C(=O)N3C2=O)SC4(C)C",
+        "Methicillin":  "CC1(C(N2C(S1)C(C2=O)NC(=O)C3=C(C(=C(C=C3)OC)OC)OC)C(=O)O)C",
         "Vancomycin":   "CC1C(C(CC(O1)OC2C(C(C(OC2OC3=C4C=C5C(=C4OC6=C(C(=CC(=C6)C(C(=O)NC(C(=O)NC5C(=O)O)CC7=CC=C(C=C7)O)NC(=O)C8C(O)C(=C(C=C8)Cl)O)O)O)CO)O)O)O)NC(=O)C9C(O)C(=C(C=C9)Cl)O)(CC(=O)N)O",
         "Ceftaroline":  "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
         "Meropenem":    "CC1C2C(C(=O)N2C(=C1SC3CC(NCC3)C(=O)O)C(=O)O)(C)O",
@@ -196,6 +196,18 @@ class PipelineConfig:
     # Consensus scoring (Phase 3)
     consensus_vina_weight: float = 0.7
     consensus_shape_weight: float = 0.3
+
+    # Benchmark & Validation (Phase 7)
+    use_mm_gbsa: bool = False
+    """Enable MM-GBSA rescoring of top docking poses (requires OpenMM + AmberTools)."""
+    benchmark_mode: bool = False
+    """Run enrichment benchmark instead of full library screening."""
+    reference_actives_path: Optional[Path] = None
+    """Path to a file with known active SMILES for benchmark validation."""
+    reference_inactives_path: Optional[Path] = None
+    """Path to a file with known inactive SMILES for benchmark validation."""
+    benchmark_n_decoys: int = 100
+    """Number of property-matched decoys per active in enrichment test."""
 
     # Report filenames
     csv_report_name: str = "top_candidates.csv"

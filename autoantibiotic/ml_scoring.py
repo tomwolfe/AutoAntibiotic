@@ -15,6 +15,26 @@ from .io_utils import log
 _HAVE_GNINA: bool = False
 _HAVE_RF_SCORE: bool = False
 _HAVE_TRANSFORMERS: bool = False
+_HAVE_OPENMM: bool = False
+_HAVE_AMBERTOOLS: bool = False
+
+try:
+    import openmm as _openmm
+    import openmm.app as _openmm_app
+    import openmm.unit as _openmm_unit
+    _HAVE_OPENMM = True
+except ImportError:
+    pass
+
+try:
+    import parmed as _parmed
+    _HAVE_AMBERTOOLS = True
+except ImportError:
+    try:
+        from pytraj import utils as _pytraj_utils
+        _HAVE_AMBERTOOLS = True
+    except ImportError:
+        pass
 
 try:
     result = subprocess.run(
@@ -239,14 +259,208 @@ def _rescore_with_chemberta(
     return top_candidates
 
 
+def rescore_with_mmgbsa(
+    top_candidates: List[CompoundRecord],
+    receptor_pdb: str,
+    work_dir: str,
+) -> List[CompoundRecord]:
+    """Rescore the top candidates using a simplified MM-GB/SA approach.
+
+    Uses OpenMM's Generalized Born (OBC2) implicit solvent model to
+    estimate the binding free energy for each docked pose:
+
+        ΔG_binding ≈ G(complex) - G(receptor) - G(ligand)
+
+    where each G = E_GB + E_MM (bonded + van der Waals + Coulomb).
+
+    Args:
+        top_candidates: Docked candidates to rescore (uses SMILES to
+            generate 3D poses). Only the top 10 are rescored.
+        receptor_pdb: Path to the receptor PDB file.
+        work_dir: Working directory for intermediate files.
+
+    Returns:
+        Updated candidates with ``ml_score`` set to the MM-GB/SA ΔG
+        (more negative = stronger binding predicted).
+    """
+    n = len(top_candidates)
+    log.info(f"  Rescoring top {n} candidates with MM-GB/SA…")
+
+    if not _HAVE_OPENMM:
+        log.warning("  OpenMM not installed — install with: conda install -c conda-forge openmm")
+        log.warning("  Falling back to existing scoring (ml_score unchanged).")
+        return top_candidates
+
+    if not os.path.exists(receptor_pdb):
+        log.warning(f"  Receptor PDB not found: {receptor_pdb}. Skipping MM-GB/SA.")
+        return top_candidates
+
+    to_rescore = top_candidates[:10]
+    work_dir_mm = os.path.join(work_dir, "mmgbsa")
+    os.makedirs(work_dir_mm, exist_ok=True)
+
+    try:
+        from pdbfixer import PDBFixer
+
+        # ── Prepare receptor ──
+        log.info("  Preparing receptor structure with PDBFixer…")
+        fixer = PDBFixer(filename=receptor_pdb)
+        fixer.findMissingResidues()
+        fixer.findNonstandardResidues()
+        fixer.replaceNonstandardResidues()
+        fixer.removeHeterogens(keepWater=False)
+        fixer.findMissingAtoms()
+        fixer.addMissingAtoms()
+        fixer.addMissingHydrogens(pH=7.0)
+
+        rec_pdb_out = os.path.join(work_dir_mm, "receptor_prepared.pdb")
+        _openmm_app.PDBFile.writeFile(fixer.topology, fixer.positions, open(rec_pdb_out, "w"))
+
+        forcefield = _openmm_app.ForceField("amber14-all.xml")
+        cpu_platform = _openmm.Platform.getPlatformByName("CPU")
+
+        # Receptor energy
+        rec_system = forcefield.createSystem(
+            fixer.topology,
+            nonbondedMethod=_openmm_app.NoCutoff,
+            constraints=_openmm_app.HBonds,
+            implicitSolvent=_openmm_app.OBC2,
+        )
+        rec_simulation = _openmm_app.Simulation(
+            fixer.topology, rec_system,
+            _openmm.LangevinMiddleIntegrator(
+                300 * _openmm_unit.kelvin, 1.0 / _openmm_unit.picosecond,
+                0.002 * _openmm_unit.picosecond,
+            ),
+            cpu_platform,
+        )
+        rec_simulation.context.setPositions(fixer.positions)
+        rec_simulation.minimizeEnergy(maxIterations=100)
+        rec_energy = rec_simulation.context.getState(
+            getEnergy=True,
+        ).getPotentialEnergy().value_in_unit(_openmm_unit.kilocalorie_per_mole)
+
+        mm_gbsa_scores: Dict[str, Optional[float]] = {}
+
+        for rank, rec in enumerate(to_rescore):
+            log.info(f"  MM-GB/SA rescoring {rank + 1}/{len(to_rescore)}: {rec.compound_id}")
+            try:
+                mol = rec.mol
+                if mol is None:
+                    mol = Chem.MolFromSmiles(rec.smiles)
+                    if mol is None:
+                        mm_gbsa_scores[rec.compound_id] = None
+                        continue
+                    rec.mol = mol
+
+                # Generate 3D conformer for the ligand
+                mol_3d = Chem.RWMol(mol)
+                mol_3d = Chem.AddHs(mol_3d)
+                params = Chem.rdDistGeom.ETKDGv3()
+                params.randomSeed = CONFIG.random_seed + rank
+                if Chem.rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
+                    mm_gbsa_scores[rec.compound_id] = None
+                    continue
+
+                lig_pdb_file = os.path.join(work_dir_mm, f"lig_{rec.compound_id}.pdb")
+                Chem.rdmolfiles.MolToPDBFile(mol_3d, lig_pdb_file)
+
+                # Ligand energy (vacuum-like, but with GB implicit solvent)
+                lig_pdb = _openmm_app.PDBFile(lig_pdb_file)
+                lig_system = forcefield.createSystem(
+                    lig_pdb.topology,
+                    nonbondedMethod=_openmm_app.NoCutoff,
+                    constraints=_openmm_app.HBonds,
+                    implicitSolvent=_openmm_app.OBC2,
+                )
+                lig_simulation = _openmm_app.Simulation(
+                    lig_pdb.topology, lig_system,
+                    _openmm.LangevinMiddleIntegrator(
+                        300 * _openmm_unit.kelvin, 1.0 / _openmm_unit.picosecond,
+                        0.002 * _openmm_unit.picosecond,
+                    ),
+                    cpu_platform,
+                )
+                lig_simulation.context.setPositions(lig_pdb.positions)
+                lig_simulation.minimizeEnergy(maxIterations=100)
+                lig_energy = lig_simulation.context.getState(
+                    getEnergy=True,
+                ).getPotentialEnergy().value_in_unit(_openmm_unit.kilocalorie_per_mole)
+
+                # Complex energy: concatenate receptor + ligand PDB into one file
+                with open(rec_pdb_out) as f:
+                    rec_pdb_lines = f.readlines()
+                with open(lig_pdb_file) as f:
+                    lig_pdb_lines = f.readlines()
+
+                complex_pdb_file = os.path.join(work_dir_mm, f"complex_{rec.compound_id}.pdb")
+                with open(complex_pdb_file, "w") as f:
+                    for line in rec_pdb_lines:
+                        if line.startswith("END") or line.startswith("TER"):
+                            continue
+                        f.write(line)
+                    f.write("TER\n")
+                    for line in lig_pdb_lines:
+                        if line.startswith("END") or line.startswith("TER"):
+                            continue
+                        f.write(line)
+                    f.write("END\n")
+
+                complex_pdb = _openmm_app.PDBFile(complex_pdb_file)
+                complex_system = forcefield.createSystem(
+                    complex_pdb.topology,
+                    nonbondedMethod=_openmm_app.NoCutoff,
+                    constraints=_openmm_app.HBonds,
+                    implicitSolvent=_openmm_app.OBC2,
+                )
+                complex_simulation = _openmm_app.Simulation(
+                    complex_pdb.topology, complex_system,
+                    _openmm.LangevinMiddleIntegrator(
+                        300 * _openmm_unit.kelvin, 1.0 / _openmm_unit.picosecond,
+                        0.002 * _openmm_unit.picosecond,
+                    ),
+                    cpu_platform,
+                )
+                complex_simulation.context.setPositions(complex_pdb.positions)
+
+                # Brief energy minimisation of the complex
+                complex_simulation.minimizeEnergy(maxIterations=500)
+
+                complex_energy = complex_simulation.context.getState(
+                    getEnergy=True,
+                ).getPotentialEnergy().value_in_unit(_openmm_unit.kilocalorie_per_mole)
+
+                binding_energy = complex_energy - rec_energy - lig_energy
+                mm_gbsa_scores[rec.compound_id] = binding_energy
+                log.info(f"    ΔG_binding ≈ {binding_energy:.2f} kcal/mol")
+
+            except Exception as exc:
+                log.warning(f"  MM-GB/SA rescoring failed for {rec.compound_id}: {exc}")
+                mm_gbsa_scores[rec.compound_id] = None
+
+        for rec in top_candidates:
+            score = mm_gbsa_scores.get(rec.compound_id)
+            if score is not None:
+                rec.ml_score = score
+
+    except ImportError as exc:
+        log.warning(f"  PDBFixer not available ({exc}). Skipping MM-GB/SA rescoring.")
+    except Exception as exc:
+        log.warning(f"  MM-GB/SA rescoring failed: {exc}")
+
+    return top_candidates
+
+
 def rescore_with_ml(
     top_candidates: List[CompoundRecord],
     receptor_pdbqt: str,
     work_dir: str,
 ) -> List[CompoundRecord]:
-    """Rescore the top Vina candidates using the best available ML method.
+    """Rescore the top Vina candidates using the best available method.
 
     Selection priority:
+      0. **MM-GB/SA**: if ``CONFIG.use_mm_gbsa`` is set and OpenMM is
+         available. Requires a receptor PDB file alongside the PDBQT.
       1. **GNINA**: if the ``gnina`` binary is on ``$PATH``.
       2. **RF-Score-VS**: a Random Forest model trained on Vina energies
          and RDKit descriptors.
@@ -260,6 +474,16 @@ def rescore_with_ml(
     log.info("─── ML Rescoring ───")
     n = len(top_candidates)
     log.info(f"  Rescoring {n} candidates with ML.")
+
+    # Priority 0: MM-GB/SA (if enabled)
+    if CONFIG.use_mm_gbsa:
+        receptor_pdb = receptor_pdbqt.replace(".pdbqt", ".pdb")
+        if os.path.exists(receptor_pdb):
+            return rescore_with_mmgbsa(top_candidates, receptor_pdb, work_dir)
+        log.warning(
+            "  MM-GB/SA enabled but receptor PDB not found at "
+            f"{receptor_pdb}. Skipping MM-GB/SA."
+        )
 
     if _HAVE_GNINA:
         log.info("  Using GNINA (CNN rescoring).")
