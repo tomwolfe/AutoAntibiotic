@@ -9,6 +9,8 @@ from discovery_pipeline import (
     compute_selectivity_index,
     _validate_mol,
     parse_vina_energy,
+    generate_candidate_library,
+    apply_filters,
 )
 from tests.conftest import BETA_LACTAM_SMARTS
 
@@ -107,3 +109,63 @@ class TestVinaEnergyParsing:
 
     def test_empty_string_returns_none(self) -> None:
         assert parse_vina_energy("") is None
+
+
+class TestLibraryLipinskiCompliance:
+    """Verify generated compounds satisfy Lipinski Rule-of-5."""
+
+    def test_generated_molecules_have_reasonable_mw(self) -> None:
+        """Passing compounds should have MW ≤ 500 Da."""
+        from rdkit.Chem import Descriptors
+
+        records = generate_candidate_library(target_count=20, seed=42)
+        passed = apply_filters(records)
+        assert len(passed) > 0
+
+        for rec in passed:
+            mol = rec.mol
+            assert mol is not None
+            mw = Descriptors.MolWt(mol)
+            assert mw <= 500.0, f"{rec.compound_id} MW {mw:.1f} > 500"
+
+    def test_generated_molecules_have_reasonable_logp(self) -> None:
+        """Passing compounds should have LogP ≤ 5.0."""
+        from rdkit.Chem import Crippen
+
+        records = generate_candidate_library(target_count=20, seed=42)
+        passed = apply_filters(records)
+        assert len(passed) > 0
+
+        for rec in passed:
+            mol = rec.mol
+            assert mol is not None
+            logp = Crippen.MolLogP(mol)
+            assert logp <= 5.0, f"{rec.compound_id} LogP {logp:.2f} > 5.0"
+
+    def test_generated_molecules_have_reasonable_hbd(self) -> None:
+        """Passing compounds should have HBD ≤ 5."""
+        from rdkit.Chem import Descriptors
+
+        records = generate_candidate_library(target_count=20, seed=42)
+        passed = apply_filters(records)
+        assert len(passed) > 0
+
+        for rec in passed:
+            mol = rec.mol
+            assert mol is not None
+            hbd = Descriptors.NumHDonors(mol)
+            assert hbd <= 5, f"{rec.compound_id} HBD {hbd} > 5"
+
+    def test_generated_molecules_have_reasonable_hba(self) -> None:
+        """Passing compounds should have HBA ≤ 10."""
+        from rdkit.Chem import Descriptors
+
+        records = generate_candidate_library(target_count=20, seed=42)
+        passed = apply_filters(records)
+        assert len(passed) > 0
+
+        for rec in passed:
+            mol = rec.mol
+            assert mol is not None
+            hba = Descriptors.NumHAcceptors(mol)
+            assert hba <= 10, f"{rec.compound_id} HBA {hba} > 10"

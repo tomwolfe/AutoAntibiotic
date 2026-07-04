@@ -53,6 +53,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+# ── tqdm (optional — graceful fallback to simple logging) ──
+try:
+    from tqdm import tqdm as _tqdm
+    _HAVE_TQDM = True
+except ImportError:
+    _HAVE_TQDM = False
+    _tqdm = lambda x, **kw: x  # identity passthrough
+
+
 # ── RDKit ──────────────────────────────────────────────────────────────────────
 from rdkit import Chem  # noqa: F401
 from rdkit.Chem import (
@@ -119,7 +128,12 @@ class PipelineConfig:
     ces1_active_site_residues: List[str] = field(default_factory=lambda: ["SER221", "HIS468", "GLU354"])
     allosteric_box_size: Tuple[float, float, float] = (15.0, 15.0, 15.0)
     active_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
+    offtarget_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
+    redocking_box_size: Tuple[float, float, float] = (25.0, 25.0, 25.0)
+    vina_exhaustiveness: int = 8
+    vina_num_modes: int = 3
     vina_timeout_s: int = 120
+    prepare_receptor_timeout: int = 60
     n_jobs: int = field(default_factory=lambda: max(1, mp.cpu_count() - 1))
     similarity_threshold: float = 0.4
     similarity_threshold_relaxed: float = 0.5
@@ -258,18 +272,6 @@ log = logging.getLogger("AutoAntibiotic")
 def ensure_output_dir() -> None:
     """Create the output directory if it does not exist."""
     CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
-
-
-def install_missing_package(package: str) -> bool:
-    """Attempt to pip-install *package*. Return True on success."""
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", package],
-            timeout=60,
-        )
-        return True
-    except Exception:
-        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -477,27 +479,25 @@ def verify_dependencies() -> Dict[str, Any]:
     log.info("─── Phase 0: Dependency Verification ───")
     status: Dict[str, Any] = {}
 
-    # ── Python packages (soft-fail: attempt pip install) ──
+    # ── Python packages (fail hard with instructions) ──
     packages: Dict[str, str] = {
-        "rdkit": "rdkit-pypi",
+        "rdkit": "rdkit",
         "meeko": "meeko",
-        "biopython": "biopython",
+        "Bio": "Bio",  # pip install biopython → import Bio
     }
-    for mod_name, pip_name in packages.items():
+    for import_name, pip_name in packages.items():
         try:
-            __import__(mod_name)
-            status[mod_name] = True
-            log.info(f"  ✓  {mod_name} found.")
+            __import__(import_name)
+            status[import_name] = True
+            log.info(f"  ✓  {import_name} found.")
         except ImportError:
-            log.warning(f"  ⚠  {mod_name} missing. Attempting pip install…")
-            if install_missing_package(pip_name):
-                status[mod_name] = True
-                log.info(f"  ✓  {mod_name} installed successfully.")
-            else:
-                status[mod_name] = False
-                log.error(f"  ✗  {mod_name} could not be installed.")
-                log.error(_INSTALL_GUIDE.get(mod_name, ""))
-                sys.exit(1)
+            log.error(f"  ✗  {import_name} not found.")
+            log.error(f"  → Run: pip install -r requirements.txt")
+            log.error(f"  → Or: pip install {pip_name}")
+            raise ImportError(
+                f"Required package '{import_name}' is not installed. "
+                f"Please run: pip install -r requirements.txt"
+            )
 
     # ── Vina binary ──
     for bin_name in ("vina", "obabel", "prepare_receptor"):
@@ -571,7 +571,7 @@ def _extract_native_ligand_from_holo(
         class LigSelect(Select):
             def accept_residue(self, residue):  # type: ignore
                 return residue is lig_res
-        pdbio.set_struct(struct)
+        pdbio.set_structure(struct)
         lig_pdb = output_ligand_pdbqt.replace(".pdbqt", ".pdb")
         pdbio.save(lig_pdb, LigSelect())
 
@@ -720,7 +720,7 @@ def run_redocking_validation(
         log.warning("  ⚠  Could not extract native ligand. Skipping redocking validation.")
         return False, None
 
-    if not deps["USE_VINA"]:
+    if not deps.get("USE_VINA", False):
         log.warning("  ⚠  Vina unavailable. Redocking validation requires Vina. Skip.")
         return False, None
 
@@ -728,6 +728,7 @@ def run_redocking_validation(
     docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
     if center is None:
         center = np.array([0.0, 0.0, 0.0])
+    bx, by, bz = CONFIG.redocking_box_size
     vina_cmd = [
         "vina",
         "--receptor", target_pdbqt_path,
@@ -736,8 +737,8 @@ def run_redocking_validation(
         "--center_x", f"{center[0]:.3f}",
         "--center_y", f"{center[1]:.3f}",
         "--center_z", f"{center[2]:.3f}",
-        "--size_x", "25", "--size_y", "25", "--size_z", "25",
-        "--exhaustiveness", "8",
+        "--size_x", f"{bx:.1f}", "--size_y", f"{by:.1f}", "--size_z", f"{bz:.1f}",
+        "--exhaustiveness", str(CONFIG.vina_exhaustiveness),
     ]
 
     try:
@@ -898,7 +899,7 @@ def clean_pdb_structure(
                 return True
 
         io = PDBIO()
-        io.set_struct(struct)
+        io.set_structure(struct)
         io.save(out_path, CleanSelect())
 
         if add_hydrogens:
@@ -920,7 +921,7 @@ def clean_pdb_structure(
             try:
                 run_tool(
                     ["prepare_receptor", "-r", out_path, "-o", pdbqt_path],
-                    timeout=60,
+                    timeout=CONFIG.prepare_receptor_timeout,
                 )
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
                     converted = True
@@ -933,7 +934,7 @@ def clean_pdb_structure(
             try:
                 run_tool(
                     ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
-                    timeout=60,
+                    timeout=CONFIG.obabel_timeout_s,
                 )
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
                     converted = True
@@ -1227,7 +1228,14 @@ def _brics_recombination(
     builder = BRICS.BRICSBuild(shuffled)
 
     pool_records: List[CompoundRecord] = []
-    for product in itertools.islice(builder, max_products):
+    target_pool = target_count * pool_mult
+    iterator = _tqdm(
+        itertools.islice(builder, max_products),
+        desc="  BRICS recombination",
+        total=min(max_products, target_pool * 4),
+        disable=not _HAVE_TQDM,
+    )
+    for product in iterator:
         if product is None:
             continue
         try:
@@ -1253,11 +1261,10 @@ def _brics_recombination(
         ))
         n_produced += 1
 
-        target_pool = target_count * pool_mult
         if n_produced >= target_pool:
             break
 
-        if n_produced % 100 == 0:
+        if n_produced % 100 == 0 and not _HAVE_TQDM:
             log.info(f"  BRICS pool: {n_produced} / {target_pool}…")
 
     if not pool_records:
@@ -1570,7 +1577,7 @@ def prepare_ligand_pdbqt(
         # Fallback: write minimal PDBQT via RDKit
         try:
             mol_tmp = Chem.RWMol(mol)
-            mol_tmp = Chem.AddHs(mol_tmp)
+            mol_tmp = Chem.AddHs(mol_tmp, addCoords=True)
             AllChem.ComputeGasteigerCharges(mol_tmp)
 
             conf = mol_tmp.GetConformer()
@@ -1624,8 +1631,8 @@ def _run_vina_docking(
         "--size_x", f"{box_size[0]:.1f}",
         "--size_y", f"{box_size[1]:.1f}",
         "--size_z", f"{box_size[2]:.1f}",
-        "--exhaustiveness", "8",
-        "--num_modes", "3",
+        "--exhaustiveness", str(CONFIG.vina_exhaustiveness),
+        "--num_modes", str(CONFIG.vina_num_modes),
     ]
 
     try:
@@ -1673,6 +1680,9 @@ def dock_compound(
     Returns:
         Best binding energy, or None on failure.
     """
+    if CONFIG.dry_run:
+        return float(np.random.uniform(-10.0, -5.0))
+
     smiles_md5 = hashlib.md5(record.smiles.encode("utf-8")).hexdigest()
     cache_key = f"{smiles_md5}_{tag}"
     if use_cache and cache is not None and cache_key in cache:
@@ -1713,12 +1723,19 @@ def _worker_dock(
     receptor_pdbqt: str, center: np.ndarray,
     box_size: Tuple[float, float, float],
     work_dir: str, tag: str,
+    dry_run: bool = False,
 ) -> Tuple[str, Optional[float]]:
     """Module-level worker for :func:`_parallel_dock`.
 
     Reconstructs Mol from SMILES locally, docks, and returns energy.
     Defined at module level so ``ProcessPoolExecutor`` can pickle it.
+
+    *dry_run* is passed explicitly because ``CONFIG.dry_run`` may not be
+    propagated to spawned worker processes (e.g. on macOS with the
+    *spawn* start method).
     """
+    if dry_run:
+        return cid, float(np.random.uniform(-10.0, -5.0))
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return cid, None
@@ -1748,6 +1765,12 @@ def _parallel_dock(
     objects to avoid pickling RDKit ``Mol`` objects across process boundaries.
     Each worker reconstructs the ``Mol`` from SMILES locally.
 
+    **Cache safety**: The *cache* dict is NEVER sent to worker processes.
+    Workers always receive ``cache=None`` in ``_worker_dock``, so they
+    cannot mutate it.  The main process alone reads from cache (line 1788–1790)
+    before submitting work and writes to cache (line 1800) after each future
+    completes.
+
     Args:
         items: List of ``(compound_id, smiles)`` pairs.
         receptor_pdbqt: Path to receptor PDBQT.
@@ -1756,7 +1779,7 @@ def _parallel_dock(
         work_dir: Scratch directory.
         tag: Label for temp files.
         n_jobs: Number of parallel workers.
-        cache: Optional cache dict (used to skip completed entries).
+        cache: Optional cache dict (main-process-only; workers do NOT get it).
         use_cache: Whether to consult cache.
 
     Returns:
@@ -1765,10 +1788,10 @@ def _parallel_dock(
     from concurrent.futures import ProcessPoolExecutor, as_completed
     from functools import partial
 
-    total = len(items)
     results: List[Tuple[str, Optional[float]]] = []
     submitted = 0
 
+    # Worker fn does NOT receive cache — workers are read-only for cache safety.
     worker_fn = partial(
         _worker_dock,
         receptor_pdbqt=receptor_pdbqt,
@@ -1776,6 +1799,7 @@ def _parallel_dock(
         box_size=box_size,
         work_dir=work_dir,
         tag=tag,
+        dry_run=CONFIG.dry_run,
     )
 
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
@@ -1883,7 +1907,8 @@ def screen_library(
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
 
-    if deps["USE_VINA"]:
+    use_vina = deps.get("USE_VINA", False)
+    if use_vina:
         log.info("  Docking all compounds against allosteric site…")
         items = [(r.compound_id, r.smiles) for r in records]
         allosteric_results = _parallel_dock(
@@ -1937,7 +1962,7 @@ def screen_library(
                                 class _Sel(Select):
                                     def accept_residue(self, r):
                                         return r is residue
-                                pdbio.set_struct(struct)
+                                pdbio.set_structure(struct)
                                 pdbio.save(lig_pdb, _Sel())
                                 break
                         else:
@@ -1959,7 +1984,11 @@ def screen_library(
             return records[:CONFIG.top_n]
 
         total = len(records)
-        for i, rec in enumerate(records):
+        shape_iter = _tqdm(
+            enumerate(records), total=total,
+            desc="  Shape scoring", disable=not _HAVE_TQDM,
+        )
+        for i, rec in shape_iter:
             if rec.mol is None:
                 mol = Chem.MolFromSmiles(rec.smiles)
                 if mol is None:
@@ -1967,14 +1996,18 @@ def screen_library(
                 rec.mol = mol
             score = _compute_shape_fallback_score(rec.mol, ref_mol)
             rec.shape_score = score
-            if (i + 1) % 100 == 0:
+            if (i + 1) % 100 == 0 and not _HAVE_TQDM:
                 log.info(f"  Shape scored {i + 1} / {total}")
 
         scored_shape = [r for r in records if r.shape_score is not None]
         scored_shape.sort(key=lambda r: r.shape_score)
-        log.info(f"  Shape scoring complete. Best score: {scored_shape[0].shape_score:.3f}")
+        if scored_shape:
+            log.info(f"  Shape scoring complete. Best score: {scored_shape[0].shape_score:.3f}")
+        else:
+            log.warning("  No shape scores computed.")
 
-    if deps["USE_VINA"]:
+    use_vina = deps.get("USE_VINA", False)
+    if use_vina:
         ranked = [r for r in records if r.pb2pa_allosteric_energy is not None]
         ranked.sort(key=lambda r: r.pb2pa_allosteric_energy)
     else:
@@ -2099,15 +2132,25 @@ def analyze_selectivity_and_resistance(
     """
     log.info("─── Phase 4: Selectivity & Resistance Analysis ───")
 
-    if not deps["USE_VINA"]:
+    use_vina = deps.get("USE_VINA", False)
+    if not use_vina:
         log.warning("  Vina unavailable — skipping selectivity docking. Flagging all as uncertain.")
         for rec in top10:
             rec.selectivity_index = 1.0
             rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
         return top10
 
+    trypsin_target = targets.get("trypsin")
+    ces1_target = targets.get("CES1")
+    if trypsin_target is None or ces1_target is None:
+        log.warning("  Off-target data missing — skipping selectivity docking.")
+        for rec in top10:
+            rec.selectivity_index = 1.0
+            rec.resistance_notes = "Selectivity not assessed (off-target data missing)."
+        return top10
+
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
-    trypsin_center = targets["trypsin"].get("active_center", np.array([0.0, 0.0, 0.0]))
+    trypsin_center = trypsin_target.get("active_center", np.array([0.0, 0.0, 0.0]))
     trypisn_items = [(r.compound_id, r.smiles) for r in top10]
     trypsin_results = _parallel_dock(
         trypisn_items, targets["trypsin"]["pdbqt"],
@@ -2121,7 +2164,7 @@ def analyze_selectivity_and_resistance(
             cid_map[cid].human_trypsin_energy = energy
 
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (3KJZ)…")
-    ces1_center = targets["CES1"].get("active_center", np.array([0.0, 0.0, 0.0]))
+    ces1_center = ces1_target.get("active_center", np.array([0.0, 0.0, 0.0]))
     ces1_items = [(r.compound_id, r.smiles) for r in top10]
     ces1_results = _parallel_dock(
         ces1_items, targets["CES1"]["pdbqt"],
@@ -2194,6 +2237,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
     log.info("─── Phase 5: Reporting ───")
     ensure_output_dir()
 
+    scoring_method = "Vina" if top10[0].pb2pa_allosteric_energy is not None else "RDKit Shape (fallback)"
     rows: List[Dict[str, str]] = []
     for rec in top10:
         rows.append({
@@ -2215,6 +2259,10 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
                 f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
                 else "N/A"
             ),
+            "Shape_Score": (
+                f"{rec.shape_score:.2f}" if rec.shape_score is not None
+                else "N/A"
+            ),
             "Selectivity_Index": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
                 else "N/A"
@@ -2222,6 +2270,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
             "Max_Similarity": f"{rec.max_similarity:.3f}",
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
+            "Scoring_Method": scoring_method,
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
         })
 
@@ -2435,7 +2484,7 @@ def print_summary(
     log.info(f"  Top candidates reported:       {len(top10)}")
     log.info(f"  Successfully docked:           {n_docked}")
     log.info(f"  Selectivity pass (SI >= 2.0):  {n_selectivity_pass}")
-    log.info(f"  Docking engine:                {'Vina' if deps['USE_VINA'] else 'RDKit Shape (fallback)'}")
+    log.info(f"  Docking engine:                {'Vina' if deps.get('USE_VINA', False) else 'RDKit Shape (fallback)'}")
     if redock_rmsd is not None:
         log.info(f"  Redocking RMSD:                {redock_rmsd:.3f} Å")
     else:
