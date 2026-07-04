@@ -51,7 +51,7 @@ import numpy as np
 import pandas as pd
 
 # ── RDKit ──────────────────────────────────────────────────────────────────────
-from rdkit import Chem, RDConfig  # noqa: F401
+from rdkit import Chem  # noqa: F401
 from rdkit.Chem import (
     AllChem,
     BRICS,
@@ -77,72 +77,151 @@ from Bio.PDB import (
     Superimposer,
 )
 from Bio.PDB.DSSP import DSSP
-from Bio.SVDSuperimposer import SVDSuperimposer
+
 
 # ── Suppress RDKit noise ───────────────────────────────────────────────────────
 rdklog.DisableLog("rdApp.*")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CONSTANTS
+#  PIPELINE CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-RANDOM_SEED: int = 42
-np.random.seed(RANDOM_SEED)
+@dataclass
+class PipelineConfig:
+    """Configuration for the AutoAntibiotic discovery pipeline.
 
-# PDB identifiers
-PDB_IDS: Dict[str, str] = {
-    "PBP2a_apo": "3QPD",
-    "PBP2a_holo": "6TKO",
-    "trypsin": "1UTN",
-    "CES1": "3KJZ",
-}
+    All hardcoded constants are consolidated here for maintainability.
+    Instantiate with ``CONFIG = PipelineConfig()``; override fields for
+    custom runs (e.g., different seed, output directory).
+    """
+    random_seed: int = 42
+    pdb_ids: Dict[str, str] = field(default_factory=lambda: {
+        "PBP2a_apo": "3QPD",
+        "PBP2a_holo": "6TKO",
+        "trypsin": "1UTN",
+        "CES1": "3KJZ",
+    })
+    reference_antibiotics: Dict[str, str] = field(default_factory=lambda: {
+        "Methicillin":  "CC1=C(C(=C(C(=C1O)OC)OC)OC)C(=O)NC2C3C(C(=O)N3C2=O)SC4(C)C",
+        "Vancomycin":   "CC1C(C(CC(O1)OC2C(C(C(OC2OC3=C4C=C5C(=C4OC6=C(C(=CC(=C6)C(C(=O)NC(C(=O)NC5C(=O)O)CC7=CC=C(C=C7)O)NC(=O)C8C(O)C(=C(C=C8)Cl)O)O)O)CO)O)O)O)NC(=O)C9C(O)C(=C(C=C9)Cl)O)(CC(=O)N)O",
+        "Ceftaroline":  "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "Meropenem":    "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
+        "Oxacillin":    "CC1=C(C(=NO1)C2=CC=CC=C2)C(=O)NC3C4C(C(=O)N4C3=O)SC5(C)C",
+    })
+    beta_lactam_smarts: str = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
+    allosteric_residues: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
+    active_site_residues: List[str] = field(default_factory=lambda: ["SER403"])
+    trypsin_active_site_residues: List[str] = field(default_factory=lambda: ["HIS57", "ASP102", "SER195"])
+    ces1_active_site_residues: List[str] = field(default_factory=lambda: ["SER221", "HIS468", "GLU354"])
+    allosteric_box_size: Tuple[float, float, float] = (15.0, 15.0, 15.0)
+    active_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
+    vina_timeout_s: int = 120
+    n_jobs: int = field(default_factory=lambda: max(1, mp.cpu_count() - 1))
+    similarity_threshold: float = 0.4
+    similarity_threshold_relaxed: float = 0.5
+    diversity_min_count: int = 100
+    selectivity_index_threshold: float = 2.0
+    library_target_count: int = 500
+    brics_min_fragment_size: int = 8
+    output_dir: Path = Path("output")
+    top_n: int = 10
+    natural_product_scaffolds: List[str] = field(default_factory=lambda: [
+        "O=c1c(-c2ccc(O)c(O)c2)coc2cc(O)cc(O)c12",
+        "Oc1ccc(C=Cc2ccc(O)cc2)cc1",
+        "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",
+        "COc1cc2c(cc1OC)-c1ccc3cc4c(cc3c1CC2)OCO4",
+        "CC1(C)OC2C3OC(=O)C4C(O1)C2C1OOC3C14",
+        "O=C1OCc2cn3ccc4cccc-4c3cc21",
+        "COc1nc2c3ccccc3n(C)c2cc1C1CCNC1O",
+        "O=C(Nc1ccccc1)c1ccccc1",
+    ])
+    additional_scaffolds: List[str] = field(default_factory=lambda: [
+        "c1ccc2[nH]ccc2c1",
+        "c1ccc2ncccc2c1",
+        "c1ccc2cc[nH]c2c1",
+        "c1ccc2[nH]cnc2c1",
+        "O=c1ccc2ccccc2o1",
+        "c1ccc2nc3ccccc3nc2c1",
+        "c1ccc2c(c1)oc1ccccc12",
+        "c1ccc2c(c1)sc1ccccc12",
+        "c1ccc2c(c1)ccc1c3ccccc3[nH]c21",
+        "c1ccc2c(c1)CCN2",
+        "c1ccc2c(c1)CCc1c-2[nH]c2ccccc12",
+        "COc1ccc2[nH]ccc2c1",
+        "COc1ccccc1OCC(O)CNC(C)C",
+        "CCN(CC)C(=O)c1ccccc1",
+        "O=C(Nc1ccc(O)cc1)c1ccc(O)cc1",
+    ])
+    brics_building_blocks: List[str] = field(default_factory=lambda: [
+        "[1*]c1ccccc1",
+        "[1*]c1ccc(O)cc1",
+        "[1*]c1ccc(Cl)cc1",
+        "[1*]c1ccc(F)cc1",
+        "[1*]c1ccc(Br)cc1",
+        "[1*]c1ccc(OC)cc1",
+        "[1*]c1ccc(C(=O)O)cc1",
+        "[1*]c1ccc(N)cc1",
+        "[1*]c1ccc(C)cc1",
+        "[1*]c1ccc(C(C)C)cc1",
+        "[1*]c1ccc(CF)cc1",
+        "[1*]c1ccc(CN)cc1",
+        "[1*]c1ccc(S(=O)(=O)N)cc1",
+        "[1*]c1ccc(C(=O)N)cc1",
+        "[1*]c1ccc(NC(=O)C)cc1",
+        "[1*]CC(=O)O",
+        "[1*]CCO",
+        "[1*]CCN",
+        "[1*]CC(=O)N",
+        "[1*]CCC(=O)O",
+        "[3*]C=Cc1ccccc1",
+        "[3*]C=Cc1ccc(O)cc1",
+        "[3*]C=Cc1ccc(Cl)cc1",
+        "[3*]CCN(C)C",
+        "[5*]Nc1ccccc1",
+        "[5*]Nc1ccc(O)cc1",
+        "[5*]Nc1ccc(C(=O)O)cc1",
+        "[5*]Nc1ccc(Cl)cc1",
+        "[5*]Nc1ccc(F)cc1",
+        "[5*]Nc1ccc(OC)cc1",
+        "[5*]Nc1ccc(C)cc1",
+        "[5*]Nc1ccc(Br)cc1",
+        "[5*]Nc1ccc(CN)cc1",
+        "[5*]NCC",
+        "[5*]NCCO",
+        "[5*]NCCC(=O)O",
+        "[6*]C(=O)O",
+        "[6*]C(=O)c1ccccc1",
+        "[6*]C(=O)c1ccc(O)cc1",
+        "[6*]C(=O)c1ccc(Cl)cc1",
+        "[6*]C(=O)c1ccc(OC)cc1",
+        "[6*]C(=O)c1ccc(C)cc1",
+        "[6*]C(=O)c1ccc(N)cc1",
+        "[6*]C(=O)CC",
+        "[7*]Cc1ccccc1",
+        "[7*]Cc1ccc(O)cc1",
+        "[7*]Cc1ccc(O)c(OC)c1",
+        "[7*]Cc1ccc(OC)cc1",
+        "[7*]Cc1ccc(Cl)cc1",
+        "[7*]Cc1ccc(F)cc1",
+        "[7*]CC",
+        "[7*]C(C)C",
+        "[16*]c1ccccc1OC",
+        "[16*]c1ccc(C)cc1",
+        "[16*]c1ccc(N)cc1",
+        "[16*]c1ccc(O)cc1",
+    ])
+    control_smiles: Dict[str, str] = field(default_factory=lambda: {
+        "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
+    })
+    conserved_residues: set = field(default_factory=lambda: {"SER403", "LYS406", "TYR446"})
+    mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
+    dry_run: bool = False
 
-# Reference antibiotics for similarity filtering (SMILES)
-REFERENCE_ANTIBIOTICS: Dict[str, str] = {
-    "Methicillin":  "CC1=C(C(=C(C(=C1O)OC)OC)OC)C(=O)NC2C3C(C(=O)N3C2=O)SC4(C)C",
-    "Vancomycin":   "CC1C(C(CC(O1)OC2C(C(C(OC2OC3=C4C=C5C(=C4OC6=C(C(=CC(=C6)C(C(=O)NC(C(=O)NC5C(=O)O)CC7=CC=C(C=C7)O)NC(=O)C8C(O)C(=C(C=C8)Cl)O)O)O)CO)O)O)O)NC(=O)C9C(O)C(=C(C=C9)Cl)O)(CC(=O)N)O",
-    "Ceftaroline":  "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
-    "Meropenem":    "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
-    "Oxacillin":    "CC1=C(C(=NO1)C2=CC=CC=C2)C(=O)NC3C4C(C(=O)N4C3=O)SC5(C)C",
-}
 
-# β-lactam SMARTS to exclude
-BETA_LACTAM_SMARTS: str = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
-
-# Allosteric and Active site residues
-ALLOSTERIC_RESIDUES: List[str] = ["ALA237", "MET241", "TYR159"]
-ACTIVE_SITE_RESIDUES: List[str] = ["SER403"]
-
-# Off-target active site residues (catalytic triads)
-TRYPSIN_ACTIVE_SITE_RESIDUES: List[str] = ["HIS57", "ASP102", "SER195"]
-CES1_ACTIVE_SITE_RESIDUES: List[str] = ["SER221", "HIS468", "GLU354"]
-
-# Grid box defaults (Angstroms)
-ALLOSTERIC_BOX_SIZE: Tuple[float, float, float] = (15.0, 15.0, 15.0)
-ACTIVE_BOX_SIZE: Tuple[float, float, float] = (20.0, 20.0, 20.0)
-
-# Docking
-VINA_TIMEOUT_S: int = 120
-N_JOBS: int = max(1, mp.cpu_count() - 1)
-
-# Similarity
-SIMILARITY_THRESHOLD: float = 0.4
-SIMILARITY_THRESHOLD_RELAXED: float = 0.5
-DIVERSITY_MIN_COUNT: int = 100
-
-# Selectivity
-SELECTIVITY_INDEX_THRESHOLD: float = 2.0
-
-# Library generation
-LIBRARY_TARGET_COUNT: int = 500
-BRICS_MIN_FRAGMENT_SIZE: int = 8
-
-# Outputs
-OUTPUT_DIR: Path = Path("output")
-CSV_REPORT: Path = OUTPUT_DIR / "top_candidates.csv"
-CACHE_PATH: Path = OUTPUT_DIR / "cache.json"
-TOP_N: int = 10
+CONFIG = PipelineConfig()
+np.random.seed(CONFIG.random_seed)
 
 # ── Logger (config deferred to main()) ──
 log = logging.getLogger("AutoAntibiotic")
@@ -154,7 +233,7 @@ log = logging.getLogger("AutoAntibiotic")
 
 def ensure_output_dir() -> None:
     """Create the output directory if it does not exist."""
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def install_missing_package(package: str) -> bool:
@@ -174,13 +253,13 @@ def install_missing_package(package: str) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def load_cache() -> Dict[str, float]:
-    """Load docking result cache from ``CACHE_PATH``.
+    """Load docking result cache from ``CONFIG.output_dir / "cache.json"``.
 
     Returns an empty dict if no cache file exists or if it is corrupt.
     """
-    if CACHE_PATH.exists():
+    if CONFIG.output_dir / "cache.json".exists():
         try:
-            with open(CACHE_PATH) as f:
+            with open(CONFIG.output_dir / "cache.json") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             log.warning("  ⚠  Cache file corrupt; starting fresh.")
@@ -188,9 +267,9 @@ def load_cache() -> Dict[str, float]:
 
 
 def save_cache(cache: Dict[str, float]) -> None:
-    """Persist the docking result cache to ``CACHE_PATH``."""
+    """Persist the docking result cache to ``CONFIG.output_dir / "cache.json"``."""
     ensure_output_dir()
-    with open(CACHE_PATH, "w") as f:
+    with open(CONFIG.output_dir / "cache.json", "w") as f:
         json.dump(cache, f, indent=2, sort_keys=True)
 
 
@@ -507,7 +586,7 @@ def run_redocking_validation(
     ]
 
     try:
-        subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
+        subprocess.run(vina_cmd, capture_output=True, timeout=CONFIG.vina_timeout_s)
     except subprocess.TimeoutExpired:
         log.warning("  ⚠  Vina redocking timed out (>120s).")
         return False, None
@@ -824,10 +903,10 @@ def prepare_targets(
     log.info("─── Phase 1: Target Preparation & Centroid Calculation ───")
     result: Dict[str, Any] = {}
 
-    holo_path = fetch_structure(PDB_IDS["PBP2a_holo"], pdb_dir)
-    apo_path = fetch_structure(PDB_IDS["PBP2a_apo"], pdb_dir)
-    trypsin_path = fetch_structure(PDB_IDS["trypsin"], pdb_dir)
-    ces1_path = fetch_structure(PDB_IDS["CES1"], pdb_dir)
+    holo_path = fetch_structure(CONFIG.pdb_ids["PBP2a_holo"], pdb_dir)
+    apo_path = fetch_structure(CONFIG.pdb_ids["PBP2a_apo"], pdb_dir)
+    trypsin_path = fetch_structure(CONFIG.pdb_ids["trypsin"], pdb_dir)
+    ces1_path = fetch_structure(CONFIG.pdb_ids["CES1"], pdb_dir)
 
     result["holo_pdb"] = holo_path
 
@@ -847,11 +926,11 @@ def prepare_targets(
 
     cleaned_pdb = pbp2a_pdbqt.replace(".pdbqt", ".pdb")
     log.info("  Computing allosteric site centroid (ALA237, MET241, TYR159)…")
-    allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES)
+    allosteric_center = compute_residue_centroid(cleaned_pdb, CONFIG.allosteric_residues)
     log.info(f"    Allosteric site center: {allosteric_center}")
 
     log.info("  Computing active site centroid (SER403)…")
-    active_center = compute_residue_centroid(cleaned_pdb, ACTIVE_SITE_RESIDUES)
+    active_center = compute_residue_centroid(cleaned_pdb, CONFIG.active_site_residues)
     log.info(f"    Active site center: {active_center}")
 
     result["PBP2a"] = {
@@ -867,7 +946,7 @@ def prepare_targets(
         deps=deps,
     )
     tryp_center = compute_residue_centroid(
-        trypsin_path, TRYPSIN_ACTIVE_SITE_RESIDUES,
+        trypsin_path, CONFIG.trypsin_active_site_residues,
     )
     log.info(f"    Trypsin active site center: {tryp_center}")
     result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
@@ -879,7 +958,7 @@ def prepare_targets(
         deps=deps,
     )
     ces1_center = compute_residue_centroid(
-        ces1_path, CES1_ACTIVE_SITE_RESIDUES,
+        ces1_path, CONFIG.ces1_active_site_residues,
     )
     log.info(f"    CES1 active site center: {ces1_center}")
     result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
@@ -888,8 +967,8 @@ def prepare_targets(
     os.makedirs(grid_dir, exist_ok=True)
 
     for site_name, center, box in [
-        ("allosteric", allosteric_center, ALLOSTERIC_BOX_SIZE),
-        ("active", active_center, ACTIVE_BOX_SIZE),
+        ("allosteric", allosteric_center, CONFIG.allosteric_box_size),
+        ("active", active_center, CONFIG.active_box_size),
     ]:
         cfg_path = os.path.join(grid_dir, f"grid_{site_name}.txt")
         with open(cfg_path, "w") as f:
@@ -956,7 +1035,7 @@ class CompoundRecord:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # 8 validated natural-product-inspired scaffolds (SMILES)
-NATURAL_PRODUCT_SCAFFOLDS: List[str] = [
+CONFIG.natural_product_scaffolds: List[str] = [
     "O=c1c(-c2ccc(O)c(O)c2)coc2cc(O)cc(O)c12",                 # Quercetin (flavonoid)
     "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                # Resveratrol (stilbenoid)
     "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin (diarylheptanoid)
@@ -968,7 +1047,7 @@ NATURAL_PRODUCT_SCAFFOLDS: List[str] = [
 ]
 
 # 15 drug-like scaffolds for BRICS decomposition (modified to include BRICS-valid bonds)
-ADDITIONAL_SCAFFOLDS: List[str] = [
+CONFIG.additional_scaffolds: List[str] = [
     "c1ccc2[nH]ccc2c1",                                         # Indole
     "c1ccc2ncccc2c1",                                           # Isoquinoline
     "c1ccc2cc[nH]c2c1",                                         # Indole (alternative)
@@ -990,7 +1069,7 @@ ADDITIONAL_SCAFFOLDS: List[str] = [
 # These ensure robust recombination when scaffold decomposition yields few fragments.
 # Bond-type mapping: [1*,2*,3*]=C, [4*,5*]=N, [6*,7*]=O, [8*]=S, [16*]=aromatic C
 # A diverse set of ~50 blocks yields 300+ valid recombination products.
-BRICS_BUILDING_BLOCKS: List[str] = [
+CONFIG.brics_building_blocks: List[str] = [
     # [1*] Carbon-attachment fragments (20)
     "[1*]c1ccccc1",
     "[1*]c1ccc(O)cc1",
@@ -1056,7 +1135,7 @@ BRICS_BUILDING_BLOCKS: List[str] = [
 ]
 
 # Positive control SMILES (to verify pipeline)
-CONTROL_SMILES: Dict[str, str] = {
+CONFIG.control_smiles: Dict[str, str] = {
     "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
     "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
 }
@@ -1086,7 +1165,7 @@ def _brics_recombination(
     frag_mols: List[Chem.Mol],
     target_count: int,
     seen_smiles: set,
-    seed: int = RANDOM_SEED,
+    seed: int = CONFIG.random_seed,
 ) -> Tuple[List[CompoundRecord], set]:
     """
     Recombine BRICS fragments using ``BRICSBuild``.
@@ -1103,7 +1182,7 @@ def _brics_recombination(
 
     # BRICSBuild may generate very many products if given many fragments;
     # we cap effort so it does not run forever.
-    max_products = target_count * 4
+    max_products = target_count * 20
     n_produced = 0
 
     # Shuffle fragment order for stochasticity
@@ -1142,8 +1221,8 @@ def _brics_recombination(
 
 
 def generate_candidate_library(
-    target_count: int = LIBRARY_TARGET_COUNT,
-    seed: int = RANDOM_SEED,
+    target_count: int = CONFIG.library_target_count,
+    seed: int = CONFIG.random_seed,
 ) -> List[CompoundRecord]:
     """
     Phase 2.1 — Library Generation via BRICS fragment recombination.
@@ -1162,7 +1241,7 @@ def generate_candidate_library(
     """
     log.info("─── Phase 2: Library Generation ───")
 
-    all_scaffolds: List[str] = NATURAL_PRODUCT_SCAFFOLDS + ADDITIONAL_SCAFFOLDS
+    all_scaffolds: List[str] = CONFIG.natural_product_scaffolds + CONFIG.additional_scaffolds
     scaffold_mols: List[Chem.Mol] = []
     for smi in all_scaffolds:
         mol = _validate_mol(smi)
@@ -1171,7 +1250,7 @@ def generate_candidate_library(
 
     log.info(f"  Loaded {len(scaffold_mols)} / {len(all_scaffolds)} valid scaffolds.")
 
-    if not scaffold_mols and not BRICS_BUILDING_BLOCKS:
+    if not scaffold_mols and not CONFIG.brics_building_blocks:
         log.error("  ✗  No valid scaffolds or building blocks. Aborting library generation.")
         return []
 
@@ -1179,10 +1258,10 @@ def generate_candidate_library(
     decomposed_frags: set = set()
     for mol in scaffold_mols:
         try:
-            fragments = BRICS.BRICSDecompose(mol, minFragmentSize=BRICS_MIN_FRAGMENT_SIZE)
+            fragments = BRICS.BRICSDecompose(mol, minFragmentSize=CONFIG.brics_min_fragment_size)
             for frag_smi in fragments:
                 frag_mol = _validate_mol(frag_smi)
-                if frag_mol is not None and _count_atoms(frag_mol) >= BRICS_MIN_FRAGMENT_SIZE:
+                if frag_mol is not None and _count_atoms(frag_mol) >= CONFIG.brics_min_fragment_size:
                     decomposed_frags.add(frag_smi)
         except Exception:
             continue
@@ -1191,7 +1270,7 @@ def generate_candidate_library(
 
     # ── Add pre-built BRICS building blocks ──
     all_building_blocks: set = set()
-    for smi in BRICS_BUILDING_BLOCKS:
+    for smi in CONFIG.brics_building_blocks:
         mol = _validate_mol(smi)
         if mol is not None:
             all_building_blocks.add(smi)
@@ -1239,41 +1318,8 @@ def generate_candidate_library(
             "Using scaffold enumeration only."
         )
 
-    # ── If still below target, attempt random fragment pairing via linkers ──
-    if len(records) < target_count and len(frag_mols) >= 2:
-        log.info("  Supplementing with fragment-linking enumeration…")
-        rng = np.random.default_rng(seed)
-        max_extra = target_count - len(records)
-        extra_count = 0
-        attempts = 0
-        while extra_count < max_extra and attempts < max_extra * 10:
-            attempts += 1
-            i, j = rng.integers(0, len(frag_mols)), rng.integers(0, len(frag_mols))
-            if i == j:
-                continue
-            try:
-                combined = Chem.CombineMols(frag_mols[i], frag_mols[j])
-                # Link via BRICSBuild
-                for product in itertools.islice(BRICS.BRICSBuild([combined]), 1):
-                    if product is None:
-                        continue
-                    Chem.SanitizeMol(product)
-                    smi = Chem.MolToSmiles(product)
-                    if smi in seen_smiles:
-                        continue
-                    seen_smiles.add(smi)
-                    records.append(CompoundRecord(
-                        compound_id=f"AA-{len(records):04d}",
-                        smiles=smi,
-                        mol=product,
-                    ))
-                    extra_count += 1
-                    break
-            except Exception:
-                continue
-
     # ── Add positive controls ──
-    for name, smi in CONTROL_SMILES.items():
+    for name, smi in CONFIG.control_smiles.items():
         mol = _validate_mol(smi)
         if mol is None:
             continue
@@ -1298,7 +1344,7 @@ def generate_candidate_library(
 
 def apply_filters(
     records: List[CompoundRecord],
-    similarity_threshold: float = SIMILARITY_THRESHOLD,
+    similarity_threshold: float = CONFIG.similarity_threshold,
 ) -> List[CompoundRecord]:
     """
     Phase 2.2 — Apply structural, similarity, ADMET, and PAINS filters.
@@ -1324,14 +1370,14 @@ def apply_filters(
     log.info("─── Phase 2: Filtering ───")
 
     ref_mols: Dict[str, Any] = {}
-    for name, smi in REFERENCE_ANTIBIOTICS.items():
+    for name, smi in CONFIG.reference_antibiotics.items():
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             ref_mols[name] = AllChem.GetMorganFingerprintAsBitVect(
                 mol, radius=2, nBits=2048,
             )
 
-    lactam_pattern = Chem.MolFromSmarts(BETA_LACTAM_SMARTS)
+    lactam_pattern = Chem.MolFromSmarts(CONFIG.beta_lactam_smarts)
 
     pains_params = FilterCatalogParams()
     pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
@@ -1402,12 +1448,12 @@ def apply_filters(
     log.info(f"  PAINS filter: {skipped_pains} removed.")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
-    if len(passed) < DIVERSITY_MIN_COUNT and similarity_threshold < SIMILARITY_THRESHOLD_RELAXED:
+    if len(passed) < CONFIG.diversity_min_count and similarity_threshold < CONFIG.similarity_threshold_relaxed:
         log.warning(
-            f"  Only {len(passed)} compounds passed strict filters (< {DIVERSITY_MIN_COUNT}). "
-            f"Relaxing similarity threshold to {SIMILARITY_THRESHOLD_RELAXED} and re-running."
+            f"  Only {len(passed)} compounds passed strict filters (< {CONFIG.diversity_min_count}). "
+            f"Relaxing similarity threshold to {CONFIG.similarity_threshold_relaxed} and re-running."
         )
-        return apply_filters(records, similarity_threshold=SIMILARITY_THRESHOLD_RELAXED)
+        return apply_filters(records, similarity_threshold=CONFIG.similarity_threshold_relaxed)
 
     log.info("─── Phase 2 complete ───")
     return passed
@@ -1479,12 +1525,19 @@ def _run_vina_docking(
     output_pdbqt: str,
     center: np.ndarray,
     box_size: Tuple[float, float, float],
-    timeout: int = VINA_TIMEOUT_S,
+    timeout: int = CONFIG.vina_timeout_s,
 ) -> Optional[float]:
     """
     Run a single Vina docking job. Returns best binding energy (kcal/mol)
     or None on failure.
+
+    When ``CONFIG.dry_run`` is ``True``, the Vina subprocess is skipped
+    and a mock random energy in the range [-10.0, -5.0] kcal/mol is returned,
+    enabling end-to-end pipeline testing without the Vina binary.
     """
+    if CONFIG.dry_run:
+        return float(np.random.uniform(-10.0, -5.0))
+
     cmd = [
         "vina",
         "--receptor", receptor_pdbqt,
@@ -1602,6 +1655,28 @@ def dock_compound(
     return energy
 
 
+def _worker_dock(
+    cid: str, smiles: str,
+    receptor_pdbqt: str, center: np.ndarray,
+    box_size: Tuple[float, float, float],
+    work_dir: str, tag: str,
+) -> Tuple[str, Optional[float]]:
+    """Module-level worker for :func:`_parallel_dock`.
+
+    Reconstructs Mol from SMILES locally, docks, and returns energy.
+    Defined at module level so ``ProcessPoolExecutor`` can pickle it.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return cid, None
+    rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
+    energy = dock_compound(
+        rec, receptor_pdbqt, center, box_size,
+        work_dir, tag, cache=None, use_cache=False,
+    )
+    return cid, energy
+
+
 def _parallel_dock(
     items: List[Tuple[str, str]],
     receptor_pdbqt: str,
@@ -1609,7 +1684,7 @@ def _parallel_dock(
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str,
-    n_jobs: int = N_JOBS,
+    n_jobs: int = CONFIG.n_jobs,
     cache: Optional[Dict[str, float]] = None,
     use_cache: bool = False,
 ) -> List[Tuple[str, Optional[float]]]:
@@ -1635,24 +1710,20 @@ def _parallel_dock(
         List of ``(compound_id, energy)`` tuples.
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
+    from functools import partial
 
     total = len(items)
     results: List[Tuple[str, Optional[float]]] = []
     submitted = 0
 
-    def _worker(
-        cid: str, smiles: str,
-    ) -> Tuple[str, Optional[float]]:
-        """Worker function: reconstruct Mol from SMILES, dock, return energy."""
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            return cid, None
-        rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
-        energy = dock_compound(
-            rec, receptor_pdbqt, center, box_size,
-            work_dir, tag, cache=None, use_cache=False,
-        )
-        return cid, energy
+    worker_fn = partial(
+        _worker_dock,
+        receptor_pdbqt=receptor_pdbqt,
+        center=center,
+        box_size=box_size,
+        work_dir=work_dir,
+        tag=tag,
+    )
 
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
         futures = {}
@@ -1661,7 +1732,7 @@ def _parallel_dock(
             if use_cache and cache is not None and cache_key in cache:
                 results.append((cid, cache[cache_key]))
                 continue
-            futures[pool.submit(_worker, cid, smiles)] = cid
+            futures[pool.submit(worker_fn, cid, smiles)] = cid
             submitted += 1
 
         done = 0
@@ -1678,7 +1749,7 @@ def _parallel_dock(
 def _compute_shape_fallback_score(
     mol: Chem.Mol,
     ref_mol: Chem.Mol,
-    seed: int = RANDOM_SEED,
+    seed: int = CONFIG.random_seed,
 ) -> Optional[float]:
     """
     Fallback scoring via RDKit Shape Protrude Distance.
@@ -1758,7 +1829,7 @@ def screen_library(
         items = [(r.compound_id, r.smiles) for r in records]
         allosteric_results = _parallel_dock(
             items, pb2pa["pdbqt"],
-            allosteric_center, ALLOSTERIC_BOX_SIZE,
+            allosteric_center, CONFIG.allosteric_box_size,
             work_dir, "allosteric",
             cache=cache, use_cache=use_cache,
         )
@@ -1780,7 +1851,7 @@ def screen_library(
         active_items = [(r.compound_id, r.smiles) for r in top50]
         active_results = _parallel_dock(
             active_items, pb2pa["pdbqt"],
-            active_center, ACTIVE_BOX_SIZE,
+            active_center, CONFIG.active_box_size,
             work_dir, "active",
             cache=cache, use_cache=use_cache,
         )
@@ -1821,12 +1892,12 @@ def screen_library(
                 pass
 
         if ref_mol is None:
-            ref_smi = list(CONTROL_SMILES.values())[0]
+            ref_smi = list(CONFIG.control_smiles.values())[0]
             ref_mol = Chem.MolFromSmiles(ref_smi)
 
         if ref_mol is None:
             log.error("  Cannot obtain reference molecule for shape scoring.")
-            return records[:TOP_N]
+            return records[:CONFIG.top_n]
 
         total = len(records)
         for i, rec in enumerate(records):
@@ -1851,7 +1922,7 @@ def screen_library(
         ranked = [r for r in records if r.shape_score is not None]
         ranked.sort(key=lambda r: r.shape_score)
 
-    top10 = ranked[:TOP_N]
+    top10 = ranked[:CONFIG.top_n]
     log.info(f"  Top {len(top10)} candidates selected.")
     for i, r in enumerate(top10):
         energy_str = (
@@ -1895,9 +1966,6 @@ def compute_selectivity_index(
         return 0.0
     return abs(pb2pa_energy) / abs(human_avg_energy) if abs(human_avg_energy) > 1e-6 else 0.0
 
-
-CONSERVED_RESIDUES: set = {"SER403", "LYS406", "TYR446"}
-MUTABLE_RESIDUES: set = {"G246", "N146"}
 
 
 def profile_resistance_risk(
@@ -2022,9 +2090,9 @@ def analyze_selectivity_and_resistance(
         si = compute_selectivity_index(pb2pa_best, human_avg)
         rec.selectivity_index = si
 
-        if si < SELECTIVITY_INDEX_THRESHOLD:
+        if si < CONFIG.selectivity_index_threshold:
             log.warning(
-                f"  {rec.compound_id}: Low selectivity (SI = {si:.2f} < {SELECTIVITY_INDEX_THRESHOLD}). "
+                f"  {rec.compound_id}: Low selectivity (SI = {si:.2f} < {CONFIG.selectivity_index_threshold}). "
                 "Flagged for off-target risk."
             )
         else:
@@ -2036,7 +2104,7 @@ def analyze_selectivity_and_resistance(
             rec, work_dir,
             pb2pa["pdbqt"],
             pb2pa["allosteric_center"],
-            ALLOSTERIC_BOX_SIZE,
+            CONFIG.allosteric_box_size,
         )
 
     log.info("─── Phase 4 complete ───")
@@ -2093,9 +2161,9 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
         })
 
     df = pd.DataFrame(rows)
-    df.to_csv(CSV_REPORT, index=False)
-    log.info(f"  CSV report saved: {CSV_REPORT}")
-    return str(CSV_REPORT)
+    df.to_csv(CONFIG.output_dir / "top_candidates.csv", index=False)
+    log.info(f"  CSV report saved: {CONFIG.output_dir / "top_candidates.csv"}")
+    return str(CONFIG.output_dir / "top_candidates.csv")
 
 
 def generate_images(top3: List[CompoundRecord]) -> List[str]:
@@ -2112,7 +2180,7 @@ def generate_images(top3: List[CompoundRecord]) -> List[str]:
                 continue
             rec.mol = mol
 
-        img_path = OUTPUT_DIR / f"top{i + 1}_{rec.compound_id}.png"
+        img_path = CONFIG.output_dir / f"top{i + 1}_{rec.compound_id}.png"
         try:
             drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
             drawer.DrawMolecule(rec.mol)
@@ -2161,8 +2229,8 @@ def generate_html_report(
         ax.scatter(energies, sis, c="steelblue", s=60, edgecolors="black")
         for x, y, cid in zip(energies, sis, cids):
             ax.annotate(cid, (x, y), textcoords="offset points", xytext=(5, 5), fontsize=7)
-        ax.axhline(y=SELECTIVITY_INDEX_THRESHOLD, color="red", linestyle="--", alpha=0.6,
-                   label=f"SI threshold = {SELECTIVITY_INDEX_THRESHOLD}")
+        ax.axhline(y=CONFIG.selectivity_index_threshold, color="red", linestyle="--", alpha=0.6,
+                   label=f"SI threshold = {CONFIG.selectivity_index_threshold}")
         ax.set_xlabel("Allosteric Binding Energy (kcal/mol)", fontsize=12)
         ax.set_ylabel("Selectivity Index", fontsize=12)
         ax.set_title("Top Candidates: Binding Energy vs Selectivity", fontsize=14)
@@ -2291,7 +2359,7 @@ def print_summary(
     n_docked = sum(1 for r in top10 if r.pb2pa_allosteric_energy is not None)
     n_selectivity_pass = sum(
         1 for r in top10
-        if r.selectivity_index is not None and r.selectivity_index >= SELECTIVITY_INDEX_THRESHOLD
+        if r.selectivity_index is not None and r.selectivity_index >= CONFIG.selectivity_index_threshold
     )
 
     log.info("=" * 60)
@@ -2308,7 +2376,7 @@ def print_summary(
     else:
         log.info("  Redocking RMSD:                N/A")
     log.info(f"  Redocking validated:           {validation_ok}")
-    log.info(f"  CSV report:                    {CSV_REPORT}")
+    log.info(f"  CSV report:                    {CONFIG.output_dir / "top_candidates.csv"}")
     log.info("=" * 60)
 
 
@@ -2322,10 +2390,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     Usage::
 
-        python discovery_pipeline.py [--use-cache]
+        python discovery_pipeline.py [--use-cache] [--dry-run]
 
     The ``--use-cache`` flag skips re-docking of any ``(compound_id, target)``
     pair that already has a result in ``output/cache.json``.
+    The ``--dry-run`` flag limits the library to 10 compounds and returns
+    mock docking energies so the pipeline can be tested end-to-end
+    without AutoDock Vina.
     """
     parser = argparse.ArgumentParser(
         description="AutoAntibiotic Discovery Pipeline v3.2",
@@ -2334,7 +2405,15 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--use-cache", action="store_true",
         help="Skip re-docking if cache.json has results for a (compound_id, target) pair.",
     )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Limit library to 10 compounds and use mock docking energies.",
+    )
     args = parser.parse_args(argv)
+
+    if args.dry_run:
+        CONFIG.dry_run = True
+        CONFIG.library_target_count = 10
 
     ensure_output_dir()
     logging.basicConfig(
@@ -2343,7 +2422,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(OUTPUT_DIR / "pipeline.log"),
+            logging.FileHandler(CONFIG.output_dir / "pipeline.log"),
         ],
     )
 
@@ -2357,8 +2436,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     deps = verify_dependencies()
 
-    work_dir = str(OUTPUT_DIR / "workdir")
-    pdb_dir = str(OUTPUT_DIR / "pdb")
+    work_dir = str(CONFIG.output_dir / "workdir")
+    pdb_dir = str(CONFIG.output_dir / "pdb")
     os.makedirs(work_dir, exist_ok=True)
 
     # ── Phase 1: Target preparation ──
@@ -2374,7 +2453,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     # ── Phase 2: Library generation & filtering ──
-    all_records = generate_candidate_library(target_count=500)
+    all_records = generate_candidate_library(target_count=CONFIG.library_target_count)
     n_total = len(all_records)
 
     filtered = apply_filters(all_records)
@@ -2409,7 +2488,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     top50 = scored[:50]
 
-    generate_html_report(top10, top50, OUTPUT_DIR)
+    generate_html_report(top10, top50, CONFIG.output_dir)
 
     if use_cache and cache is not None:
         save_cache(cache)
