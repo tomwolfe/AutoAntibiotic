@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import os
 import shutil
 from concurrent.futures import ProcessPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
 from .config import CONFIG, CompoundRecord
-from .io_utils import log, parse_vina_energy, run_tool
+from .io_utils import CacheManager, log, parse_vina_energy, run_tool
+
+_CacheLike = Optional[Union[CacheManager, Dict[str, float]]]
 
 try:
     from tqdm import tqdm as _tqdm
@@ -26,13 +29,14 @@ def _extract_native_ligand_from_holo(
     output_ligand_smi: str,
     output_ligand_pdbqt: str,
 ) -> Optional[str]:
-    """Parse the holo structure (6TKO), locate the co-crystallised ligand,
+    """Parse the holo structure, locate the co-crystallised ligand,
     write its SMILES to *output_ligand_smi* and its PDBQT to *output_ligand_pdbqt*."""
+    holo_pdb_id = CONFIG.pdb_ids["PBP2a_holo"]
     try:
         from Bio.PDB import PDBIO, PDBParser, Select
 
         parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("6TKO", holo_pdb_path)
+        struct = parser.get_structure(holo_pdb_id, holo_pdb_path)
 
         ligand_residues: list = []
         for model in struct:
@@ -47,7 +51,7 @@ def _extract_native_ligand_from_holo(
                     ligand_residues.append((chain.get_id(), residue))
 
         if not ligand_residues:
-            log.warning("  ⚠  No hetero-ligand found in 6TKO.")
+            log.warning(f"  ⚠  No hetero-ligand found in {holo_pdb_id}.")
             return None
 
         chain_id, lig_res = ligand_residues[0]
@@ -385,7 +389,7 @@ def dock_compound(
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str = "",
-    cache: Optional[Dict[str, float]] = None,
+    cache: _CacheLike = None,
     use_cache: bool = False,
 ) -> Optional[float]:
     """Full docking pipeline for a single compound: PDBQT prep → Vina → parse."""
@@ -428,18 +432,22 @@ def dock_compound(
 
 
 def _worker_dock_wrapper(
-    args: Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool],
+    args: Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int],
 ) -> Tuple[str, Optional[float]]:
     """Module-level worker for :func:`_parallel_dock` (pool.map compatible).
 
     The per-job wall-clock timeout is enforced by :func:`run_tool` via
     ``subprocess.run(timeout=...)``, so no additional alarm mechanism is
     needed here.
-    """
-    cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run = args
 
+    Accepts a seed value so that dry-run mode produces deterministic
+    results across workers.
+    """
+    cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run, seed = args
+
+    rng = np.random.default_rng(seed)
     if dry_run:
-        return cid, float(np.random.uniform(-10.0, -5.0))
+        return cid, float(rng.uniform(-10.0, -5.0))
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return cid, None
@@ -459,10 +467,17 @@ def _parallel_dock(
     work_dir: str,
     tag: str,
     n_jobs: int = CONFIG.n_jobs,
-    cache: Optional[Dict[str, float]] = None,
+    cache: _CacheLike = None,
     use_cache: bool = False,
 ) -> List[Tuple[str, Optional[float]]]:
-    """Dock a list of compounds in parallel, returning (compound_id, energy)."""
+    """Dock a list of compounds in parallel with batched processing.
+
+    Compounds are processed in batches (:attr:`CONFIG.batch_size_docking`,
+    default 75) to allow periodic garbage collection and prevent memory
+    bloat in worker processes.
+
+    Returns list of ``(compound_id, energy)`` tuples.
+    """
     results: List[Tuple[str, Optional[float]]] = []
     to_dock: List[Tuple[str, str, str]] = []
 
@@ -470,7 +485,8 @@ def _parallel_dock(
         smiles_md5 = hashlib.md5(smiles.encode("utf-8")).hexdigest()
         cache_key = f"{smiles_md5}_{tag}"
         if use_cache and cache is not None and cache_key in cache:
-            results.append((cid, cache[cache_key]))
+            cached_val = cache[cache_key]
+            results.append((cid, cached_val))
             log.debug(f"    Cache hit: {cid} ({tag})")
         else:
             to_dock.append((cid, smiles, cache_key))
@@ -479,27 +495,34 @@ def _parallel_dock(
         return results
 
     n_jobs_eff = min(n_jobs, len(to_dock))
-    chunksize_val = max(1, len(to_dock) // (n_jobs_eff * 4))
+    batch_size = CONFIG.batch_size_docking
 
-    work_items: List[Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool]] = [
-        (cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, CONFIG.dry_run)
-        for cid, smiles, _ in to_dock
-    ]
+    for batch_start in range(0, len(to_dock), batch_size):
+        batch = to_dock[batch_start:batch_start + batch_size]
 
-    with ProcessPoolExecutor(max_workers=n_jobs_eff) as pool:
-        mapped = list(
-            _tqdm(
-                pool.map(_worker_dock_wrapper, work_items, chunksize=chunksize_val),
-                total=len(work_items),
-                desc=f"  Docking {tag}",
-                disable=not _HAVE_TQDM,
+        worker_seed = CONFIG.random_seed + batch_start
+        work_items: List[Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int]] = [
+            (cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, CONFIG.dry_run, worker_seed)
+            for cid, smiles, _ in batch
+        ]
+
+        chunksize_val = max(1, len(work_items) // (n_jobs_eff * 4))
+        with ProcessPoolExecutor(max_workers=n_jobs_eff) as pool:
+            mapped = list(
+                _tqdm(
+                    pool.map(_worker_dock_wrapper, work_items, chunksize=chunksize_val),
+                    total=len(work_items),
+                    desc=f"  Docking {tag} batch {batch_start // batch_size + 1}",
+                    disable=not _HAVE_TQDM,
+                )
             )
-        )
 
-    for (cid, _, cache_key), (_, energy) in zip(to_dock, mapped):
-        results.append((cid, energy))
-        if use_cache and cache is not None:
-            cache[cache_key] = energy
+        for (cid, _, cache_key), (_, energy) in zip(batch, mapped):
+            results.append((cid, energy))
+            if use_cache and cache is not None:
+                cache[cache_key] = energy
+
+        gc.collect()
 
     return results
 
@@ -549,7 +572,7 @@ def screen_library(
     targets: Dict[str, Any],
     work_dir: str,
     deps: Dict[str, Any],
-    cache: Optional[Dict[str, float]] = None,
+    cache: _CacheLike = None,
     use_cache: bool = False,
 ) -> List[CompoundRecord]:
     """Phase 3 — Virtual screening.
@@ -587,7 +610,7 @@ def screen_library(
         scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
         scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
 
-        top50 = scored[:50]
+        top50 = scored[:CONFIG.top_n_for_active]
         log.info(f"  Docking top {len(top50)} compounds against active site…")
 
         active_items = [(r.compound_id, r.smiles) for r in top50]

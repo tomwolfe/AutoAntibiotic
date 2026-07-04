@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import itertools
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 from rdkit import Chem
@@ -31,6 +31,8 @@ try:
 except ImportError:
     _compute_sa_score = None
     _HAVE_SA_SCORE = False
+
+_HAVE_TOX_ALERTS = True
 
 
 def _count_atoms(mol: Chem.Mol) -> int:
@@ -80,51 +82,48 @@ def _brics_recombination(
 
     pool_mult = CONFIG.diversity_pool_multiplier
     max_products = target_count * pool_mult * 4
-    n_produced = 0
+    target_pool = target_count * pool_mult
 
     shuffled = list(frag_mols)
     rng.shuffle(shuffled)
 
     builder = BRICS.BRICSBuild(shuffled)
 
-    pool_records: List[CompoundRecord] = []
-    target_pool = target_count * pool_mult
+    # Generator-based pool building — yields records one at a time
+    def _product_generator():
+        n_produced = 0
+        for product in itertools.islice(builder, max_products):
+            if product is None:
+                continue
+            try:
+                Chem.SanitizeMol(product)
+                smi = Chem.MolToSmiles(product)
+            except Exception:
+                continue
+            if smi in seen_smiles:
+                continue
+            ring_info = product.GetRingInfo()
+            if ring_info.NumRings() == 0:
+                continue
+            seen_smiles.add(smi)
+            rec = CompoundRecord(
+                compound_id=f"AA-{n_produced:04d}",
+                smiles=smi,
+                mol=product,
+            )
+            n_produced += 1
+            yield rec
+            if n_produced >= target_pool:
+                break
+
     iterator = _tqdm(
-        itertools.islice(builder, max_products),
+        _product_generator(),
         desc="  BRICS recombination",
-        total=min(max_products, target_pool * 4),
+        total=target_pool,
         disable=not _HAVE_TQDM,
     )
-    for product in iterator:
-        if product is None:
-            continue
-        try:
-            Chem.SanitizeMol(product)
-            smi = Chem.MolToSmiles(product)
-        except Exception:
-            continue
 
-        if smi in seen_smiles:
-            continue
-
-        ring_info = product.GetRingInfo()
-        if ring_info.NumRings() == 0:
-            continue
-
-        seen_smiles.add(smi)
-
-        pool_records.append(CompoundRecord(
-            compound_id=f"AA-{n_produced:04d}",
-            smiles=smi,
-            mol=product,
-        ))
-        n_produced += 1
-
-        if n_produced >= target_pool:
-            break
-
-        if n_produced % 100 == 0 and not _HAVE_TQDM:
-            log.info(f"  BRICS pool: {n_produced} / {target_pool}…")
+    pool_records: List[CompoundRecord] = list(iterator)
 
     if not pool_records:
         return [], seen_smiles
@@ -155,16 +154,15 @@ def _brics_recombination(
     return records, seen_smiles
 
 
-def generate_candidate_library(
-    target_count: int = CONFIG.library_target_count,
-    seed: int = CONFIG.random_seed,
-) -> List[CompoundRecord]:
-    """Phase 2.1 — Library Generation via BRICS fragment recombination.
+def _generate_records(
+    target_count: int,
+    seed: int,
+) -> Iterator[CompoundRecord]:
+    """Generator that yields CompoundRecord objects for the library.
 
-    Returns a list of CompoundRecord objects with compound_id, smiles, and mol populated.
+    Used internally by :func:`generate_candidate_library` to allow
+    streaming when the target count is large.
     """
-    log.info("─── Phase 2: Library Generation ───")
-
     all_scaffolds: List[str] = CONFIG.natural_product_scaffolds + CONFIG.additional_scaffolds
     scaffold_mols: List[Chem.Mol] = []
     for smi in all_scaffolds:
@@ -176,7 +174,7 @@ def generate_candidate_library(
 
     if not scaffold_mols and not CONFIG.brics_building_blocks:
         log.error("  ✗  No valid scaffolds or building blocks. Aborting library generation.")
-        return []
+        return
 
     decomposed_frags: set = set()
     for mol in scaffold_mols:
@@ -209,7 +207,7 @@ def generate_candidate_library(
     log.info(f"  Total BRICS-compatible fragments: {len(frag_mols)}")
 
     seen_smiles: set = set()
-    records: List[CompoundRecord] = []
+    scaffold_count = 0
 
     for smi in all_scaffolds:
         mol = _validate_mol(smi)
@@ -219,17 +217,19 @@ def generate_candidate_library(
         if canon in seen_smiles:
             continue
         seen_smiles.add(canon)
-        records.append(CompoundRecord(
-            compound_id=f"SCAFFOLD_{len(records):04d}",
+        yield CompoundRecord(
+            compound_id=f"SCAFFOLD_{scaffold_count:04d}",
             smiles=canon,
             mol=mol,
-        ))
+        )
+        scaffold_count += 1
 
     if len(frag_mols) >= 2:
         recon_records, seen_smiles = _brics_recombination(
             frag_mols, target_count, seen_smiles, seed,
         )
-        records.extend(recon_records)
+        for rec in recon_records:
+            yield rec
         log.info(f"  BRICS recombination yielded {len(recon_records)} novel compounds.")
     else:
         log.warning(
@@ -243,35 +243,65 @@ def generate_candidate_library(
             continue
         canon = Chem.MolToSmiles(mol)
         if canon not in seen_smiles:
-            records.append(CompoundRecord(
+            yield CompoundRecord(
                 compound_id=f"CTRL_{name}",
                 smiles=canon,
                 mol=mol,
-            ))
+            )
             seen_smiles.add(canon)
 
+
+def generate_candidate_library(
+    target_count: int = CONFIG.library_target_count,
+    seed: int = CONFIG.random_seed,
+) -> Union[List[CompoundRecord], Iterator[CompoundRecord]]:
+    """Phase 2.1 — Library Generation via BRICS fragment recombination.
+
+    Returns a list of CompoundRecord objects. When *target_count* exceeds
+    :attr:`CONFIG.library_generator_threshold` (default 1000), returns a
+    generator that yields records lazily to reduce memory pressure.
+    """
+    log.info("─── Phase 2: Library Generation ───")
+
+    use_generator = target_count > CONFIG.library_generator_threshold
+    gen = _generate_records(target_count, seed)
+
+    if use_generator:
+        log.info(f"  Streaming generator mode (target > {CONFIG.library_generator_threshold} compounds).")
+        return gen
+
+    records = list(gen)
     log.info(f"  Library generation complete: {len(records)} compounds.")
     if len(records) < 300:
         log.warning(
             f"  ⚠  Only {len(records)} compounds generated (target ≥300). "
             "Consider adding more scaffolds or building blocks."
         )
-
     return records
 
 
+def _setup_toxicity_catalog() -> FilterCatalog:
+    """Build an RDKit FilterCatalog for toxicity alerts."""
+    tox_params = FilterCatalogParams()
+    tox_params.AddCatalog(FilterCatalogParams.FilterCatalogs.NIH)
+    tox_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
+    return FilterCatalog(tox_params)
+
+
 def apply_filters(
-    records: List[CompoundRecord],
+    records: Union[List[CompoundRecord], Iterator[CompoundRecord]],
     similarity_threshold: float = CONFIG.similarity_threshold,
 ) -> List[CompoundRecord]:
-    """Phase 2.2 — Apply structural, similarity, ADMET, and PAINS filters.
+    """Phase 2.2 — Apply structural, similarity, ADMET, PAINS, and toxicity filters.
 
     Filter chain:
         1. Structural exclusion (β-lactam SMARTS).
         2. Similarity filter vs reference antibiotics.
         3. ADMET: Lipinski Rule of 5 + QED > 0.6.
         4. PAINS alerts via RDKit FilterCatalog.
-        5. Diversity check: if < 100 pass, relax similarity to 0.5.
+        5. Synthetic Accessibility (SA Score ≤ 6.0).
+        6. Toxicity alerts (mutagenicity / cardiotoxicity if available).
+        7. Diversity check: if < 100 pass, relax similarity to 0.5.
 
     Returns filtered list of CompoundRecord.
     """
@@ -291,12 +321,15 @@ def apply_filters(
     pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
     pains_catalog = FilterCatalog(pains_params)
 
+    tox_catalog = _setup_toxicity_catalog() if _HAVE_TOX_ALERTS else None
+
     passed: List[CompoundRecord] = []
     skipped_structural = 0
     skipped_similarity = 0
     skipped_admet = 0
     skipped_pains = 0
     skipped_sa_score = 0
+    skipped_toxicity = 0
 
     for record in records:
         if record.mol is None:
@@ -359,6 +392,13 @@ def apply_filters(
             except Exception:
                 pass
 
+        # Toxicity alerts
+        if tox_catalog is not None:
+            tox_matches = tox_catalog.GetMatches(mol)
+            if tox_matches:
+                skipped_toxicity += 1
+                continue
+
         passed.append(record)
 
     log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
@@ -369,6 +409,10 @@ def apply_filters(
         log.info(f"  SA Score filter (> {CONFIG.sa_score_threshold}): {skipped_sa_score} removed.")
     else:
         log.info("  SA Score filter: skipped (sascore not installed).")
+    if tox_catalog is not None:
+        log.info(f"  Toxicity alerts: {skipped_toxicity} removed.")
+    else:
+        log.info("  Toxicity alerts: skipped (RDKit Catalogs not available).")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
     if len(passed) < CONFIG.diversity_min_count and similarity_threshold < CONFIG.similarity_threshold_relaxed:

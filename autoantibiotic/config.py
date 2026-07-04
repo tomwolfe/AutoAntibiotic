@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -67,6 +68,11 @@ class PipelineConfig:
     sa_score_threshold: float = 6.0
     shape_score_norm_factor: float = 0.05
     diversity_pool_multiplier: int = 5
+    top_n_for_active: int = 50
+    top_n_for_images: int = 3
+    top_n_for_html_report: int = 50
+    batch_size_docking: int = 75
+    library_generator_threshold: int = 1000
     morgan_radius: int = 2
     morgan_nbits: int = 2048
     pdb_retry_max_attempts: int = 3
@@ -165,6 +171,27 @@ class PipelineConfig:
     mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
     dry_run: bool = False
 
+    # Analysis thresholds (Phase 4)
+    resistance_energy_active_threshold: float = -6.0
+    resistance_energy_allosteric_threshold: float = -7.0
+    resistance_mw_threshold: float = 400.0
+    resistance_rot_threshold: int = 5
+    resistance_qed_threshold: float = 0.8
+
+    # Consensus scoring (Phase 3)
+    consensus_vina_weight: float = 0.7
+    consensus_shape_weight: float = 0.3
+
+    # Report filenames
+    csv_report_name: str = "top_candidates.csv"
+    html_report_name: str = "report.html"
+    pipeline_log_name: str = "pipeline.log"
+    scatter_plot_name: str = "energy_vs_selectivity.png"
+    qed_histogram_name: str = "qed_histogram.png"
+
+    # Cache
+    cache_db_name: str = "cache.db"
+
     @property
     def work_dir(self) -> Path:
         return self.output_dir / "workdir"
@@ -175,7 +202,57 @@ class PipelineConfig:
 
 
 CONFIG = PipelineConfig()
+
+
+def _merge_yaml_overrides() -> None:
+    """Load overrides from ``config.yaml`` in the output directory root.
+
+    If a ``config.yaml`` file exists alongside the ``output/`` directory,
+    its values are merged into the global ``CONFIG`` instance.  Only
+    top-level dataclass fields are supported.
+    """
+    yaml_path = Path("config.yaml")
+    if not yaml_path.exists():
+        yaml_path = CONFIG.output_dir.parent / "config.yaml"
+    if not yaml_path.exists():
+        return
+
+    try:
+        import yaml
+    except ImportError:
+        log = logging.getLogger("AutoAntibiotic")
+        log.warning("  ⚠  config.yaml found but PyYAML is not installed.  Run: pip install pyyaml")
+        return
+
+    try:
+        with open(yaml_path) as f:
+            overrides = yaml.safe_load(f)
+    except Exception as exc:
+        log = logging.getLogger("AutoAntibiotic")
+        log.warning(f"  ⚠  Failed to parse config.yaml: {exc}")
+        return
+
+    if not isinstance(overrides, dict):
+        return
+
+    log = logging.getLogger("AutoAntibiotic")
+    applied = 0
+    for key, value in overrides.items():
+        if hasattr(CONFIG, key):
+            setattr(CONFIG, key, value)
+            applied += 1
+            log.info(f"  Config override: {key} = {value}")
+        else:
+            log.warning(f"  ⚠  Unknown config key '{key}' in config.yaml — skipped.")
+
+    if applied > 0:
+        log.info(f"  Applied {applied} config override(s) from {yaml_path}")
+
+
+_merge_yaml_overrides()
+
 np.random.seed(CONFIG.random_seed)
+random.seed(CONFIG.random_seed)
 
 
 @dataclass

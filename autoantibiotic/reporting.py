@@ -58,10 +58,11 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
         })
 
+    csv_path = CONFIG.output_dir / CONFIG.csv_report_name
     df = pd.DataFrame(rows)
-    df.to_csv(CONFIG.output_dir / "top_candidates.csv", index=False)
-    log.info(f'  CSV report saved: {CONFIG.output_dir / "top_candidates.csv"}')
-    return str(CONFIG.output_dir / "top_candidates.csv")
+    df.to_csv(csv_path, index=False)
+    log.info(f'  CSV report saved: {csv_path}')
+    return str(csv_path)
 
 
 def generate_images(top3: List[CompoundRecord]) -> List[str]:
@@ -120,7 +121,7 @@ def generate_html_report(
         ax.set_title("Top Candidates: Binding Energy vs Selectivity", fontsize=14)
         ax.legend()
         ax.grid(alpha=0.3)
-        scatter_path = os.path.join(str(output_dir), "energy_vs_selectivity.png")
+        scatter_path = os.path.join(str(output_dir), CONFIG.scatter_plot_name)
         plt.savefig(scatter_path, dpi=150, bbox_inches="tight")
         plt.close()
         log.info(f"  Scatter plot saved: {scatter_path}")
@@ -131,13 +132,13 @@ def generate_html_report(
     if qeds:
         fig, ax = plt.subplots(figsize=(9, 6))
         ax.hist(qeds, bins=20, edgecolor="black", color="mediumseagreen", alpha=0.8)
-        ax.axvline(x=0.6, color="red", linestyle="--", alpha=0.6, label="QED cutoff = 0.6")
+        ax.axvline(x=CONFIG.qed_threshold, color="red", linestyle="--", alpha=0.6, label=f"QED cutoff = {CONFIG.qed_threshold}")
         ax.set_xlabel("QED Score", fontsize=12)
         ax.set_ylabel("Frequency", fontsize=12)
         ax.set_title("QED Distribution (Top 50 Candidates)", fontsize=14)
         ax.legend()
         ax.grid(alpha=0.3)
-        hist_path = os.path.join(str(output_dir), "qed_histogram.png")
+        hist_path = os.path.join(str(output_dir), CONFIG.qed_histogram_name)
         plt.savefig(hist_path, dpi=150, bbox_inches="tight")
         plt.close()
         log.info(f"  QED histogram saved: {hist_path}")
@@ -223,7 +224,7 @@ img {{ border: 1px solid #ddd; border-radius: 4px; padding: 4px; }}
 </body>
 </html>"""
 
-    html_path = os.path.join(str(output_dir), "report.html")
+    html_path = os.path.join(str(output_dir), CONFIG.html_report_name)
     with open(html_path, "w") as f:
         f.write(html)
     log.info(f"  HTML report saved: {html_path}")
@@ -258,5 +259,5 @@ def print_summary(
     else:
         log.info("  Redocking RMSD:                N/A")
     log.info(f"  Redocking validated:           {validation_ok}")
-    log.info(f'  CSV report:                    {CONFIG.output_dir / "top_candidates.csv"}')
+    log.info(f'  CSV report:                    {CONFIG.output_dir / CONFIG.csv_report_name}')
     log.info("=" * 60)

@@ -20,10 +20,10 @@ from .config import CONFIG
 from .docking import run_redocking_validation, screen_library
 from .analysis import analyze_selectivity_and_resistance
 from .io_utils import (
+    CacheManager,
     ensure_output_dir,
-    load_cache,
     log,
-    save_cache,
+    set_global_seed,
     verify_dependencies,
 )
 from .library_gen import apply_filters, generate_candidate_library
@@ -43,7 +43,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     parser.add_argument(
         "--use-cache", action="store_true",
-        help="Skip re-docking if cache.json has results for a (compound_id, target) pair.",
+        help="Skip re-docking if cache has results for a (compound_id, target) pair.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -62,15 +62,18 @@ def main(argv: Optional[List[str]] = None) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(CONFIG.output_dir / "pipeline.log"),
+            logging.FileHandler(CONFIG.output_dir / CONFIG.pipeline_log_name),
         ],
     )
 
+    # Phase 0: Deterministic seeding
+    set_global_seed(CONFIG.random_seed)
+
     use_cache = args.use_cache
-    cache: Optional[Dict[str, float]] = None
+    cache: Optional[CacheManager] = None
     if use_cache:
-        cache = load_cache()
-        log.info(f"  Loaded {len(cache)} cached docking results.")
+        cache = CacheManager(str(CONFIG.output_dir / CONFIG.cache_db_name))
+        log.info(f"  Cache loaded ({len(cache)} entries).")
     else:
         log.info("  Cache disabled. Use --use-cache to enable.")
 
@@ -93,7 +96,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     # ── Phase 2: Library generation & filtering ──
-    all_records = generate_candidate_library(target_count=CONFIG.library_target_count)
+    all_records = list(generate_candidate_library(target_count=CONFIG.library_target_count))
     n_total = len(all_records)
 
     filtered = apply_filters(all_records)
@@ -118,7 +121,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     # ── Phase 5: Reporting & Artifacts ──
     generate_csv_report(top10)
 
-    top3 = top10[:3]
+    top3 = top10[:CONFIG.top_n_for_images]
     generate_images(top3)
 
     scored_for_top50 = [
@@ -126,13 +129,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         if r.pb2pa_allosteric_energy is not None
     ]
     scored_for_top50.sort(key=lambda r: r.pb2pa_allosteric_energy)
-    top50 = scored_for_top50[:50] if len(scored_for_top50) >= 50 else scored_for_top50
+    top50 = scored_for_top50[:CONFIG.top_n_for_html_report] if len(scored_for_top50) >= CONFIG.top_n_for_html_report else scored_for_top50
 
     generate_html_report(top10, top50, CONFIG.output_dir)
 
     if use_cache and cache is not None:
-        save_cache(cache)
-        log.info(f"  Cache saved ({len(cache)} entries).")
+        cache.close()
+        log.info(f"  Cache saved ({cache.__len__()} entries).")
 
     print_summary(
         n_total, n_filtered, top10,
