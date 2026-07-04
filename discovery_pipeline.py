@@ -78,6 +78,14 @@ from rdkit.Chem.Draw import rdMolDraw2D
 from rdkit.DataStructs import TanimotoSimilarity
 from rdkit import RDLogger as rdklog
 
+# ── Synthetic Accessibility Score (optional) ──
+try:
+    from sascore import compute_sa_score as _compute_sa_score
+    _HAVE_SA_SCORE = True
+except ImportError:
+    _compute_sa_score = None  # type: ignore
+    _HAVE_SA_SCORE = False
+
 # ── Bio.PDB ────────────────────────────────────────────────────────────────────
 from Bio.PDB import (
     NeighborSearch,
@@ -133,6 +141,7 @@ class PipelineConfig:
     vina_exhaustiveness: int = 8
     vina_num_modes: int = 3
     vina_timeout_s: int = 120
+    job_timeout_s: int = 180
     prepare_receptor_timeout: int = 60
     n_jobs: int = field(default_factory=lambda: max(1, mp.cpu_count() - 1))
     similarity_threshold: float = 0.4
@@ -149,6 +158,7 @@ class PipelineConfig:
     lipinski_hbd_max: int = 5
     lipinski_hba_max: int = 10
     redocking_rmsd_cutoff: float = 2.0
+    sa_score_threshold: float = 6.0
     shape_score_norm_factor: float = 0.05
     diversity_pool_multiplier: int = 5
     morgan_radius: int = 2
@@ -287,10 +297,25 @@ class ToolResult:
     timed_out: bool = False
 
 
+# Regex patterns that indicate a genuine error in stderr output,
+# even when the tool exits with return code 0.
+_VINA_ERROR_PATTERNS: List[str] = [
+    r"(?i)\berror\b",
+    r"(?i)\bfatal\b",
+    r"(?i)could not open",
+    r"(?i)could not read",
+    r"(?i)is not a valid",
+    r"(?i)segmentation fault",
+    r"(?i)exception",
+    r"(?i)traceback",
+]
+
+
 def run_tool(
     cmd: List[str],
     timeout: int = 120,
     check: bool = True,
+    ignore_stderr_warnings: bool = False,
 ) -> ToolResult:
     """Execute an external binary with timeout and exit-code checking.
 
@@ -298,12 +323,19 @@ def run_tool(
         cmd: Command and arguments.
         timeout: Maximum wall-clock seconds.
         check: If True, a non-zero exit code raises ``RuntimeError``.
+        ignore_stderr_warnings: When ``True`` and the tool exits with
+            return code 0, stderr output is inspected:
+              - If it matches ``_VINA_ERROR_PATTERNS``, a ``RuntimeError``
+                is still raised.
+              - Otherwise it is logged as a warning and execution continues.
 
     Returns:
         ``ToolResult`` with parsed stdout/stderr.
 
     Raises:
-        RuntimeError: If *check* is True and the process exits non-zero.
+        RuntimeError: If *check* is True and the process exits non-zero,
+            or (when *ignore_stderr_warnings* is ``True``) if stderr
+            contains genuine error patterns despite a zero exit code.
     """
     try:
         proc = subprocess.run(
@@ -314,11 +346,23 @@ def run_tool(
             stdout=proc.stdout,
             stderr=proc.stderr,
         )
+
         if check and proc.returncode != 0:
             raise RuntimeError(
                 f"Tool {' '.join(cmd)} failed (code {proc.returncode}):\n"
                 f"  stderr: {proc.stderr.strip()}"
             )
+
+        # When ignore_stderr_warnings is True, inspect stderr even on success
+        if ignore_stderr_warnings and proc.returncode == 0 and proc.stderr.strip():
+            for pattern in _VINA_ERROR_PATTERNS:
+                if re.search(pattern, proc.stderr):
+                    raise RuntimeError(
+                        f"Tool {' '.join(cmd)} produced error-like stderr "
+                        f"(return code 0):\n  stderr: {proc.stderr.strip()}"
+                    )
+            log.warning(f"  Tool stderr (benign): {proc.stderr.strip()}")
+
         return result
     except subprocess.TimeoutExpired:
         raise RuntimeError(
@@ -742,7 +786,7 @@ def run_redocking_validation(
     ]
 
     try:
-        run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s)
+        run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s, ignore_stderr_warnings=True)
     except RuntimeError as exc:
         log.warning(f"  ⚠  Vina redocking failed: {exc}")
         return False, None
@@ -1465,6 +1509,7 @@ def apply_filters(
     skipped_similarity = 0
     skipped_admet = 0
     skipped_pains = 0
+    skipped_sa_score = 0
 
     for record in records:
         if record.mol is None:
@@ -1522,12 +1567,26 @@ def apply_filters(
             skipped_pains += 1
             continue
 
+        # 5. Synthetic Accessibility Score
+        if _HAVE_SA_SCORE:
+            try:
+                sa_score = _compute_sa_score(mol)
+                if sa_score > CONFIG.sa_score_threshold:
+                    skipped_sa_score += 1
+                    continue
+            except Exception:
+                pass
+
         passed.append(record)
 
     log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
     log.info(f"  Similarity filter (Tc < {similarity_threshold}): {skipped_similarity} removed.")
     log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped_admet} removed.")
     log.info(f"  PAINS filter: {skipped_pains} removed.")
+    if _HAVE_SA_SCORE:
+        log.info(f"  SA Score filter (> {CONFIG.sa_score_threshold}): {skipped_sa_score} removed.")
+    else:
+        log.info("  SA Score filter: skipped (sascore not installed).")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
     if len(passed) < CONFIG.diversity_min_count and similarity_threshold < CONFIG.similarity_threshold_relaxed:
@@ -1636,7 +1695,7 @@ def _run_vina_docking(
     ]
 
     try:
-        result = run_tool(cmd, timeout=timeout, check=False)
+        result = run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
         if result.returncode != 0:
             log.warning(f"  Vina error: {result.stderr.strip()}")
             return None
@@ -1718,33 +1777,48 @@ def dock_compound(
     return energy
 
 
-def _worker_dock(
-    cid: str, smiles: str,
-    receptor_pdbqt: str, center: np.ndarray,
-    box_size: Tuple[float, float, float],
-    work_dir: str, tag: str,
-    dry_run: bool = False,
+def _worker_dock_wrapper(
+    args: Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool],
 ) -> Tuple[str, Optional[float]]:
-    """Module-level worker for :func:`_parallel_dock`.
+    """Module-level worker for :func:`_parallel_dock` (``pool.map`` compatible).
 
-    Reconstructs Mol from SMILES locally, docks, and returns energy.
-    Defined at module level so ``ProcessPoolExecutor`` can pickle it.
+    Unpacks a single argument tuple, reconstructs Mol from SMILES locally,
+    docks, and returns energy.  Includes a per-job wall-clock timeout to
+    prevent hanging on pathological molecules.
 
     *dry_run* is passed explicitly because ``CONFIG.dry_run`` may not be
     propagated to spawned worker processes (e.g. on macOS with the
     *spawn* start method).
     """
-    if dry_run:
-        return cid, float(np.random.uniform(-10.0, -5.0))
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
+    cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run = args
+
+    # ── Per-job timeout via SIGALRM (Unix) ──
+    _TIMEOUT_EXC = type("_JobTimeoutError", (Exception,), {})
+
+    def _handle_timeout(signum: int, frame: object) -> None:
+        raise _TIMEOUT_EXC("Job timed out")
+
+    import signal
+    old_handler = signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.alarm(CONFIG.job_timeout_s)
+
+    try:
+        if dry_run:
+            return cid, float(np.random.uniform(-10.0, -5.0))
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return cid, None
+        rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
+        energy = dock_compound(
+            rec, receptor_pdbqt, center, box_size,
+            work_dir, tag, cache=None, use_cache=False,
+        )
+        return cid, energy
+    except _TIMEOUT_EXC:
         return cid, None
-    rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
-    energy = dock_compound(
-        rec, receptor_pdbqt, center, box_size,
-        work_dir, tag, cache=None, use_cache=False,
-    )
-    return cid, energy
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 def _parallel_dock(
@@ -1765,11 +1839,14 @@ def _parallel_dock(
     objects to avoid pickling RDKit ``Mol`` objects across process boundaries.
     Each worker reconstructs the ``Mol`` from SMILES locally.
 
+    Uses ``ProcessPoolExecutor.map`` with a ``chunksize`` parameter to reduce
+    inter-process communication overhead.  Progress is reported via ``tqdm``
+    when available.
+
     **Cache safety**: The *cache* dict is NEVER sent to worker processes.
-    Workers always receive ``cache=None`` in ``_worker_dock``, so they
-    cannot mutate it.  The main process alone reads from cache (line 1788–1790)
-    before submitting work and writes to cache (line 1800) after each future
-    completes.
+    Workers always receive ``cache=None``, so they cannot mutate it.
+    The main process alone reads from cache before submitting work and
+    writes to cache after results are returned.
 
     Args:
         items: List of ``(compound_id, smiles)`` pairs.
@@ -1785,46 +1862,48 @@ def _parallel_dock(
     Returns:
         List of ``(compound_id, energy)`` tuples.
     """
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    from functools import partial
+    from concurrent.futures import ProcessPoolExecutor
 
     results: List[Tuple[str, Optional[float]]] = []
-    submitted = 0
+    to_dock: List[Tuple[str, str, str]] = []  # (cid, smiles, cache_key)
 
-    # Worker fn does NOT receive cache — workers are read-only for cache safety.
-    worker_fn = partial(
-        _worker_dock,
-        receptor_pdbqt=receptor_pdbqt,
-        center=center,
-        box_size=box_size,
-        work_dir=work_dir,
-        tag=tag,
-        dry_run=CONFIG.dry_run,
-    )
+    # ── Consult cache before submitting work ──
+    for cid, smiles in items:
+        smiles_md5 = hashlib.md5(smiles.encode("utf-8")).hexdigest()
+        cache_key = f"{smiles_md5}_{tag}"
+        if use_cache and cache is not None and cache_key in cache:
+            results.append((cid, cache[cache_key]))
+            log.debug(f"    Cache hit: {cid} ({tag})")
+        else:
+            to_dock.append((cid, smiles, cache_key))
 
-    with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-        futures = {}
-        keys: Dict[Any, str] = {}
-        for cid, smiles in items:
-            smiles_md5 = hashlib.md5(smiles.encode("utf-8")).hexdigest()
-            cache_key = f"{smiles_md5}_{tag}"
-            if use_cache and cache is not None and cache_key in cache:
-                results.append((cid, cache[cache_key]))
-                continue
-            future = pool.submit(worker_fn, cid, smiles)
-            futures[future] = cid
-            keys[future] = cache_key
-            submitted += 1
+    if not to_dock:
+        return results
 
-        done = 0
-        for future in as_completed(futures):
-            cid, energy = future.result()
-            results.append((cid, energy))
-            if use_cache and cache is not None:
-                cache[keys[future]] = energy
-            done += 1
-            if done % 25 == 0 or done == submitted:
-                log.info(f"    Docked {done} / {submitted} ({tag})")
+    n_jobs_eff = min(n_jobs, len(to_dock))
+    chunksize_val = max(1, len(to_dock) // (n_jobs_eff * 4))
+
+    # Build arg tuples for pool.map — cache is deliberately excluded
+    work_items: List[Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool]] = [
+        (cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, CONFIG.dry_run)
+        for cid, smiles, _ in to_dock
+    ]
+
+    with ProcessPoolExecutor(max_workers=n_jobs_eff) as pool:
+        mapped = list(
+            _tqdm(
+                pool.map(_worker_dock_wrapper, work_items, chunksize=chunksize_val),
+                total=len(work_items),
+                desc=f"  Docking {tag}",
+                disable=not _HAVE_TQDM,
+            )
+        )
+
+    # mapped preserves input order; zip with to_dock for cache_keys
+    for (cid, _, cache_key), (_, energy) in zip(to_dock, mapped):
+        results.append((cid, energy))
+        if use_cache and cache is not None:
+            cache[cache_key] = energy
 
     return results
 
