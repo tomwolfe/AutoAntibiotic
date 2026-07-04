@@ -21,3 +21,6 @@ scikit-learn>=1.3.0
 # pdbfixer>=1.9  # install via: conda install -c conda-forge pdbfixer
 # ambertools>=23.0  # install via: conda install -c conda-forge ambertools
 # parmed>=4.0.0  # for Amber topology handling
+
+# Optional: water analysis
+# biopython>=1.83  # already required; used for PDB parsing in water_analysis.py

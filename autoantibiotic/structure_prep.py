@@ -108,8 +108,30 @@ def clean_pdb_structure(
     remove_ligands: bool = True,
     add_hydrogens: bool = True,
     deps: Optional[Dict[str, Any]] = None,
+    waters_to_remove: Optional[List[str]] = None,
 ) -> str:
-    """Clean a PDB file and convert to PDBQT format."""
+    """Clean a PDB file and convert to PDBQT format.
+
+    Parameters
+    ----------
+    pdb_path : str
+        Path to input PDB file.
+    out_path : str
+        Path for the cleaned PDB output.
+    remove_waters : bool
+        Remove ALL water molecules if True (default). Ignored when
+        *waters_to_remove* is provided.
+    remove_ligands : bool
+        Remove hetero-atoms (ligands, ions) if True.
+    add_hydrogens : bool
+        Add polar hydrogens via RDKit if True.
+    deps : dict, optional
+        Dependency dictionary (e.g. 'prepare_receptor', 'obabel').
+    waters_to_remove : list of str, optional
+        Specific water residue identifiers to remove (e.g. ``["A:HOH_123"]``).
+        When provided, only these waters are removed, allowing bridging
+        waters to be kept.
+    """
     if deps is None:
         deps = {}
     try:
@@ -121,9 +143,19 @@ def clean_pdb_structure(
         class CleanSelect(Select):
             def accept_residue(self, residue):
                 rid = residue.get_id()
-                if remove_waters and rid[0] == "W":
+                hetfield = rid[0]
+                # Specific water removal (selective)
+                if waters_to_remove is not None:
+                    chain = residue.get_parent().get_id() if residue.get_parent() else "?"
+                    resid = f"{chain}:{residue.get_resname()}_{rid[1]}"
+                    if resid in waters_to_remove:
+                        return False
+                    # Keep all other residues including waters not in the list
+                    if hetfield == "W":
+                        return True
+                elif remove_waters and hetfield == "W":
                     return False
-                if remove_ligands and rid[0] != " ":
+                if remove_ligands and hetfield != " " and hetfield != "W":
                     return False
                 return True
 
@@ -236,7 +268,8 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
 
 
 def prepare_targets(
-    pdb_dir: str, work_dir: str, deps: Dict[str, Any]
+    pdb_dir: str, work_dir: str, deps: Dict[str, Any],
+    water_results: Any = None,
 ) -> Dict[str, Any]:
     """Phase 1 — Download, clean, and compute grid centres for all targets.
 
@@ -245,9 +278,26 @@ def prepare_targets(
     from that directory, prepares each one, and stores them under the
     ``"PBP2a_ensemble"`` key as a list of receptor dicts.
 
+    When *water_results* is provided (from :func:`water_analysis.analyze_waters`),
+    high-energy non-bridging waters are selectively removed from the holo
+    structure, and bridging waters are retained to produce a water-aware
+    receptor for ensemble docking.
+
+    Parameters
+    ----------
+    pdb_dir : str
+        Directory for downloaded PDB files.
+    work_dir : str
+        Working directory for intermediate files.
+    deps : dict
+        Dependency dictionary.
+    water_results : WaterAnalysisResult or None
+        Pre-computed water analysis; triggers selective water handling.
+
     Returns
         Dict with keys ``holo_pdb``, ``PBP2a``, ``trypsin``, ``CES1``,
-        and optionally ``PBP2a_ensemble`` (list of dicts).
+        and optionally ``PBP2a_ensemble`` (list of dicts) and
+        ``water_results``.
     """
     log.info("─── Phase 1: Target Preparation & Centroid Calculation ───")
     result: Dict[str, Any] = {}
@@ -259,17 +309,42 @@ def prepare_targets(
 
     result["holo_pdb"] = holo_path
 
+    if water_results is not None:
+        result["water_results"] = water_results
+        waters_to_remove = [
+            w.identifier for w in water_results.high_energy_waters
+            if not w.is_bridging
+        ]
+        if waters_to_remove:
+            log.info(f"  Removing {len(waters_to_remove)} high-energy waters from holo structure.")
+
+        # Prepare a water-aware holo receptor (keep bridging waters)
+        holo_waters = [w for w in water_results.all_waters if w.is_bridging or not w.is_high_energy]
+        holo_waters_to_remove = [w.identifier for w in water_results.high_energy_waters if not w.is_bridging]
+        holo_removal = holo_waters_to_remove if holo_waters_to_remove else None
+        log.info("  Cleaning PBP2a (holo, with selected waters)…")
+        holo_water_pdbqt = clean_pdb_structure(
+            holo_path,
+            os.path.join(work_dir, "PBP2a_holo_water.pdb"),
+            deps=deps,
+            waters_to_remove=holo_removal,
+        )
+        result["PBP2a_holo_water"] = {
+            "pdbqt": holo_water_pdbqt,
+        }
+        log.info(f"  Water-aware holo receptor saved: {holo_water_pdbqt}")
+    else:
+        log.info("  Cleaning PBP2a (holo, protein-only)…")
+        _ = clean_pdb_structure(
+            holo_path,
+            os.path.join(work_dir, "PBP2a_holo_clean.pdb"),
+            deps=deps,
+        )
+
     log.info("  Cleaning PBP2a (apo)…")
     pbp2a_pdbqt = clean_pdb_structure(
         apo_path,
         os.path.join(work_dir, "PBP2a_clean.pdb"),
-        deps=deps,
-    )
-
-    log.info("  Cleaning PBP2a (holo, protein-only)…")
-    _ = clean_pdb_structure(
-        holo_path,
-        os.path.join(work_dir, "PBP2a_holo_clean.pdb"),
         deps=deps,
     )
 

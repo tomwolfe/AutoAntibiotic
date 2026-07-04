@@ -39,7 +39,7 @@ _DUMMY_RECORDS = [
 ]
 
 
-def _mock_prepare_targets(pdb_dir, work_dir, deps):
+def _mock_prepare_targets(pdb_dir, work_dir, deps, water_results=None):
     """Return a synthetic target dictionary without downloading PDBs."""
     os.makedirs(pdb_dir, exist_ok=True)
     os.makedirs(work_dir, exist_ok=True)

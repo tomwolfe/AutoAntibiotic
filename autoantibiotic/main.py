@@ -31,6 +31,12 @@ from .library_gen import apply_filters, generate_candidate_library, generate_pha
 from .reporting import generate_csv_report, generate_html_report, generate_images, print_summary
 from .structure_prep import prepare_targets
 
+try:
+    from .water_analysis import analyze_waters
+    _HAVE_WATER = True
+except ImportError:
+    _HAVE_WATER = False
+
 
 def main(argv: Optional[List[str]] = None) -> None:
     """Orchestrate the full discovery pipeline end-to-end.
@@ -66,12 +72,26 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--use-mm-gbsa", action="store_true",
         help="Use MM-GB/SA rescoring (requires OpenMM + AmberTools).",
     )
+    parser.add_argument(
+        "--use-mm-gbsa-rescoring", action="store_true",
+        help="Use MM-GB/SA rescoring of top N docking candidates (alias for --use-mm-gbsa).",
+    )
+    parser.add_argument(
+        "--flexible-docking", action="store_true",
+        help="Enable induced-fit docking with flexible side-chain rotamers.",
+    )
+    parser.add_argument(
+        "--no-water-analysis", action="store_true",
+        help="Skip crystallographic water analysis.",
+    )
     args = parser.parse_args(argv)
 
     if args.benchmark:
         CONFIG.benchmark_mode = True
     if args.use_mm_gbsa:
         CONFIG.use_mm_gbsa = True
+    if args.use_mm_gbsa_rescoring:
+        CONFIG.use_mm_gbsa_rescoring = True
 
     if args.dry_run:
         CONFIG.dry_run = True
@@ -83,6 +103,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.ensemble_dir:
         CONFIG.ensemble_mode = True
         CONFIG.ensemble_structures_dir = Path(args.ensemble_dir)
+
+    if args.flexible_docking:
+        CONFIG.flexible_docking = True
+
+    if args.no_water_analysis:
+        CONFIG.use_water_analysis = False
 
     if args.benchmark:
         logging.basicConfig(
@@ -108,9 +134,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         log.info("Benchmark mode complete. Exiting.")
         return
 
-    if args.use_mm_gbsa:
+    if args.use_mm_gbsa or args.use_mm_gbsa_rescoring:
         CONFIG.use_mm_gbsa = True
+        CONFIG.use_mm_gbsa_rescoring = True
         log.info("  MM-GB/SA rescoring enabled.")
+
+    if args.flexible_docking:
+        log.info("  Flexible (induced-fit) docking enabled.")
 
     ensure_output_dir()
     logging.basicConfig(
@@ -140,8 +170,56 @@ def main(argv: Optional[List[str]] = None) -> None:
     pdb_dir = str(CONFIG.pdb_dir)
     os.makedirs(work_dir, exist_ok=True)
 
+    # ── Water analysis (Phase 0.5) ──
+    water_results = None
+    if CONFIG.use_water_analysis and _HAVE_WATER:
+        log.info("─── Phase 0.5: Crystallographic Water Analysis ───")
+        holo_pdb_id = CONFIG.pdb_ids.get("PBP2a_holo", "6TKO")
+        holo_pdb_path = os.path.join(pdb_dir, f"{holo_pdb_id}.pdb")
+        if os.path.exists(holo_pdb_path):
+            try:
+                water_results = analyze_waters(
+                    holo_pdb_path,
+                    allosteric_residues=CONFIG.flexible_residues_allosteric,
+                    active_site_residues=CONFIG.flexible_residues_active,
+                    distance_cutoff=CONFIG.water_distance_cutoff,
+                    displacement_energy_threshold=CONFIG.water_displacement_energy_threshold,
+                )
+                if water_results.high_energy_waters:
+                    log.info(
+                        f"  → {len(water_results.high_energy_waters)} high-energy "
+                        f"waters flagged for displacement; "
+                        f"{len(water_results.bridging_waters)} bridging waters retained."
+                    )
+            except Exception as exc:
+                log.warning(f"  Water analysis failed: {exc}")
+        else:
+            log.info(f"  Holo PDB not yet downloaded (will analyse after Phase 1).")
+    elif CONFIG.use_water_analysis:
+        log.info("  Water analysis module not available (install Bio.PDB).")
+
     # ── Phase 1: Target preparation ──
-    targets = prepare_targets(pdb_dir, work_dir, deps)
+    targets = prepare_targets(pdb_dir, work_dir, deps, water_results=water_results)
+
+    # If water analysis couldn't run before Phase 1 (no PDB yet), run it now
+    if CONFIG.use_water_analysis and _HAVE_WATER and water_results is None:
+        holo_pdb_path = targets.get("holo_pdb", "")
+        if holo_pdb_path and os.path.exists(holo_pdb_path):
+            try:
+                water_results = analyze_waters(
+                    holo_pdb_path,
+                    allosteric_residues=CONFIG.flexible_residues_allosteric,
+                    active_site_residues=CONFIG.flexible_residues_active,
+                    distance_cutoff=CONFIG.water_distance_cutoff,
+                    displacement_energy_threshold=CONFIG.water_displacement_energy_threshold,
+                )
+                if water_results and water_results.high_energy_waters:
+                    log.info(
+                        f"  → {len(water_results.high_energy_waters)} high-energy "
+                        f"waters flagged."
+                    )
+            except Exception as exc:
+                log.warning(f"  Water analysis (post-Phase 1) failed: {exc}")
 
     # ── Phase 0: Redocking validation ──
     validation_ok, redock_rmsd = run_redocking_validation(

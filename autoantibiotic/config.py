@@ -200,6 +200,30 @@ class PipelineConfig:
     # Benchmark & Validation (Phase 7)
     use_mm_gbsa: bool = False
     """Enable MM-GBSA rescoring of top docking poses (requires OpenMM + AmberTools)."""
+
+    # High-Impact Scientific Upgrades (Phase 8)
+    flexible_docking: bool = False
+    """If True, side-chain flexibility is modelled for key binding-site residues."""
+    flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
+    """Residues whose side chains are treated flexibly during allosteric-site docking."""
+    flexible_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
+    """Residues whose side chains are treated flexibly during active-site docking."""
+    max_flexible_conformers: int = 9
+    """Maximum number of receptor conformers to generate for flexible docking."""
+
+    use_water_analysis: bool = True
+    """If True, analyse crystallographic waters in the holo structure and flag
+    displaceable / bridging waters."""
+    water_distance_cutoff: float = 5.0
+    """Distance cutoff (Å) from binding-site residues to include a water."""
+    water_displacement_energy_threshold: float = 2.5
+    """Waters with displacement energy above this threshold are flagged as high-energy."""
+
+    use_mm_gbsa_rescoring: bool = False
+    """Enable MM-GB/SA rescoring of the top N docking candidates (requires OpenMM)."""
+    mm_gbsa_top_n: int = 50
+    """Number of top Vina candidates to rescore with MM-GB/SA."""
+
     benchmark_mode: bool = False
     """Run enrichment benchmark instead of full library screening."""
     reference_actives_path: Optional[Path] = None
