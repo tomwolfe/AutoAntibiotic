@@ -15,6 +15,7 @@ Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina
 
 import os
 import sys
+import itertools
 import subprocess
 import logging
 import warnings
@@ -88,6 +89,10 @@ BETA_LACTAM_SMARTS = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
 ALLOSTERIC_RESIDUES = ["ALA237", "MET241", "TYR159"]
 ACTIVE_SITE_RESIDUES = ["SER403"]
 
+# Off-target active site residues (catalytic triads)
+TRYPSIN_ACTIVE_SITE_RESIDUES = ["HIS57", "ASP102", "SER195"]
+CES1_ACTIVE_SITE_RESIDUES = ["SER221", "HIS468", "GLU354"]
+
 # Grid box defaults (Angstroms)
 ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
 ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
@@ -109,19 +114,7 @@ OUTPUT_DIR = Path("output")
 CSV_REPORT = OUTPUT_DIR / "top_candidates.csv"
 TOP_N = 10
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  LOGGING CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(OUTPUT_DIR / "pipeline.log"),
-    ],
-)
+# ── Logger (config deferred to main()) ──
 log = logging.getLogger("AutoAntibiotic")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -223,13 +216,11 @@ def _extract_native_ligand_from_holo(
         for model in struct:
             for chain in model:
                 for residue in chain:
-                    # HETATM residues except waters — typical ligand identifiers
-                    if residue.get_id()[0] in ("H_", "W", "H_M"):
+                    het_flag = residue.get_id()[0]
+                    # Skip standard amino acids and water
+                    if het_flag == " " or het_flag == "W":
                         continue
-                    # Skip standard amino acids
-                    if residue.get_id()[0] == " ":
-                        continue
-                    # Skip waters
+                    # Keep HETATMs (het_flag == "H_" or "H_M")
                     resname = residue.get_resname().strip()
                     if resname in ("HOH", "WAT", "SOL"):
                         continue
@@ -304,15 +295,41 @@ def _compute_rmsd_docked_vs_crystal(
     docked_pdb: str, crystal_pdb: str
 ) -> Optional[float]:
     """
-    Align protein backbones of the docked structure to the crystal structure
-    and compute heavy-atom RMSD of the ligand.
+    Align protein Cα backbones of the docked structure to the crystal structure,
+    then compute heavy-atom RMSD of the ligand after applying the alignment.
     """
     try:
         parser = PDBParser(QUIET=True)
         docked_struct = parser.get_structure("docked", docked_pdb)
         crystal_struct = parser.get_structure("crystal", crystal_pdb)
 
-        # Get ligand atoms from both
+        # Collect Cα atoms from both structures for backbone alignment
+        def _get_ca_atoms(structure):
+            atoms = []
+            for model in structure:
+                for chain in model:
+                    for residue in chain:
+                        if residue.get_id()[0] == " " and "CA" in residue:
+                            atoms.append(residue["CA"])
+            return atoms
+
+        docked_ca = _get_ca_atoms(docked_struct)
+        crystal_ca = _get_ca_atoms(crystal_struct)
+
+        if len(docked_ca) < 3 or len(crystal_ca) < 3:
+            log.warning("  ⚠  Too few Cα atoms for backbone alignment (< 3).")
+            return None
+
+        # Align Cα atoms using Bio.PDB.Superimposer
+        sup = Superimposer()
+        docked_coords = np.array([a.get_vector().get_array() for a in docked_ca])
+        crystal_coords = np.array([a.get_vector().get_array() for a in crystal_ca])
+        sup.set(crystal_coords, docked_coords)
+        sup.run()
+        rot, tran = sup.rotran
+        log.info(f"  Backbone alignment RMSD: {sup.rmsd:.3f} Å")
+
+        # Collect ligand heavy atoms from both structures
         def _get_ligand_atoms(structure):
             atoms = []
             for model in structure:
@@ -324,26 +341,30 @@ def _compute_rmsd_docked_vs_crystal(
                                     atoms.append(atom)
             return atoms
 
-        docked_atoms = _get_ligand_atoms(docked_struct)
-        crystal_atoms = _get_ligand_atoms(crystal_struct)
+        docked_lig = _get_ligand_atoms(docked_struct)
+        crystal_lig = _get_ligand_atoms(crystal_struct)
 
-        if len(docked_atoms) != len(crystal_atoms):
+        if not docked_lig or not crystal_lig:
+            log.warning("  ⚠  No ligand atoms found in one or both structures.")
+            return None
+
+        if len(docked_lig) != len(crystal_lig):
             log.warning(
-                f"  ⚠  Atom count mismatch: docked={len(docked_atoms)}, "
-                f"crystal={len(crystal_atoms)}. Taking min."
+                f"  ⚠  Ligand atom count mismatch: docked={len(docked_lig)}, "
+                f"crystal={len(crystal_lig)}. Truncating to shorter list."
             )
-            n = min(len(docked_atoms), len(crystal_atoms))
-            docked_atoms = docked_atoms[:n]
-            crystal_atoms = crystal_atoms[:n]
+            n = min(len(docked_lig), len(crystal_lig))
+            docked_lig = docked_lig[:n]
+            crystal_lig = crystal_lig[:n]
 
-        # Superpose and get RMSD
-        sup = SVDSuperimposer()
-        sup.set(
-            np.array([a.get_vector().get_array() for a in crystal_atoms]),
-            np.array([a.get_vector().get_array() for a in docked_atoms]),
-        )
-        sup.run()
-        rmsd = sup.get_rmsd()
+        # Apply the backbone-derived rotation/translation to docked ligand atoms
+        docked_lig_coords = np.array([a.get_vector().get_array() for a in docked_lig])
+        aligned_docked = docked_lig_coords @ rot.T + tran
+
+        # Compute RMSD between aligned docked ligand and crystal ligand
+        crystal_lig_coords = np.array([a.get_vector().get_array() for a in crystal_lig])
+        diff = aligned_docked - crystal_lig_coords
+        rmsd = np.sqrt(np.mean(np.sum(diff ** 2, axis=1)))
         return rmsd
 
     except Exception as exc:
@@ -356,6 +377,7 @@ def run_redocking_validation(
     target_pdbqt_path: str,
     work_dir: str,
     deps: dict,
+    center: Optional[np.ndarray] = None,
 ) -> Tuple[bool, Optional[float]]:
     """
     Phase 0 — Protocol Validation.
@@ -383,12 +405,16 @@ def run_redocking_validation(
     # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
     docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
+    if center is None:
+        center = np.array([0.0, 0.0, 0.0])
     vina_cmd = [
         "vina",
         "--receptor", target_pdbqt_path,
         "--ligand", lig_pdbqt,
         "--out", docked_pdbqt,
-        "--center_x", "0", "--center_y", "0", "--center_z", "0",  # placeholder — will be updated
+        "--center_x", f"{center[0]:.3f}",
+        "--center_y", f"{center[1]:.3f}",
+        "--center_z", f"{center[2]:.3f}",
         "--size_x", "25", "--size_y", "25", "--size_z", "25",
         "--exhaustiveness", "8",
     ]
@@ -536,14 +562,15 @@ def clean_pdb_structure(
                         capture_output=True, timeout=60,
                     )
                 except (FileNotFoundError, subprocess.TimeoutExpired):
-                    log.warning(
-                        "  Neither prepare_receptor nor obabel found. "
-                        "Writing PDB as-is; Vina may fail."
+                    raise RuntimeError(
+                        "Failed to convert receptor to PDBQT. "
+                        "Please install ADFR suite or OpenBabel."
                     )
-                    shutil.copy(out_path, pdbqt_path)
         except Exception as exc:
-            log.warning(f"  Receptor PDBQT conversion warning: {exc}")
-            shutil.copy(out_path, pdbqt_path)
+            raise RuntimeError(
+                f"Receptor PDBQT conversion failed: {exc}. "
+                "Please install ADFR suite or OpenBabel."
+            )
 
         return pdbqt_path if os.path.exists(pdbqt_path) else out_path
 
@@ -673,7 +700,11 @@ def prepare_targets(
         trypsin_path,
         os.path.join(work_dir, "trypsin_clean.pdb"),
     )
-    result["trypsin"] = {"pdbqt": tryp_pdbqt}
+    tryp_center = compute_residue_centroid(
+        trypsin_path, TRYPSIN_ACTIVE_SITE_RESIDUES,
+    )
+    log.info(f"    Trypsin active site center: {tryp_center}")
+    result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
 
     # ── Clean CES1 ──
     log.info("  Cleaning Human Carboxylesterase 1 (3KJZ)…")
@@ -681,7 +712,11 @@ def prepare_targets(
         ces1_path,
         os.path.join(work_dir, "CES1_clean.pdb"),
     )
-    result["CES1"] = {"pdbqt": ces1_pdbqt}
+    ces1_center = compute_residue_centroid(
+        ces1_path, CES1_ACTIVE_SITE_RESIDUES,
+    )
+    log.info(f"    CES1 active site center: {ces1_center}")
+    result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
 
     # ── Write grid configuration files ──
     grid_dir = os.path.join(work_dir, "grid_configs")
@@ -869,16 +904,14 @@ def generate_candidate_library(
             # BRICS.BRICSBuild returns a generator of possible products
             # We sample from the build output
             builder = BRICS.BRICSBuild([combined])
-            for _ in range(rng.integers(1, 5)):
-                try:
-                    product = next(builder)
-                except StopIteration:
-                    break
-            else:
-                product = next(builder)
+            product = None
+            for product in itertools.islice(builder, rng.integers(1, 5)):
+                pass
+            if product is None:
+                continue
             Chem.SanitizeMol(product)
             smi = Chem.MolToSmiles(product)
-        except (StopIteration, Exception):
+        except Exception:
             continue
 
         if smi in seen_smiles:
@@ -966,8 +999,9 @@ def apply_filters(
             record.mol = mol
         mol = record.mol
 
-        # 1. Structural — reject β-lactams
-        if mol.HasSubstructMatch(lactam_pattern):
+        # 1. Structural — reject β-lactams (but allow controls)
+        is_control = record.compound_id.startswith("CTRL_")
+        if not is_control and mol.HasSubstructMatch(lactam_pattern):
             skipped_structural += 1
             continue
 
@@ -1191,21 +1225,33 @@ def _parallel_dock(
     tag: str,
     n_jobs: int = N_JOBS,
 ) -> List[Tuple[CompoundRecord, Optional[float]]]:
-    """Dock a list of compounds in parallel, returning (record, energy) pairs."""
+    """Dock a list of compounds in parallel, returning (record, energy) pairs.
+
+    Passes only primitive data (compound_id, smiles) to worker processes
+    to avoid pickling errors with RDKit Mol objects.
+    """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     results = []
     total = len(records)
 
-    def _worker(rec):
+    def _worker(cid: str, smiles: str) -> Tuple[str, Optional[float]]:
+        rec = CompoundRecord(compound_id=cid, smiles=smiles)
         energy = dock_compound(rec, receptor_pdbqt, center, box_size, work_dir, tag)
-        return rec, energy
+        return cid, energy
+
+    # Build a lookup so we can map results back to original records
+    cid_to_record = {r.compound_id: r for r in records}
 
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-        futures = {pool.submit(_worker, rec): rec for rec in records}
+        futures = {
+            pool.submit(_worker, rec.compound_id, rec.smiles): rec.compound_id
+            for rec in records
+        }
         for i, future in enumerate(as_completed(futures)):
-            rec, energy = future.result()
-            results.append((rec, energy))
+            cid, energy = future.result()
+            orig_rec = cid_to_record[cid]
+            results.append((orig_rec, energy))
             if (i + 1) % 25 == 0:
                 log.info(f"    Docked {i + 1} / {total} ({tag})")
 
@@ -1415,10 +1461,10 @@ def compute_selectivity_index(
     """
     Selectivity Index (SI).
 
-        SI = |Energy_Human_Avg| / |Energy_PBP2a_Best|
+        SI = |Pb2pa_Energy| / |Human_Avg_Energy|
 
-    Vina energies are negative. A higher SI means stronger binding to PBP2a
-    than to the human off-target panel.
+    Vina energies are negative. A higher SI (>1.0) means stronger binding
+    to PBP2a than to the human off-target panel.
 
     Args:
         pb2pa_energy: Best (most negative) PBP2a binding energy.
@@ -1427,9 +1473,9 @@ def compute_selectivity_index(
     Returns:
         SI value (float).
     """
-    if pb2pa_energy >= 0:
+    if pb2pa_energy >= 0 or human_avg_energy >= 0:
         return 0.0
-    return abs(human_avg_energy) / abs(pb2pa_energy) if abs(pb2pa_energy) > 1e-6 else 0.0
+    return abs(pb2pa_energy) / abs(human_avg_energy) if abs(human_avg_energy) > 1e-6 else 0.0
 
 
 CONSERVED_RESIDUES = {"SER403", "LYS406", "TYR446"}
@@ -1513,9 +1559,10 @@ def analyze_selectivity_and_resistance(
 
     # ── Dock vs Trypsin ──
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
+    trypsin_center = targets["trypsin"].get("active_center", np.array([0.0, 0.0, 0.0]))
     trypsin_results = _parallel_dock(
         top10, targets["trypsin"]["pdbqt"],
-        np.array([0.0, 0.0, 0.0]), (20.0, 20.0, 20.0),  # Default centre — trypsin active site
+        trypsin_center, (20.0, 20.0, 20.0),
         work_dir, "trypsin", n_jobs=min(4, len(top10)),
     )
     for rec, energy in trypsin_results:
@@ -1523,9 +1570,10 @@ def analyze_selectivity_and_resistance(
 
     # ── Dock vs CES1 ──
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (3KJZ)…")
+    ces1_center = targets["CES1"].get("active_center", np.array([0.0, 0.0, 0.0]))
     ces1_results = _parallel_dock(
         top10, targets["CES1"]["pdbqt"],
-        np.array([0.0, 0.0, 0.0]), (20.0, 20.0, 20.0),  # Default centre
+        ces1_center, (20.0, 20.0, 20.0),
         work_dir, "ces1", n_jobs=min(4, len(top10)),
     )
     for rec, energy in ces1_results:
@@ -1695,6 +1743,15 @@ def print_summary(
 def main():
     """Orchestrate the full discovery pipeline end-to-end."""
     ensure_output_dir()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(OUTPUT_DIR / "pipeline.log"),
+        ],
+    )
 
     # ── Dependency check ──
     deps = verify_dependencies()
@@ -1713,6 +1770,7 @@ def main():
         target_pdbqt_path=targets["PBP2a"]["pdbqt"],
         work_dir=work_dir,
         deps=deps,
+        center=targets["PBP2a"]["active_center"],
     )
 
     # ── Phase 2: Library generation & filtering ──
