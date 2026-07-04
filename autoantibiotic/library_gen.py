@@ -290,20 +290,86 @@ def generate_candidate_library(
     return records
 
 
+def _get_pharmacophore_points_3d(
+    mol: Chem.Mol,
+    conf_id: int = -1,
+) -> List[Dict[str, Any]]:
+    """Extract 3D pharmacophore feature points from a molecule.
+
+    Uses the RDKit ``ChemicalFeatures`` factory to locate Donor, Acceptor,
+    Hydrophobe and Aromatic features, then computes the centroid coordinate
+    of each feature's atoms in the given conformer.
+
+    Args:
+        mol: Molecule with a 3D conformer.
+        conf_id: Conformer ID (default: last conformer).
+
+    Returns:
+        List of dicts, each with keys ``type`` (feature family),
+        ``pos`` (3-D np.ndarray centroid), and ``atom_ids`` (list of atom
+        indices belonging to the feature).
+    """
+    if _PHARM_FACTORY is None:
+        return []
+    feats = _PHARM_FACTORY.GetFeaturesForMol(mol)
+    points: List[Dict[str, Any]] = []
+    conf = mol.GetConformer(conf_id)
+    for feat in feats:
+        ftype = feat.GetFamily()
+        if ftype not in ("Donor", "Acceptor", "Hydrophobe", "Aromatic"):
+            continue
+        atoms = feat.GetAtomIds()
+        if not atoms:
+            continue
+        pos = np.zeros(3)
+        for aid in atoms:
+            pt = conf.GetAtomPosition(aid)
+            pos += np.array([pt.x, pt.y, pt.z])
+        pos /= len(atoms)
+        points.append({"type": ftype, "pos": pos, "atom_ids": atoms})
+    return points
+
+
 def _build_allosteric_pharmacophore() -> Optional[Dict[str, Any]]:
     """Build a pharmacophore query model based on PBP2a allosteric pocket features.
 
-    The model defines three pharmacophore points derived from the key
-    allosteric residues:
+    When ``CONFIG.pharmacophore_ref_ligand_smi`` is set, a 3-D pharmacophore
+    model is constructed from the reference ligand (generated with ETKDGv3).
+    Otherwise the method falls back to the original 2-D feature-counting
+    approach based on the three key allosteric residues:
       1. H-bond donor  – TYR159 (phenolic OH)
       2. H-bond acceptor – ALA237 (backbone carbonyl)
       3. Hydrophobic    – MET241 (side chain)
 
-    Returns a dict with keys ``'feat_types'`` (list of feature names) or
-    ``None`` if the RDKit feature factory cannot be loaded.
+    Returns:
+        A dict with mode-specific keys, or ``None`` if the RDKit feature
+        factory cannot be loaded.
     """
     if not _HAVE_PHARMACOPHORE or _PHARM_FACTORY is None:
         return None
+
+    # ── 3-D pharmacophore from reference ligand ──
+    if CONFIG.pharmacophore_ref_ligand_smi:
+        ref_mol = Chem.MolFromSmiles(CONFIG.pharmacophore_ref_ligand_smi)
+        if ref_mol is not None:
+            ref_mol_3d = Chem.RWMol(ref_mol)
+            ref_mol_3d = Chem.AddHs(ref_mol_3d)
+            params = Chem.rdDistGeom.ETKDGv3()
+            params.randomSeed = CONFIG.random_seed
+            if Chem.rdDistGeom.EmbedMolecule(ref_mol_3d, params) >= 0:
+                AllChem.MMFFOptimizeMolecule(ref_mol_3d, maxIters=500)
+                ref_features = _get_pharmacophore_points_3d(ref_mol_3d)
+                if ref_features:
+                    return {
+                        "ref_mol": ref_mol_3d,
+                        "ref_features": ref_features,
+                        "feat_types": list({f["type"] for f in ref_features}),
+                        "mode": "3d",
+                    }
+        log.warning("  Could not build 3-D pharmacophore from reference SMILES; "
+                     "falling back to 2-D feature check.")
+
+    # ── 2-D feature-based fallback ──
     return {
         "feat_types": ["Donor", "Acceptor", "Hydrophobe"],
         "residue_map": {
@@ -311,6 +377,7 @@ def _build_allosteric_pharmacophore() -> Optional[Dict[str, Any]]:
             "ALA237": "Acceptor",
             "MET241": "Hydrophobe",
         },
+        "mode": "2d",
     }
 
 
@@ -322,28 +389,103 @@ def check_pharmacophore_match(
 ) -> bool:
     """Check whether *mol* satisfies at least *min_matches* pharmacophore features.
 
-    Uses RDKit's ``ChemicalFeatures`` factory to extract H-bond donor,
-    H-bond acceptor, and hydrophobic features from the molecule, then
-    tests whether the required number of feature types are present.
+    In **3-D mode** (when ``CONFIG.pharmacophore_ref_ligand_smi`` is set):
+      1. A 3-D conformer for *mol* is generated with ETKDGv3.
+      2. The conformer is aligned to the reference ligand pharmacophore
+         using O3A (Open3DAlign) or maximum common substructure matching.
+      3. Pharmacophore feature points are extracted from the aligned
+         conformer and matched by type to the reference features.
+      4. The RMSD of the matched feature pairs is computed; the match
+         passes if ``RMSD < CONFIG.pharmacophore_rmsd_threshold``.
+
+    In **2-D mode** (fallback): feature types are counted via the RDKit
+    ``ChemicalFeatures`` factory.
 
     Args:
         mol: The candidate molecule to check.
         query: A pharmacophore model dict from
             :func:`_build_allosteric_pharmacophore`.  If ``None`` the
             allosteric model is built internally.
-        min_matches: Minimum number of feature types that must be present.
-        tolerance: Not used in the 2D feature-counting fallback (included
-            for API compatibility with future 3D matching).
+        min_matches: Minimum number of feature types that must be present
+            (used only in 2-D mode).
+        tolerance: Distance tolerance for feature matching in 3-D mode
+            (reserved for future use; defaults to
+            ``CONFIG.pharmacophone_rmsd_threshold`` for 3-D).
 
     Returns:
-        ``True`` if at least *min_matches* pharmacophore feature types are
-        detected, ``False`` otherwise.
+        ``True`` if the molecule passes the pharmacophore filter,
+        ``False`` otherwise.
     """
     if query is None:
         query = _build_allosteric_pharmacophore()
     if query is None or not _HAVE_PHARMACOPHORE or _PHARM_FACTORY is None:
         return True  # pass-through when pharmacophore is unavailable
 
+    mode = query.get("mode", "2d")
+
+    # ── 3-D pharmacophore matching ──────────────────────────────────
+    if mode == "3d":
+        ref_mol = query["ref_mol"]
+        ref_features = query["ref_features"]
+        if not ref_features:
+            return False
+
+        # 1. Generate 3-D conformer for the candidate
+        mol_3d = Chem.RWMol(mol)
+        mol_3d = Chem.AddHs(mol_3d)
+        params = Chem.rdDistGeom.ETKDGv3()
+        params.randomSeed = CONFIG.random_seed
+        if Chem.rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
+            return False
+        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
+
+        # 2. Align candidate to reference
+        try:
+            from rdkit.Chem import rdMolAlign
+
+            # Try MCS-based alignment first
+            matches = mol_3d.GetSubstructMatch(ref_mol)
+            if matches:
+                atom_map = [(matches[i], i) for i in range(len(matches))]
+                AllChem.AlignMol(mol_3d, ref_mol, atomMap=atom_map)
+            else:
+                matches = ref_mol.GetSubstructMatch(mol_3d)
+                if matches:
+                    atom_map = [(i, matches[i]) for i in range(len(matches))]
+                    AllChem.AlignMol(mol_3d, ref_mol, atomMap=atom_map)
+                else:
+                    o3a = rdMolAlign.GetO3A(mol_3d, ref_mol)
+                    o3a.Align()
+        except Exception:
+            try:
+                AllChem.AlignMol(mol_3d, ref_mol)
+            except Exception:
+                pass
+
+        # 3. Extract pharmacophore features from aligned candidate
+        query_features = _get_pharmacophore_points_3d(mol_3d)
+        if len(query_features) < min_matches:
+            return False
+
+        # 4. Match features by type (nearest-neighbour within each type)
+        matched_distances: List[float] = []
+        for ref_f in ref_features:
+            best_d = float("inf")
+            for qf in query_features:
+                if qf["type"] == ref_f["type"]:
+                    d = float(np.linalg.norm(ref_f["pos"] - qf["pos"]))
+                    if d < best_d:
+                        best_d = d
+            if best_d < float("inf"):
+                matched_distances.append(best_d)
+
+        if len(matched_distances) < min_matches:
+            return False
+
+        rmsd = float(np.sqrt(np.mean(np.square(matched_distances))))
+        return rmsd < CONFIG.pharmacophore_rmsd_threshold
+
+    # ── 2-D feature-counting fallback ───────────────────────────────
     try:
         feats = _PHARM_FACTORY.GetFeaturesForMol(mol)
     except Exception:
@@ -372,18 +514,21 @@ def generate_pharmacophore_aware_library(
     Works by:
       1. Generating BRICS-recombined compounds via the standard pipeline.
       2. Filtering with :func:`check_pharmacophore_match` to retain only
-         molecules that satisfy ≥ 2 pharmacophore features (H-bond donor,
-         H-bond acceptor, hydrophobic).
+         molecules that satisfy the pharmacophore filter.
       3. Falls back to standard library generation when pharmacophore
          resources are unavailable.
+
+    When ``CONFIG.pharmacophore_ref_ligand_smi`` is set, the filter uses
+    3-D alignment-based matching; otherwise the original 2-D feature-counting
+    approach is used.
 
     Args:
         target_count: Desired number of output compounds.
         seed: Random seed for reproducibility.
         allosteric_pocket_coords: Optional (3, 3) array of Cα coordinates
             for the three allosteric residues (TYR159, ALA237, MET241).
-            Not yet used in the 2D feature-counting fallback; reserved
-            for future 3D pharmacophore matching.
+            Used for informative logging only; the actual 3-D matching
+            uses the reference ligand pharmacophore.
 
     Returns:
         List of pharmacophore-enriched ``CompoundRecord`` objects.

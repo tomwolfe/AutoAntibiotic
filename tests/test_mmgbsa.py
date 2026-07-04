@@ -223,6 +223,167 @@ class TestRescoreWithML:
             CONFIG.use_mm_gbsa = saved
 
 
+# ── Water displacement correction ──────────────────────────────
+
+class MockWater:
+    """Minimal mock with the attributes *rescore_with_mmgbsa* accesses."""
+    def __init__(self, position, displacement_energy, is_high_energy):
+        self.position = np.array(position, dtype=np.float64)
+        self.displacement_energy = displacement_energy
+        self.is_high_energy = is_high_energy
+
+
+class MockWaterAnalysisResult:
+    """Minimal mock of ``WaterAnalysisResult``."""
+    def __init__(self, high_energy_waters):
+        self.high_energy_waters = high_energy_waters
+        self.all_waters = high_energy_waters
+
+
+class TestWaterDisplacementCorrection:
+    """Verifies that high-energy water clashes correctly adjust MM-GB/SA scores."""
+
+    def test_correction_applied_for_clashing_water(self, temp_work_dir: str) -> None:
+        """A high-energy water within 2.5 Å of the ligand should reduce ΔG."""
+        saved_thresh = CONFIG.pharmacophore_rmsd_threshold
+        candidate = CompoundRecord(
+            compound_id="CMP-WAT-001",
+            smiles="c1ccccc1O",  # phenol – simple ligand
+            mol=Chem.MolFromSmiles("c1ccccc1O"),
+            pb2pa_allosteric_energy=-7.0,
+        )
+
+        # Water at (0, 0, 0); phenol's oxygen will be near origin after ETKDG
+        high_energy_water = MockWater(
+            position=[0.0, 0.0, 0.0],
+            displacement_energy=2.0,
+            is_high_energy=True,
+        )
+        water_results = MockWaterAnalysisResult(
+            high_energy_waters=[high_energy_water],
+        )
+
+        # We'll mock the MM-GB/SA internals to return fixed energies
+        fake_rec_energy = -2000.0
+        fake_lig_energy = 50.0
+        fake_complex_energy = -1950.0
+        # ΔG_binding = -1950 - (-2000) - 50 = 0.0 (simple test baseline)
+
+        dummy_pdb = os.path.join(temp_work_dir, "receptor.pdb")
+        with open(dummy_pdb, "w") as f:
+            f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+
+        with patch.multiple(
+            "autoantibiotic.ml_scoring",
+            _HAVE_OPENMM=True,
+            _prepare_receptor_for_mmgbsa=MagicMock(
+                return_value=(
+                    MagicMock(),  # rec_topology
+                    MagicMock(),  # forcefield
+                    MagicMock(),  # cpu_platform
+                    fake_rec_energy,
+                )
+            ),
+            _compute_ligand_gb_energy=MagicMock(return_value=fake_lig_energy),
+            _compute_complex_gb_energy=MagicMock(return_value=fake_complex_energy),
+        ):
+            result = rescore_with_mmgbsa(
+                [candidate],
+                dummy_pdb,
+                temp_work_dir,
+                water_results=water_results,
+            )
+
+        assert len(result) == 1
+        final_score = result[0].ml_score
+        # ΔG_binding = 0.0, correction = -2.0 (subtract displacement energy)
+        # expected = 0.0 - 2.0 = -2.0
+        assert final_score is not None
+        assert final_score == pytest.approx(-2.0, abs=1e-4), (
+            f"Expected -2.0, got {final_score}"
+        )
+
+    def test_no_correction_when_water_not_high_energy(
+        self, temp_work_dir: str,
+    ) -> None:
+        """A low-energy water clashing should NOT adjust the score."""
+        candidate = CompoundRecord(
+            compound_id="CMP-WAT-002",
+            smiles="c1ccccc1O",
+            mol=Chem.MolFromSmiles("c1ccccc1O"),
+            pb2pa_allosteric_energy=-7.0,
+        )
+
+        low_energy_water = MockWater(
+            position=[0.0, 0.0, 0.0],
+            displacement_energy=2.0,
+            is_high_energy=False,
+        )
+        water_results = MockWaterAnalysisResult(
+            high_energy_waters=[],  # empty → no correction
+        )
+
+        dummy_pdb = os.path.join(temp_work_dir, "receptor.pdb")
+        with open(dummy_pdb, "w") as f:
+            f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+
+        with patch.multiple(
+            "autoantibiotic.ml_scoring",
+            _HAVE_OPENMM=True,
+            _prepare_receptor_for_mmgbsa=MagicMock(
+                return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
+            ),
+            _compute_ligand_gb_energy=MagicMock(return_value=50.0),
+            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+        ):
+            result = rescore_with_mmgbsa(
+                [candidate],
+                dummy_pdb,
+                temp_work_dir,
+                water_results=water_results,
+            )
+
+        final_score = result[0].ml_score
+        # ΔG_binding = 0.0, no correction → expected 0.0
+        assert final_score is not None
+        assert final_score == pytest.approx(0.0, abs=1e-4)
+
+    def test_no_correction_when_water_results_none(
+        self, temp_work_dir: str,
+    ) -> None:
+        """When *water_results* is None, the score should not be adjusted."""
+        candidate = CompoundRecord(
+            compound_id="CMP-WAT-003",
+            smiles="c1ccccc1O",
+            mol=Chem.MolFromSmiles("c1ccccc1O"),
+            pb2pa_allosteric_energy=-7.0,
+        )
+
+        dummy_pdb = os.path.join(temp_work_dir, "receptor.pdb")
+        with open(dummy_pdb, "w") as f:
+            f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+
+        with patch.multiple(
+            "autoantibiotic.ml_scoring",
+            _HAVE_OPENMM=True,
+            _prepare_receptor_for_mmgbsa=MagicMock(
+                return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
+            ),
+            _compute_ligand_gb_energy=MagicMock(return_value=50.0),
+            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+        ):
+            result = rescore_with_mmgbsa(
+                [candidate],
+                dummy_pdb,
+                temp_work_dir,
+                water_results=None,
+            )
+
+        final_score = result[0].ml_score
+        assert final_score is not None
+        assert final_score == pytest.approx(0.0, abs=1e-4)
+
+
 # ── Config integration ────────────────────────────────────────
 
 class TestConfigIntegration:

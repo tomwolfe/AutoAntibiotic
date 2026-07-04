@@ -251,7 +251,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         return
 
     # ── Phase 3: Virtual screening ──
-    top10 = screen_library(filtered, targets, work_dir, deps, cache=cache, use_cache=use_cache)
+    top10 = screen_library(filtered, targets, work_dir, deps, cache=cache, use_cache=use_cache, water_results=water_results)
 
     if not top10:
         log.warning("  No candidates after screening. Halting pipeline.")

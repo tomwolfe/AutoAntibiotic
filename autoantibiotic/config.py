@@ -177,6 +177,17 @@ class PipelineConfig:
     pharmacophore_min_matches: int = 2
     pharmacophore_tolerance: float = 2.0
 
+    # 3D Pharmacophore Filtering (Phase 8+)
+    pharmacophore_rmsd_threshold: float = 1.5
+    """Maximum RMSD (Å) for 3D pharmacophore feature matching.
+    Molecules with feature RMSD below this threshold pass the filter
+    when a reference ligand SMILES is provided."""
+    pharmacophore_ref_ligand_smi: str = ""
+    """SMILES of the reference ligand used to build the 3D pharmacophore
+    query.  Typically the co-crystallized ligand from PDB 6TKO
+    (e.g. ceftaroline).  If left empty the module falls back to the
+    original 2D feature-counting pharmacophore check."""
+
     # GNINA deep-learning docking (Phase 6)
     use_gnina: bool = False
     gnina_binary_path: str = "gnina"

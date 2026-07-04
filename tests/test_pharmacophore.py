@@ -1,11 +1,12 @@
 """Unit tests for pharmacophore-aware library generation."""
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pytest
 from rdkit import Chem
 
+from autoantibiotic.config import CONFIG
 from autoantibiotic.library_gen import (
     _build_allosteric_pharmacophore,
     check_pharmacophore_match,
@@ -155,3 +156,44 @@ class TestGeneratePharmacophoreAwareLibrary:
                 mol = Chem.MolFromSmiles(rec.smiles)
             assert mol is not None
             assert check_pharmacophore_match(mol, query, min_matches=2) is True
+
+
+class Test3DPharmacophoreRmsdCheck:
+    """Verifies the 3-D pharmacophore RMSD check with a reference ligand."""
+
+    CEF_SMILES = ("CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)"
+                  "C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O")
+
+    @pytest.fixture(autouse=True)
+    def _setup_3d_pharmacophore(self) -> None:
+        """Temporarily enable 3-D pharmacophore mode for every test."""
+        saved_smi = CONFIG.pharmacophore_ref_ligand_smi
+        saved_thresh = CONFIG.pharmacophore_rmsd_threshold
+        CONFIG.pharmacophore_ref_ligand_smi = self.CEF_SMILES
+        CONFIG.pharmacophore_rmsd_threshold = 1.5
+        yield
+        CONFIG.pharmacophore_ref_ligand_smi = saved_smi
+        CONFIG.pharmacophore_rmsd_threshold = saved_thresh
+
+    def _get_query(self) -> Optional[Dict[str, Any]]:
+        q = _build_allosteric_pharmacophore()
+        if q is None or q.get("mode") != "3d":
+            pytest.skip("3-D pharmacophore factory unavailable")
+        return q
+
+    def test_known_binder_passes_rmsd_threshold(self) -> None:
+        """The reference ligand (ceftaroline) passes its own RMSD check."""
+        query = self._get_query()
+        mol = Chem.MolFromSmiles(self.CEF_SMILES)
+        assert mol is not None
+        assert check_pharmacophore_match(mol, query, min_matches=1) is True
+
+    def test_random_molecule_fails_rmsd_threshold(self) -> None:
+        """A random non-drug-like molecule should fail."""
+        query = self._get_query()
+        mol = Chem.MolFromSmiles("CCCCCCCCCCCCCCCCCC(=O)O")  # stearic acid
+        assert mol is not None
+        result = check_pharmacophore_match(mol, query, min_matches=1)
+        assert result is False, (
+            "Simple fatty acid should not match the ceftaroline pharmacophore"
+        )

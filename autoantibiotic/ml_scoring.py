@@ -12,6 +12,13 @@ from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
 from .config import CONFIG, CompoundRecord
 from .io_utils import log
 
+try:
+    from .water_analysis import WaterAnalysisResult
+    _HAVE_WATER = True
+except ImportError:
+    WaterAnalysisResult = None  # type: ignore
+    _HAVE_WATER = False
+
 _HAVE_GNINA: bool = False
 _HAVE_RF_SCORE: bool = False
 _HAVE_TRANSFORMERS: bool = False
@@ -435,6 +442,7 @@ def rescore_with_mmgbsa(
     top_candidates: List[CompoundRecord],
     receptor_pdb: str,
     work_dir: str,
+    water_results: Optional[WaterAnalysisResult] = None,
 ) -> List[CompoundRecord]:
     """Rescore the top candidates using MM-GB/SA with OpenMM + OBC2.
 
@@ -444,6 +452,16 @@ def rescore_with_mmgbsa(
 
     where each G = E_MM (bonded + vdW + Coulomb) + E_GB (Born).
 
+    When *water_results* is provided and contains high-energy waters
+    that clash with the ligand (distance < 2.5 Å), a favourable water
+    displacement correction is applied:
+
+        ΔG_corrected = ΔG_binding - Σ E_displacement
+
+    The correction makes the binding energy more negative when
+    displaceable (high-energy) waters are sterically incompatible
+    with the docked ligand.
+
     Uses ``CONFIG.mm_gbsa_top_n`` to determine how many candidates
     are rescored.  If *parmed* is available, an alternative Amber
     GB computation is used as a consistency check.
@@ -452,6 +470,7 @@ def rescore_with_mmgbsa(
         top_candidates: Docked candidates (uses SMILES for 3D generation).
         receptor_pdb: Path to the receptor PDB file.
         work_dir: Working directory for intermediate files.
+        water_results: Optional crystallographic water analysis result.
 
     Returns:
         Updated candidates with ``ml_score`` set to the MM-GB/SA ΔG
@@ -512,6 +531,35 @@ def rescore_with_mmgbsa(
                 continue
 
             binding_energy = complex_energy - rec_energy - lig_energy
+
+            # ── Water displacement correction ─────────────────────
+            if water_results is not None and water_results.high_energy_waters:
+                mol_3d_lig = Chem.RWMol(mol)
+                mol_3d_lig = Chem.AddHs(mol_3d_lig)
+                params = Chem.rdDistGeom.ETKDGv3()
+                params.randomSeed = CONFIG.random_seed + rank
+                if Chem.rdDistGeom.EmbedMolecule(mol_3d_lig, params) >= 0:
+                    AllChem.MMFFOptimizeMolecule(mol_3d_lig, maxIters=500)
+                    lig_conf = mol_3d_lig.GetConformer()
+                    lig_coords = np.array([
+                        [lig_conf.GetAtomPosition(i).x,
+                         lig_conf.GetAtomPosition(i).y,
+                         lig_conf.GetAtomPosition(i).z]
+                        for i in range(mol_3d_lig.GetNumAtoms())
+                    ])
+                    clash_penalty = 0.0
+                    for w in water_results.high_energy_waters:
+                        min_dist = float(np.min(
+                            np.linalg.norm(lig_coords - w.position, axis=1)
+                        ))
+                        if min_dist < 2.5:
+                            clash_penalty += w.displacement_energy
+                    if clash_penalty > 0.0:
+                        binding_energy -= clash_penalty
+                        log.info(f"      Water displacement correction: "
+                                 f"-{clash_penalty:.2f} kcal/mol "
+                                 f"(corrected ΔG = {binding_energy:.2f})")
+
             mm_gbsa_scores[rec.compound_id] = binding_energy
             log.info(f"    ΔG ≈ {binding_energy:.2f} kcal/mol  "
                      f"(rec={rec_energy:.1f} + lig={lig_energy:.1f} → "
@@ -534,12 +582,15 @@ def rescore_with_ml(
     top_candidates: List[CompoundRecord],
     receptor_pdbqt: str,
     work_dir: str,
+    water_results: Optional[WaterAnalysisResult] = None,
 ) -> List[CompoundRecord]:
     """Rescore the top Vina candidates using the best available method.
 
     Selection priority:
       0. **MM-GB/SA**: if ``CONFIG.use_mm_gbsa`` is set and OpenMM is
          available. Requires a receptor PDB file alongside the PDBQT.
+         When *water_results* is provided, water displacement correction
+         is applied automatically.
       1. **GNINA**: if the ``gnina`` binary is on ``$PATH``.
       2. **RF-Score-VS**: a Random Forest model trained on Vina energies
          and RDKit descriptors.
@@ -549,6 +600,13 @@ def rescore_with_ml(
     Each method sets ``rec.ml_score = predicted_energy_like_value``.
     Unsuccessful methods leave ``ml_score = None``, and the function
     always returns without raising.
+
+    Args:
+        top_candidates: Docked candidates to rescore.
+        receptor_pdbqt: Path to the receptor PDBQT file.
+        work_dir: Working directory for intermediate files.
+        water_results: Optional crystallographic water analysis for
+            water displacement correction in MM-GB/SA rescoring.
     """
     log.info("─── ML Rescoring ───")
     n = len(top_candidates)
@@ -558,7 +616,10 @@ def rescore_with_ml(
     if CONFIG.use_mm_gbsa or CONFIG.use_mm_gbsa_rescoring:
         receptor_pdb = receptor_pdbqt.replace(".pdbqt", ".pdb")
         if os.path.exists(receptor_pdb):
-            return rescore_with_mmgbsa(top_candidates, receptor_pdb, work_dir)
+            return rescore_with_mmgbsa(
+                top_candidates, receptor_pdb, work_dir,
+                water_results=water_results,
+            )
         log.warning(
             "  MM-GB/SA enabled but receptor PDB not found at "
             f"{receptor_pdb}. Skipping MM-GB/SA."

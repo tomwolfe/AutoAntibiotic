@@ -16,6 +16,11 @@ from .config import CONFIG, CompoundRecord
 from .io_utils import CacheManager, log, parse_gnina_energy, parse_vina_energy, run_tool
 
 try:
+    from .water_analysis import WaterAnalysisResult
+except ImportError:
+    WaterAnalysisResult = None  # type: ignore
+
+try:
     from Bio.PDB import PDBIO, PDBParser
     from Bio.PDB import is_aa as _is_aa_pdb
     _HAVE_BIOPDB = True
@@ -1042,6 +1047,7 @@ def screen_library(
     deps: Dict[str, Any],
     cache: _CacheLike = None,
     use_cache: bool = False,
+    water_results: Optional[WaterAnalysisResult] = None,
 ) -> List[CompoundRecord]:
     """Phase 3 — Virtual screening.
 
@@ -1050,6 +1056,9 @@ def screen_library(
     Flexible docking: generate side-chain rotamer conformers and use ensemble
         docking (``consensus_scoring_method = "min"``) to account for induced fit.
     Fallback (RDKit Shape): shape scoring vs native ligand.
+
+    When *water_results* is provided, it is forwarded to the ML rescoring
+    stage for water displacement correction in MM-GB/SA.
 
     Returns top 10 candidates.
     """
@@ -1309,6 +1318,7 @@ def screen_library(
                 top_to_rescore,
                 pb2pa["pdbqt"],
                 work_dir,
+                water_results=water_results,
             )
         except Exception as exc:
             log.warning(f"  ML rescoring failed: {exc}")
