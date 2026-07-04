@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import itertools
+import os
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
-from rdkit import Chem
+from rdkit import Chem, RDConfig
 from rdkit.Chem import (
     AllChem,
     BRICS,
+    ChemicalFeatures,
     Crippen,
     Descriptors,
     QED,
@@ -33,6 +35,14 @@ except ImportError:
     _HAVE_SA_SCORE = False
 
 _HAVE_TOX_ALERTS = True
+
+_HAVE_PHARMACOPHORE = True
+try:
+    _fdef = os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
+    _PHARM_FACTORY = ChemicalFeatures.BuildFeatureFactory(_fdef)
+except Exception:
+    _PHARM_FACTORY = None
+    _HAVE_PHARMACOPHORE = False
 
 
 def _count_atoms(mol: Chem.Mol) -> int:
@@ -278,6 +288,138 @@ def generate_candidate_library(
             "Consider adding more scaffolds or building blocks."
         )
     return records
+
+
+def _build_allosteric_pharmacophore() -> Optional[Dict[str, Any]]:
+    """Build a pharmacophore query model based on PBP2a allosteric pocket features.
+
+    The model defines three pharmacophore points derived from the key
+    allosteric residues:
+      1. H-bond donor  – TYR159 (phenolic OH)
+      2. H-bond acceptor – ALA237 (backbone carbonyl)
+      3. Hydrophobic    – MET241 (side chain)
+
+    Returns a dict with keys ``'feat_types'`` (list of feature names) or
+    ``None`` if the RDKit feature factory cannot be loaded.
+    """
+    if not _HAVE_PHARMACOPHORE or _PHARM_FACTORY is None:
+        return None
+    return {
+        "feat_types": ["Donor", "Acceptor", "Hydrophobe"],
+        "residue_map": {
+            "TYR159": "Donor",
+            "ALA237": "Acceptor",
+            "MET241": "Hydrophobe",
+        },
+    }
+
+
+def check_pharmacophore_match(
+    mol: Chem.Mol,
+    query: Optional[Dict[str, Any]] = None,
+    min_matches: int = 2,
+    tolerance: float = 2.0,
+) -> bool:
+    """Check whether *mol* satisfies at least *min_matches* pharmacophore features.
+
+    Uses RDKit's ``ChemicalFeatures`` factory to extract H-bond donor,
+    H-bond acceptor, and hydrophobic features from the molecule, then
+    tests whether the required number of feature types are present.
+
+    Args:
+        mol: The candidate molecule to check.
+        query: A pharmacophore model dict from
+            :func:`_build_allosteric_pharmacophore`.  If ``None`` the
+            allosteric model is built internally.
+        min_matches: Minimum number of feature types that must be present.
+        tolerance: Not used in the 2D feature-counting fallback (included
+            for API compatibility with future 3D matching).
+
+    Returns:
+        ``True`` if at least *min_matches* pharmacophore feature types are
+        detected, ``False`` otherwise.
+    """
+    if query is None:
+        query = _build_allosteric_pharmacophore()
+    if query is None or not _HAVE_PHARMACOPHORE or _PHARM_FACTORY is None:
+        return True  # pass-through when pharmacophore is unavailable
+
+    try:
+        feats = _PHARM_FACTORY.GetFeaturesForMol(mol)
+    except Exception:
+        return True
+
+    found: set = set()
+    for feat in feats:
+        ftype = feat.GetFamily()
+        if ftype == "Donor":
+            found.add("Donor")
+        elif ftype == "Acceptor":
+            found.add("Acceptor")
+        elif ftype == "Hydrophobe":
+            found.add("Hydrophobe")
+
+    return len(found) >= min_matches
+
+
+def generate_pharmacophore_aware_library(
+    target_count: int = CONFIG.library_target_count,
+    seed: int = CONFIG.random_seed,
+    allosteric_pocket_coords: Optional[np.ndarray] = None,
+) -> List[CompoundRecord]:
+    """Generate a focused library enriched for PBP2a allosteric-site binding.
+
+    Works by:
+      1. Generating BRICS-recombined compounds via the standard pipeline.
+      2. Filtering with :func:`check_pharmacophore_match` to retain only
+         molecules that satisfy ≥ 2 pharmacophore features (H-bond donor,
+         H-bond acceptor, hydrophobic).
+      3. Falls back to standard library generation when pharmacophore
+         resources are unavailable.
+
+    Args:
+        target_count: Desired number of output compounds.
+        seed: Random seed for reproducibility.
+        allosteric_pocket_coords: Optional (3, 3) array of Cα coordinates
+            for the three allosteric residues (TYR159, ALA237, MET241).
+            Not yet used in the 2D feature-counting fallback; reserved
+            for future 3D pharmacophore matching.
+
+    Returns:
+        List of pharmacophore-enriched ``CompoundRecord`` objects.
+    """
+    log.info("─── Pharmacophore-Aware Library Generation ───")
+    query = _build_allosteric_pharmacophore()
+    if query is None or not _HAVE_PHARMACOPHORE:
+        log.warning("  Pharmacophore factory unavailable; falling back to standard library.")
+        return list(generate_candidate_library(target_count, seed))
+
+    pharm_feats = query["feat_types"]
+    log.info(f"  Pharmacophore features: {pharm_feats}")
+    if allosteric_pocket_coords is not None:
+        log.info(f"  3D pocket coords provided ({allosteric_pocket_coords.shape[0]} residues).")
+
+    standard_records = list(generate_candidate_library(target_count, seed))
+    log.info(f"  Standard library size: {len(standard_records)}")
+
+    passed: List[CompoundRecord] = []
+    for rec in standard_records:
+        mol = rec.mol
+        if mol is None:
+            mol = Chem.MolFromSmiles(rec.smiles)
+            if mol is None:
+                continue
+            rec.mol = mol
+        if check_pharmacophore_match(
+            mol, query,
+            min_matches=CONFIG.pharmacophore_min_matches,
+            tolerance=CONFIG.pharmacophore_tolerance,
+        ):
+            passed.append(rec)
+
+    passed = passed[:target_count]
+    log.info(f"  Pharmacophore-enriched library: {len(passed)} compounds (≥{CONFIG.pharmacophore_min_matches} feat. matches).")
+    return passed
 
 
 def _setup_toxicity_catalog() -> FilterCatalog:

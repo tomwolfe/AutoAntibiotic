@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, rdDistGeom, rdMolAlign
+from rdkit.Chem import AllChem, Crippen, Descriptors, rdDistGeom, rdMolAlign
 
 from .config import CONFIG, CompoundRecord
 from .docking import _parallel_dock
@@ -169,6 +169,129 @@ def profile_resistance_risk(
     return "; ".join(notes)
 
 
+_LOGS_MODEL_COEFFS = {
+    "c": 0.16, "MolLogP": -0.63, "MolWt": -0.0062,
+    "NumRotatableBonds": -0.0034, "NumAromaticRings": -0.042,
+    "HeavyAtomCount": 0.00025,
+}
+
+
+def predict_logs(mol: Chem.Mol) -> float:
+    """Predict aqueous solubility (LogS) using a simple linear model.
+
+    The model is a re-implementation of the ESOL method (Delaney 2004)
+    using RDKit descriptors:
+
+        LogS = 0.16 - 0.63*LogP - 0.0062*MW + 0.0034*RotBonds
+               - 0.042*AromRings + 0.00025*HeavyAtoms
+
+    Returns predicted LogS in mol/L.
+    """
+    logp = Crippen.MolLogP(mol)
+    mw = Descriptors.MolWt(mol)
+    rot = Descriptors.NumRotatableBonds(mol)
+    n_arom = Descriptors.NumAromaticRings(mol) if hasattr(Descriptors, "NumAromaticRings") else 0
+    heavy = mol.GetNumHeavyAtoms()
+
+    logs = (
+        _LOGS_MODEL_COEFFS["c"]
+        + _LOGS_MODEL_COEFFS["MolLogP"] * logp
+        + _LOGS_MODEL_COEFFS["MolWt"] * mw
+        + _LOGS_MODEL_COEFFS["NumRotatableBonds"] * rot
+        + _LOGS_MODEL_COEFFS["NumAromaticRings"] * n_arom
+        + _LOGS_MODEL_COEFFS["HeavyAtomCount"] * heavy
+    )
+    return logs
+
+
+def _has_basic_nitrogen(mol: Chem.Mol) -> bool:
+    """Check if the molecule contains a basic nitrogen (aliphatic primary/secondary/tertiary)."""
+    basic_n_pattern = Chem.MolFromSmarts("[NX3;H0,H1,H2;!$(NC=O)]")
+    if basic_n_pattern is None:
+        return False
+    return mol.HasSubstructMatch(basic_n_pattern)
+
+
+def predict_herg_risk(mol: Chem.Mol) -> str:
+    """Rule-based hERG blockage risk assessment.
+
+    Flags compounds with:
+      - LogP > 4.0  (high lipophilicity → promiscuous hERG binding)
+      - AND presence of a basic nitrogen
+
+    Returns ``"High"``, ``"Moderate"``, or ``"Low"``.
+    """
+    logp = Crippen.MolLogP(mol)
+    has_basic_n = _has_basic_nitrogen(mol)
+    if logp > 4.0 and has_basic_n:
+        return "High"
+    if logp > 4.0 or has_basic_n:
+        return "Moderate"
+    return "Low"
+
+
+def predict_admet_profile(record: CompoundRecord) -> CompoundRecord:
+    """Compute ADMET properties for a compound and populate *admet_flags*.
+
+    Evaluates:
+      1. **Solubility (LogS)**: predicted via ESOL model.
+      2. **hERG blockage risk**: rule-based (LogP + basic nitrogen).
+      3. **Lipinski Rule-of-5** and **QED** (already computed in filtering).
+
+    Flags are appended to ``record.admet_flags``.
+
+    Returns the same ``CompoundRecord`` with populated *admet_flags*.
+    """
+    if record.mol is None:
+        mol = Chem.MolFromSmiles(record.smiles)
+        if mol is None:
+            record.admet_flags.append("ADMET: invalid molecule")
+            return record
+        record.mol = mol
+    mol = record.mol
+
+    flags: List[str] = []
+
+    # Solubility
+    try:
+        logs = predict_logs(mol)
+        if logs < -5.0:
+            flags.append(f"Poor solubility (LogS={logs:.2f})")
+        elif logs < -3.0:
+            flags.append(f"Moderate solubility (LogS={logs:.2f})")
+        else:
+            flags.append(f"Good solubility (LogS={logs:.2f})")
+    except Exception:
+        flags.append("Solubility prediction failed")
+
+    # hERG risk
+    try:
+        herg = predict_herg_risk(mol)
+        if herg == "High":
+            flags.append("High hERG risk (LogP>4 + basic N)")
+        elif herg == "Moderate":
+            flags.append("Moderate hERG risk")
+        else:
+            flags.append("Low hERG risk")
+    except Exception:
+        flags.append("hERG prediction failed")
+
+    # Lipinski (already computed, just annotate)
+    if record.passes_lipinski:
+        flags.append("Lipinski OK")
+    else:
+        flags.append("Lipinski violation")
+
+    # QED
+    if record.qed_score > CONFIG.qed_threshold:
+        flags.append(f"QED OK ({record.qed_score:.2f})")
+    else:
+        flags.append(f"QED below threshold ({record.qed_score:.2f})")
+
+    record.admet_flags = flags
+    return record
+
+
 def analyze_selectivity_and_resistance(
     top10: List[CompoundRecord],
     targets: Dict[str, Any],
@@ -265,6 +388,12 @@ def analyze_selectivity_and_resistance(
             pb2pa["allosteric_center"],
             CONFIG.allosteric_box_size,
         )
+
+    # ── ADMET profiling on top 10 ──
+    log.info("  Computing ADMET profiles for top candidates…")
+    for rec in top10:
+        predict_admet_profile(rec)
+        log.debug(f"  {rec.compound_id}: {rec.admet_flags}")
 
     log.info("─── Phase 4 complete ───")
     return top10

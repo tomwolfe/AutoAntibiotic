@@ -9,3 +9,9 @@ sascore>=1.0.0
 pyyaml>=6.0
 plotly>=5.18.0
 scikit-learn>=1.3.0
+
+# Optional: ML rescoring backends
+# gnina  # install separately from https://github.com/gnina/gnina
+# transformers>=4.30.0  # for ChemBERTa rescoring
+# torch>=1.13.0  # required by transformers
+# onnxruntime>=1.14.0  # for ONNX-based ADMET models

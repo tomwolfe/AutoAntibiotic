@@ -26,7 +26,7 @@ from .io_utils import (
     set_global_seed,
     verify_dependencies,
 )
-from .library_gen import apply_filters, generate_candidate_library
+from .library_gen import apply_filters, generate_candidate_library, generate_pharmacophore_aware_library
 from .reporting import generate_csv_report, generate_html_report, generate_images, print_summary
 from .structure_prep import prepare_targets
 
@@ -96,7 +96,16 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     # ── Phase 2: Library generation & filtering ──
-    all_records = list(generate_candidate_library(target_count=CONFIG.library_target_count))
+    if CONFIG.use_pharmacophore_filter:
+        log.info("  Pharmacophore-constrained library generation enabled.")
+        all_records = generate_pharmacophore_aware_library(
+            target_count=CONFIG.library_target_count,
+            seed=CONFIG.random_seed,
+        )
+    else:
+        all_records = list(
+            generate_candidate_library(target_count=CONFIG.library_target_count)
+        )
     n_total = len(all_records)
 
     filtered = apply_filters(all_records)

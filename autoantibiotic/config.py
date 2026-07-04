@@ -171,6 +171,12 @@ class PipelineConfig:
     mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
     dry_run: bool = False
 
+    # Phase 6 – AI-enhanced features
+    use_pharmacophore_filter: bool = True
+    use_ml_rescoring: bool = True
+    pharmacophore_min_matches: int = 2
+    pharmacophore_tolerance: float = 2.0
+
     # Analysis thresholds (Phase 4)
     resistance_energy_active_threshold: float = -6.0
     resistance_energy_allosteric_threshold: float = -7.0
@@ -278,3 +284,6 @@ class CompoundRecord:
     resistance_notes: str = ""
 
     shape_score: Optional[float] = None
+
+    ml_score: Optional[float] = None
+    admet_flags: List[str] = field(default_factory=list)

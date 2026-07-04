@@ -14,6 +14,13 @@ from rdkit.Chem import AllChem, rdDistGeom
 from .config import CONFIG, CompoundRecord
 from .io_utils import CacheManager, log, parse_vina_energy, run_tool
 
+try:
+    from .ml_scoring import rescore_with_ml as _rescore_with_ml
+    _HAVE_ML_SCORING = True
+except ImportError:
+    _HAVE_ML_SCORING = False
+    _rescore_with_ml = None
+
 _CacheLike = Optional[Union[CacheManager, Dict[str, float]]]
 
 try:
@@ -703,8 +710,26 @@ def screen_library(
         else:
             log.warning("  No shape scores computed.")
 
-    use_vina = deps.get("USE_VINA", False)
-    if use_vina:
+    # ── ML rescoring on top 50 Vina hits ──
+    if (
+        use_vina
+        and CONFIG.use_ml_rescoring
+        and _HAVE_ML_SCORING
+        and scored
+    ):
+        log.info("  Applying ML rescoring to top 50 Vina hits…")
+        try:
+            top_to_rescore = scored[:50]
+            top_to_rescore = _rescore_with_ml(
+                top_to_rescore,
+                pb2pa["pdbqt"],
+                work_dir,
+            )
+        except Exception as exc:
+            log.warning(f"  ML rescoring failed: {exc}")
+
+    use_vina_final = deps.get("USE_VINA", False)
+    if use_vina_final:
         ranked = [r for r in records if r.pb2pa_allosteric_energy is not None]
         ranked.sort(key=lambda r: r.pb2pa_allosteric_energy)
     else:

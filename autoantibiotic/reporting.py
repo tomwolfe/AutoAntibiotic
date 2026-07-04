@@ -48,6 +48,10 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
                 f"{rec.shape_score:.2f}" if rec.shape_score is not None
                 else "N/A"
             ),
+            "ML_Score": (
+                f"{rec.ml_score:.2f}" if rec.ml_score is not None
+                else "N/A"
+            ),
             "Selectivity_Index": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
                 else "N/A"
@@ -55,6 +59,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
             "Max_Similarity": f"{rec.max_similarity:.3f}",
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
+            "ADMET_Flags": "; ".join(rec.admet_flags) if rec.admet_flags else "N/A",
             "Scoring_Method": scoring_method,
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
         })
@@ -302,16 +307,28 @@ def generate_html_report(
         active = f"{rec.pb2pa_active_energy:.2f}" if rec.pb2pa_active_energy is not None else "N/A"
         si = f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None else "N/A"
         qed = f"{rec.qed_score:.3f}" if rec.qed_score else "N/A"
+        ml_score = f"{rec.ml_score:.2f}" if rec.ml_score is not None else "N/A"
+        admet_str = "; ".join(rec.admet_flags) if rec.admet_flags else "N/A"
+
+        poor_admet = (
+            "poor_solubility" in admet_str.lower()
+            or "high herg" in admet_str.lower()
+            or "lipinski violation" in admet_str.lower()
+        )
+        row_style = ' style="background-color:#ffcccc;"' if poor_admet else ""
+
         table_rows += (
-            f"<tr>"
+            f"<tr{row_style}>"
             f"<td>{i + 1}</td>"
             f"<td>{rec.compound_id}</td>"
             f"<td style='font-size:0.8em;max-width:300px;word-break:break-all;'>{rec.smiles}</td>"
             f"<td>{allosteric}</td>"
             f"<td>{active}</td>"
+            f"<td>{ml_score}</td>"
             f"<td>{si}</td>"
             f"<td>{qed}</td>"
-            f"<td>{rec.resistance_notes}</td>"
+            f"<td style='font-size:0.8em;max-width:200px;'>{admet_str}</td>"
+            f"<td style='font-size:0.8em;max-width:250px;'>{rec.resistance_notes}</td>"
             f"</tr>\n"
         )
 
@@ -338,8 +355,11 @@ table {{ border-collapse: collapse; width: 100%; margin-top: 10px; }}
 th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
 th {{ background-color: #2e86c1; color: white; }}
 tr:nth-child(even) {{ background-color: #f2f2f2; }}
+tr.admet-warning {{ background-color: #ffcccc; }}
 .plotly-graph-div {{ margin: 10px 0; }}
 .footer {{ margin-top: 30px; color: #777; font-size: 0.9em; }}
+.warning-text {{ color: #cc0000; font-weight: bold; }}
+.admet-info {{ font-size: 0.8em; max-width: 200px; word-break: break-word; }}
 </style>
 </head>
 <body>
@@ -354,6 +374,7 @@ tr:nth-child(even) {{ background-color: #f2f2f2; }}
 {_section("Chemical Diversity (PCA of Morgan Fingerprints)", pca_div)}
 
 <h2>Top {len(top10)} Candidates</h2>
+<p>Rows highlighted in <span class="warning-text">red</span> have poor ADMET flags despite strong docking scores.</p>
 <table>
 <tr>
   <th>Rank</th>
@@ -361,8 +382,10 @@ tr:nth-child(even) {{ background-color: #f2f2f2; }}
   <th>SMILES</th>
   <th>Allosteric (kcal/mol)</th>
   <th>Active (kcal/mol)</th>
+  <th>ML Score</th>
   <th>Selectivity Index</th>
   <th>QED</th>
+  <th>ADMET Flags</th>
   <th>Resistance Notes</th>
 </tr>
 {table_rows}

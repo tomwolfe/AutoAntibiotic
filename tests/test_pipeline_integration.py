@@ -103,10 +103,12 @@ EXPECTED_CSV_COLUMNS = [
     "Human_Trypsin_Energy",
     "Human_CES1_Energy",
     "Shape_Score",
+    "ML_Score",
     "Selectivity_Index",
     "Max_Similarity",
     "Passes_Lipinski",
     "QED_Score",
+    "ADMET_Flags",
     "Scoring_Method",
     "Binding_Mode_Notes",
 ]
