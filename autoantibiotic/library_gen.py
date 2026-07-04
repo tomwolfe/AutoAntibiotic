@@ -56,7 +56,26 @@ def _brics_recombination(
     seen_smiles: set,
     seed: int = CONFIG.random_seed,
 ) -> Tuple[List[CompoundRecord], set]:
-    """Recombine BRICS fragments using BRICSBuild, then pick a diverse subset via MaxMin."""
+    """Recombine BRICS fragments using BRICSBuild, then pick a diverse subset via MaxMin.
+
+    Uses RDKit's BRICSBuild to enumerate recombination products from the
+    provided fragment pool.  Duplicate products (by canonical SMILES) and
+    acyclic molecules are discarded.  If the resulting pool exceeds the
+    requested count, MaxMin diversity picking selects the most diverse
+    subset based on Morgan fingerprints.
+
+    Args:
+        frag_mols: RDKit Mol objects representing BRICS-compatible fragments.
+        target_count: Desired number of compounds to return.
+        seen_smiles: Set of SMILES strings already used (e.g. from
+            scaffold entries); duplicates are skipped.
+        seed: Random seed for fragment shuffling and MaxMin picking.
+
+    Returns:
+        Tuple of ``(records, updated_seen_smiles)`` where *records* is
+        the list of selected ``CompoundRecord`` objects and
+        *updated_seen_smiles* includes the newly generated SMILES.
+    """
     rng = np.random.default_rng(seed)
 
     pool_mult = CONFIG.diversity_pool_multiplier

@@ -13,10 +13,30 @@ from unittest.mock import patch, MagicMock
 import numpy as np
 import pandas as pd
 import pytest
+from rdkit import Chem
 
-from autoantibiotic.config import CONFIG
+from autoantibiotic.config import CONFIG, CompoundRecord
 from autoantibiotic.main import main
 from autoantibiotic.library_gen import generate_candidate_library, apply_filters
+
+
+_DUMMY_RECORDS = [
+    CompoundRecord(
+        compound_id="TEST-001", smiles="c1ccccc1O",
+        mol=Chem.MolFromSmiles("c1ccccc1O"),
+        passes_lipinski=True, qed_score=0.85, max_similarity=0.0,
+    ),
+    CompoundRecord(
+        compound_id="TEST-002", smiles="c1ccccc1C(=O)O",
+        mol=Chem.MolFromSmiles("c1ccccc1C(=O)O"),
+        passes_lipinski=True, qed_score=0.80, max_similarity=0.0,
+    ),
+    CompoundRecord(
+        compound_id="TEST-003", smiles="c1ccc(O)cc1",
+        mol=Chem.MolFromSmiles("c1ccc(O)cc1"),
+        passes_lipinski=True, qed_score=0.90, max_similarity=0.0,
+    ),
+]
 
 
 def _mock_prepare_targets(pdb_dir, work_dir, deps):
@@ -70,7 +90,9 @@ def mock_deps_and_targets():
     with patch("autoantibiotic.main.verify_dependencies", return_value=deps):
         with patch("autoantibiotic.main.prepare_targets", side_effect=_mock_prepare_targets):
             with patch("autoantibiotic.main.run_redocking_validation", return_value=(False, None)):
-                yield
+                with patch("autoantibiotic.main.generate_candidate_library", return_value=_DUMMY_RECORDS):
+                    with patch("autoantibiotic.main.apply_filters", return_value=_DUMMY_RECORDS):
+                        yield
 
 
 EXPECTED_CSV_COLUMNS = [

@@ -97,7 +97,7 @@ def analyze_selectivity_and_resistance(
     trypisn_items = [(r.compound_id, r.smiles) for r in top10]
     trypsin_results = _parallel_dock(
         trypisn_items, targets["trypsin"]["pdbqt"],
-        trypsin_center, (20.0, 20.0, 20.0),
+        trypsin_center, CONFIG.offtarget_box_size,
         work_dir, "trypsin", n_jobs=min(4, len(top10)),
         cache=cache, use_cache=use_cache,
     )
@@ -111,7 +111,7 @@ def analyze_selectivity_and_resistance(
     ces1_items = [(r.compound_id, r.smiles) for r in top10]
     ces1_results = _parallel_dock(
         ces1_items, targets["CES1"]["pdbqt"],
-        ces1_center, (20.0, 20.0, 20.0),
+        ces1_center, CONFIG.offtarget_box_size,
         work_dir, "ces1", n_jobs=min(4, len(top10)),
         cache=cache, use_cache=use_cache,
     )

@@ -269,7 +269,17 @@ def prepare_ligand_pdbqt(
 ) -> bool:
     """Convert an RDKit Mol to PDBQT via Meeko.
 
-    Falls back to a minimal PDBQT writer via RDKit Gasteiger charges.
+    Attempts conversion using Meeko's MoleculePreparation and
+    PDBQTWriterLegacy.  If Meeko fails, falls back to a minimal PDBQT
+    writer that assigns Gasteiger charges and writes a rigid (TORSDOF 0)
+    PDBQT entry.
+
+    Args:
+        mol: RDKit molecule with at least one conformer.
+        output_path: Path for the output PDBQT file.
+
+    Returns:
+        True on success, False if all conversion methods failed.
     """
     try:
         from meeko import MoleculePreparation, PDBQTWriterLegacy
@@ -317,7 +327,24 @@ def _run_vina_docking(
     box_size: Tuple[float, float, float],
     timeout: int = CONFIG.vina_timeout_s,
 ) -> Optional[float]:
-    """Run a single Vina docking job via the external tool wrapper."""
+    """Run a single Vina docking job via the external tool wrapper.
+
+    Builds the ``vina`` command-line invocation with the given receptor,
+    ligand, search-box centre and dimensions, then parses the best
+    (lowest) binding energy from Vina's output.
+
+    Args:
+        receptor_pdbqt: Path to the receptor PDBQT file.
+        ligand_pdbqt: Path to the ligand PDBQT file.
+        output_pdbqt: Path to write the docked-pose PDBQT file.
+        center: 3-element array of (x, y, z) box centre coordinates.
+        box_size: Tuple of (x, y, z) box dimensions in Ångström.
+        timeout: Maximum wall-clock seconds for the Vina subprocess.
+
+    Returns:
+        Best binding energy in kcal/mol, or None if docking failed or
+        timed out.
+    """
     if CONFIG.dry_run:
         return float(np.random.uniform(-10.0, -5.0))
 
@@ -405,47 +432,23 @@ def _worker_dock_wrapper(
 ) -> Tuple[str, Optional[float]]:
     """Module-level worker for :func:`_parallel_dock` (pool.map compatible).
 
-    Includes a per-job wall-clock timeout. Uses SIGALRM on Unix;
-    logs a warning on Windows where SIGALRM is unavailable.
+    The per-job wall-clock timeout is enforced by :func:`run_tool` via
+    ``subprocess.run(timeout=...)``, so no additional alarm mechanism is
+    needed here.
     """
     cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run = args
 
-    _TIMEOUT_EXC = type("_JobTimeoutError", (Exception,), {})
-
-    import signal
-    have_alarm = hasattr(signal, "SIGALRM")
-    old_handler = None
-
-    if have_alarm:
-        def _handle_timeout(signum: int, frame: object) -> None:
-            raise _TIMEOUT_EXC("Job timed out")
-
-        old_handler = signal.signal(signal.SIGALRM, _handle_timeout)
-        signal.alarm(CONFIG.job_timeout_s)
-    else:
-        log.warning(
-            f"  Worker timeout disabled for {cid} "
-            "(SIGALRM not available on this platform)."
-        )
-
-    try:
-        if dry_run:
-            return cid, float(np.random.uniform(-10.0, -5.0))
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            return cid, None
-        rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
-        energy = dock_compound(
-            rec, receptor_pdbqt, center, box_size,
-            work_dir, tag, cache=None, use_cache=False,
-        )
-        return cid, energy
-    except _TIMEOUT_EXC:
+    if dry_run:
+        return cid, float(np.random.uniform(-10.0, -5.0))
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
         return cid, None
-    finally:
-        if have_alarm:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+    rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
+    energy = dock_compound(
+        rec, receptor_pdbqt, center, box_size,
+        work_dir, tag, cache=None, use_cache=False,
+    )
+    return cid, energy
 
 
 def _parallel_dock(

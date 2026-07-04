@@ -82,13 +82,13 @@ Download from [https://ccsb.scripps.edu/adfr/](https://ccsb.scripps.edu/adfr/) a
 ### Standard run
 
 ```bash
-python discovery_pipeline.py
+python -m autoantibiotic
 ```
 
 ### Dry run (no external binaries required)
 
 ```bash
-python discovery_pipeline.py --dry-run
+python -m autoantibiotic --dry-run
 ```
 
 Generates a small library (10 compounds) and returns mock docking energies for end-to-end testing.
@@ -96,7 +96,7 @@ Generates a small library (10 compounds) and returns mock docking energies for e
 ### Using cache
 
 ```bash
-python discovery_pipeline.py --use-cache
+python -m autoantibiotic --use-cache
 ```
 
 Re-uses previously computed docking results stored in `output/cache.json` to avoid re-docking identical compound–target pairs.
@@ -104,7 +104,7 @@ Re-uses previously computed docking results stored in `output/cache.json` to avo
 ### Combining options
 
 ```bash
-python discovery_pipeline.py --dry-run --use-cache
+python -m autoantibiotic --dry-run --use-cache
 ```
 
 ## Output
@@ -123,7 +123,7 @@ All artifacts are written to the `output/` directory.
 
 ## Configuration
 
-Key parameters are defined in the `PipelineConfig` dataclass (`discovery_pipeline.py`). Notable fields:
+Key parameters are defined in the `PipelineConfig` dataclass (`autoantibiotic/config.py`). Notable fields:
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -177,7 +177,7 @@ The pipeline uses exponential-backoff retry (3 attempts). If downloads consisten
 
 This is expected. Dry-run mode uses mock random energies. Run without `--dry-run` with Vina installed for real docking scores.
 
-### Tests fail with "Cannot import discovery_pipeline"
+### Tests fail with import errors
 
 Ensure you are running tests from the project root directory:
 
