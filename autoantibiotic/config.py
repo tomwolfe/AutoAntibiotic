@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import multiprocessing as mp
 import random
 from dataclasses import dataclass, field
@@ -10,101 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 
-# ── Sub-configurations ────────────────────────────────────────────
-
-
-@dataclass
-class DockingConfig:
-    """Docking-specific parameters."""
-    vina_exhaustiveness: int = 8
-    vina_num_modes: int = 3
-    vina_timeout_s: int = 120
-    job_timeout_s: int = 180
-    allosteric_box_size: Tuple[float, float, float] = (15.0, 15.0, 15.0)
-    active_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
-    offtarget_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
-    redocking_box_size: Tuple[float, float, float] = (25.0, 25.0, 25.0)
-    batch_size_docking: int = 75
-    prepare_receptor_timeout: int = 60
-    obabel_timeout_s: int = 60
-
-    use_gnina: bool = False
-    gnina_binary_path: str = "gnina"
-
-    ensemble_mode: bool = False
-    ensemble_structures_dir: Optional[Path] = None
-    consensus_scoring_method: str = "mean"
-
-    flexible_docking: bool = False
-    flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
-    flexible_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
-    max_flexible_conformers: int = 9
-
-    use_ml_rescoring: bool = True
-    use_mm_gbsa: bool = False
-    use_mm_gbsa_rescoring: bool = False
-    mm_gbsa_top_n: int = 50
-
-    key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["TYR159", "ALA237", "MET241"])
-    key_interaction_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
-    min_key_interactions: int = 1
-
-
-@dataclass
-class FilterConfig:
-    """Compound filtering parameters."""
-    similarity_threshold: float = 0.4
-    similarity_threshold_relaxed: float = 0.5
-    diversity_min_count: int = 100
-    diversity_pool_multiplier: int = 5
-    qed_threshold: float = 0.6
-    lipinski_mw_max: float = 500.0
-    lipinski_logp_max: float = 5.0
-    lipinski_hbd_max: int = 5
-    lipinski_hba_max: int = 10
-    sa_score_threshold: float = 6.0
-    strain_energy_threshold: float = 10.0
-    ifp_similarity_threshold: float = 0.6
-
-    pharmacophore_min_matches: int = 2
-    pharmacophore_tolerance: float = 2.0
-    pharmacophore_rmsd_threshold: float = 1.5
-    pharmacophore_ref_ligand_smi: str = ""
-
-
-@dataclass
-class WaterAnalysisConfig:
-    """Crystallographic water analysis parameters."""
-    use_water_analysis: bool = True
-    water_distance_cutoff: float = 5.0
-    water_displacement_energy_threshold: float = 2.5
-
-
-@dataclass
-class ReportingConfig:
-    """Reporting and output parameters."""
-    csv_report_name: str = "top_candidates.csv"
-    html_report_name: str = "report.html"
-    pipeline_log_name: str = "pipeline.log"
-    scatter_plot_name: str = "energy_vs_selectivity.png"
-    qed_histogram_name: str = "qed_histogram.png"
-    cache_name: str = "cache.json"
-    top_n: int = 10
-    top_n_for_active: int = 50
-    top_n_for_images: int = 3
-    top_n_for_html_report: int = 50
-
-
-# ── PipelineConfig ────────────────────────────────────────────────
-
-_SUB_CONFIGS = ["docking", "filtering", "water", "reporting"]
-
-
 @dataclass
 class PipelineConfig:
-    """Top-level configuration container holding sub-configs + shared fields."""
+    """Top-level configuration container for the AutoAntibiotic pipeline."""
 
-    # Shared pipeline-level fields
+    # ── Pipeline-level fields ──
     random_seed: int = 42
     output_dir: Path = Path("output")
     dry_run: bool = False
@@ -216,11 +125,68 @@ class PipelineConfig:
         "[16*]c1ccc(N)cc1", "[16*]c1ccc(O)cc1",
     ])
 
-    # Sub-config instances
-    docking: DockingConfig = field(default_factory=DockingConfig)
-    filtering: FilterConfig = field(default_factory=FilterConfig)
-    water: WaterAnalysisConfig = field(default_factory=WaterAnalysisConfig)
-    reporting: ReportingConfig = field(default_factory=ReportingConfig)
+    # ── Docking parameters ──
+    vina_exhaustiveness: int = 8
+    vina_num_modes: int = 3
+    vina_timeout_s: int = 120
+    job_timeout_s: int = 180
+    allosteric_box_size: Tuple[float, float, float] = (15.0, 15.0, 15.0)
+    active_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
+    offtarget_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
+    redocking_box_size: Tuple[float, float, float] = (25.0, 25.0, 25.0)
+    batch_size_docking: int = 75
+    prepare_receptor_timeout: int = 60
+    obabel_timeout_s: int = 60
+    use_gnina: bool = False
+    gnina_binary_path: str = "gnina"
+    ensemble_mode: bool = False
+    ensemble_structures_dir: Optional[Path] = None
+    consensus_scoring_method: str = "mean"
+    flexible_docking: bool = False
+    flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
+    flexible_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
+    max_flexible_conformers: int = 9
+    use_ml_rescoring: bool = True
+    use_mm_gbsa: bool = False
+    use_mm_gbsa_rescoring: bool = False
+    mm_gbsa_top_n: int = 50
+    key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["TYR159", "ALA237", "MET241"])
+    key_interaction_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
+    min_key_interactions: int = 1
+
+    # ── Filtering parameters ──
+    similarity_threshold: float = 0.4
+    similarity_threshold_relaxed: float = 0.5
+    diversity_min_count: int = 100
+    qed_threshold: float = 0.6
+    lipinski_mw_max: float = 500.0
+    lipinski_logp_max: float = 5.0
+    lipinski_hbd_max: int = 5
+    lipinski_hba_max: int = 10
+    sa_score_threshold: float = 6.0
+    strain_energy_threshold: float = 10.0
+    ifp_similarity_threshold: float = 0.6
+    pharmacophore_min_matches: int = 2
+    pharmacophore_tolerance: float = 2.0
+    pharmacophore_rmsd_threshold: float = 1.5
+    pharmacophore_ref_ligand_smi: str = ""
+
+    # ── Water analysis parameters ──
+    use_water_analysis: bool = True
+    water_distance_cutoff: float = 5.0
+    water_displacement_energy_threshold: float = 2.5
+
+    # ── Reporting parameters ──
+    csv_report_name: str = "top_candidates.csv"
+    html_report_name: str = "report.html"
+    pipeline_log_name: str = "pipeline.log"
+    scatter_plot_name: str = "energy_vs_selectivity.png"
+    qed_histogram_name: str = "qed_histogram.png"
+    cache_name: str = "cache.json"
+    top_n: int = 10
+    top_n_for_active: int = 50
+    top_n_for_images: int = 3
+    top_n_for_html_report: int = 50
 
     # ── Derived properties ──
     @property
@@ -231,71 +197,8 @@ class PipelineConfig:
     def pdb_dir(self) -> Path:
         return self.output_dir / "pdb"
 
-    # ── Backward-compatible attribute access ──
-
-    def __getattr__(self, name: str) -> Any:
-        for sub_name in _SUB_CONFIGS:
-            sub = object.__getattribute__(self, sub_name)
-            if hasattr(sub, name):
-                return getattr(sub, name)
-        raise AttributeError(f"'PipelineConfig' has no attribute '{name}'")
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in self.__dataclass_fields__:
-            object.__setattr__(self, name, value)
-            return
-        for sub_name in _SUB_CONFIGS:
-            sub = object.__getattribute__(self, sub_name)
-            if hasattr(sub, name):
-                setattr(sub, name, value)
-                return
-        object.__setattr__(self, name, value)
-
 
 CONFIG = PipelineConfig()
-
-
-def _merge_yaml_overrides() -> None:
-    """Load overrides from config.yaml in the output directory root."""
-    yaml_path = Path("config.yaml")
-    if not yaml_path.exists():
-        yaml_path = CONFIG.output_dir.parent / "config.yaml"
-    if not yaml_path.exists():
-        return
-
-    try:
-        import yaml
-    except ImportError:
-        log = logging.getLogger("AutoAntibiotic")
-        log.warning("  ⚠  config.yaml found but PyYAML is not installed.  Run: pip install pyyaml")
-        return
-
-    try:
-        with open(yaml_path) as f:
-            overrides = yaml.safe_load(f)
-    except Exception as exc:
-        log = logging.getLogger("AutoAntibiotic")
-        log.warning(f"  ⚠  Failed to parse config.yaml: {exc}")
-        return
-
-    if not isinstance(overrides, dict):
-        return
-
-    log = logging.getLogger("AutoAntibiotic")
-    applied = 0
-    for key, value in overrides.items():
-        if hasattr(CONFIG, key):
-            setattr(CONFIG, key, value)
-            applied += 1
-            log.info(f"  Config override: {key} = {value}")
-        else:
-            log.warning(f"  ⚠  Unknown config key '{key}' in config.yaml — skipped.")
-
-    if applied > 0:
-        log.info(f"  Applied {applied} config override(s) from {yaml_path}")
-
-
-_merge_yaml_overrides()
 
 np.random.seed(CONFIG.random_seed)
 random.seed(CONFIG.random_seed)

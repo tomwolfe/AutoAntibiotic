@@ -31,12 +31,8 @@ class AutoAntibioticError(Exception):
     """Base exception for pipeline-specific errors."""
 
 
-class VinaError(AutoAntibioticError):
-    """Raised when AutoDock Vina fails with an actionable message."""
-
-
-class OpenBabelError(AutoAntibioticError):
-    """Raised when OpenBabel fails with an actionable message."""
+class ToolExecutionError(AutoAntibioticError):
+    """Raised when an external tool (Vina, GNINA, OpenBabel, etc.) fails."""
 
 
 _VINA_ERROR_PATTERNS: List[str] = [
@@ -171,30 +167,18 @@ _TOOL_ERROR_MESSAGES: Dict[str, str] = {
 }
 
 
-def _classify_tool_error(cmd: List[str], stderr: str) -> AutoAntibioticError:
+def _classify_tool_error(cmd: List[str], stderr: str) -> ToolExecutionError:
     """Classify a tool error into a domain-specific exception."""
     stderr_lower = stderr.lower()
     tool_name = cmd[0] if cmd else ""
 
-    # Vina-specific hints
-    if "vina" in tool_name:
-        for keyword, msg in _TOOL_ERROR_MESSAGES.items():
-            if keyword in stderr_lower:
-                return VinaError(
-                    f"Vina failed: {msg}\n  stderr: {stderr.strip()}"
-                )
-        return VinaError(
-            f"Vina failed:\n  Command: {' '.join(cmd)}\n  stderr: {stderr.strip()}"
-        )
+    for keyword, msg in _TOOL_ERROR_MESSAGES.items():
+        if keyword in stderr_lower:
+            return ToolExecutionError(
+                f"{tool_name} failed: {msg}\n  stderr: {stderr.strip()}"
+            )
 
-    # OpenBabel-specific hints
-    if "obabel" in tool_name:
-        return OpenBabelError(
-            f"OpenBabel failed — confirm the input format is valid and "
-            f"the molecule can be read.\n  stderr: {stderr.strip()}"
-        )
-
-    return AutoAntibioticError(
+    return ToolExecutionError(
         f"Tool {' '.join(cmd)} failed:\n  stderr: {stderr.strip()}"
     )
 
@@ -213,7 +197,7 @@ def run_tool(
         check: If True, a non-zero exit code raises an error.
         ignore_stderr_warnings: When ``True`` and the tool exits with
             return code 0, stderr output is inspected:
-              - If it matches ``_VINA_ERROR_PATTERNS``, a :class:`VinaError`
+              - If it matches ``_VINA_ERROR_PATTERNS``, a :class:`ToolExecutionError`
                 is still raised.
               - Otherwise it is logged as a warning and execution continues.
 
@@ -221,9 +205,8 @@ def run_tool(
         ``ToolResult`` with parsed stdout/stderr.
 
     Raises:
-        VinaError: For Vina-specific failures.
-        OpenBabelError: For OpenBabel-specific failures.
-        AutoAntibioticError: For other tool failures.
+        ToolExecutionError: For tool-specific failures.
+        AutoAntibioticError: For other tool failures (e.g. timeout).
     """
     try:
         proc = subprocess.run(

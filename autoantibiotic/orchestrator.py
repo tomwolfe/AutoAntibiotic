@@ -79,7 +79,7 @@ class PipelineOrchestrator:
         set_global_seed(CONFIG.random_seed)
 
         if self.use_cache:
-            cache_path = CONFIG.output_dir / CONFIG.reporting.cache_name
+            cache_path = CONFIG.output_dir / CONFIG.cache_name
             self.cache = load_json_cache(cache_path)
             log.info(f"  Cache loaded ({len(self.cache)} entries).")
         else:
@@ -93,8 +93,8 @@ class PipelineOrchestrator:
     def run_water_analysis(self) -> None:
         """Phase 0.5: Crystallographic water analysis (if available)."""
         self.water_results = None
-        if not (CONFIG.water.use_water_analysis and _HAVE_WATER):
-            if CONFIG.water.use_water_analysis:
+        if not (CONFIG.use_water_analysis and _HAVE_WATER):
+            if CONFIG.use_water_analysis:
                 log.info("  Water analysis module not available (install Bio.PDB).")
             return
 
@@ -116,7 +116,7 @@ class PipelineOrchestrator:
 
         # Retry water analysis if PDB was not available earlier
         if (
-            CONFIG.water.use_water_analysis
+            CONFIG.use_water_analysis
             and _HAVE_WATER
             and self.water_results is None
         ):
@@ -180,7 +180,7 @@ class PipelineOrchestrator:
         """Phase 5: CSV, images, and HTML report generation."""
         generate_csv_report(self.top_candidates)
 
-        top3 = self.top_candidates[:CONFIG.reporting.top_n_for_images]
+        top3 = self.top_candidates[:CONFIG.top_n_for_images]
         generate_images(top3)
 
         scored_for_top50 = [
@@ -188,7 +188,7 @@ class PipelineOrchestrator:
             if r.pb2pa_allosteric_energy is not None
         ]
         scored_for_top50.sort(key=lambda r: r.pb2pa_allosteric_energy)
-        top_n = CONFIG.reporting.top_n_for_html_report
+        top_n = CONFIG.top_n_for_html_report
         top50 = (
             scored_for_top50[:top_n]
             if len(scored_for_top50) >= top_n
@@ -206,7 +206,7 @@ class PipelineOrchestrator:
             datefmt="%Y-%m-%d %H:%M:%S",
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(CONFIG.output_dir / CONFIG.reporting.pipeline_log_name),
+                logging.FileHandler(CONFIG.output_dir / CONFIG.pipeline_log_name),
             ],
         )
 
@@ -216,8 +216,8 @@ class PipelineOrchestrator:
                 holo_pdb_path,
                 allosteric_residues=CONFIG.flexible_residues_allosteric,
                 active_site_residues=CONFIG.flexible_residues_active,
-                distance_cutoff=CONFIG.water.water_distance_cutoff,
-                displacement_energy_threshold=CONFIG.water.water_displacement_energy_threshold,
+                distance_cutoff=CONFIG.water_distance_cutoff,
+                displacement_energy_threshold=CONFIG.water_displacement_energy_threshold,
             )
             if self.water_results and self.water_results.high_energy_waters:
                 log.info(
@@ -231,7 +231,7 @@ class PipelineOrchestrator:
     def _finalize(self) -> None:
         """Save cache and print summary."""
         if self.use_cache:
-            cache_path = CONFIG.output_dir / CONFIG.reporting.cache_name
+            cache_path = CONFIG.output_dir / CONFIG.cache_name
             save_json_cache(cache_path, self.cache)
             log.info(f"  Cache saved ({len(self.cache)} entries).")
 

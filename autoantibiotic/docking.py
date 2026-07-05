@@ -351,7 +351,8 @@ def prepare_ligand_pdbqt(
             return False
 
 
-def _run_vina_docking(
+def _run_docking_tool(
+    tool_name: str,
     receptor_pdbqt: str,
     ligand_pdbqt: str,
     output_pdbqt: str,
@@ -359,29 +360,34 @@ def _run_vina_docking(
     box_size: Tuple[float, float, float],
     timeout: int = CONFIG.vina_timeout_s,
 ) -> Optional[float]:
-    """Run a single Vina docking job via the external tool wrapper.
+    """Run a single docking job via the external tool wrapper.
 
-    Builds the ``vina`` command-line invocation with the given receptor,
-    ligand, search-box centre and dimensions, then parses the best
-    (lowest) binding energy from Vina's output.
+    Builds the command-line invocation for the given docking tool
+    (*vina* or *gnina*) with the specified receptor, ligand, search-box
+    centre and dimensions, then parses the score from the tool's output.
 
     Args:
+        tool_name: ``"vina"`` or ``"gnina"``.
         receptor_pdbqt: Path to the receptor PDBQT file.
         ligand_pdbqt: Path to the ligand PDBQT file.
         output_pdbqt: Path to write the docked-pose PDBQT file.
         center: 3-element array of (x, y, z) box centre coordinates.
         box_size: Tuple of (x, y, z) box dimensions in Ångström.
-        timeout: Maximum wall-clock seconds for the Vina subprocess.
+        timeout: Maximum wall-clock seconds for the subprocess.
 
     Returns:
-        Best binding energy in kcal/mol, or None if docking failed or
-        timed out.
+        Best binding energy (kcal/mol) for vina, CNNscore (0–1) for
+        gnina, or None if docking failed or timed out.
     """
     if CONFIG.dry_run:
+        if tool_name == "gnina":
+            return float(np.random.uniform(0.5, 0.95))
         return float(np.random.uniform(-10.0, -5.0))
 
+    binary = CONFIG.gnina_binary_path if tool_name == "gnina" else "vina"
+
     cmd = [
-        "vina",
+        binary,
         "--receptor", receptor_pdbqt,
         "--ligand", ligand_pdbqt,
         "--out", output_pdbqt,
@@ -398,72 +404,20 @@ def _run_vina_docking(
     try:
         result = run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
         if result.returncode != 0:
-            log.warning(f"  Vina error: {result.stderr.strip()}")
+            log.warning(f"  {binary} error: {result.stderr.strip()}")
             return None
-        energy = parse_vina_energy(result.stdout)
-        if energy is not None:
-            return energy
-        energy = parse_vina_energy(result.stderr)
-        return energy
+        if tool_name == "gnina":
+            score = parse_gnina_energy(result.stdout)
+            if score is not None:
+                return score
+            return parse_gnina_energy(result.stderr)
+        else:
+            energy = parse_vina_energy(result.stdout)
+            if energy is not None:
+                return energy
+            return parse_vina_energy(result.stderr)
     except RuntimeError as exc:
-        log.warning(f"  Vina execution failed: {exc}")
-        return None
-
-
-def _run_gnina_docking(
-    receptor_pdbqt: str,
-    ligand_pdbqt: str,
-    output_pdbqt: str,
-    center: np.ndarray,
-    box_size: Tuple[float, float, float],
-    timeout: int = CONFIG.vina_timeout_s,
-) -> Optional[float]:
-    """Run a single GNINA docking job.
-
-    Constructs the ``gnina`` command line and parses the CNNscore
-    (0–1, higher = better) from the output.
-
-    Args:
-        receptor_pdbqt: Path to the receptor PDBQT file.
-        ligand_pdbqt: Path to the ligand PDBQT file.
-        output_pdbqt: Path to write the docked-pose PDBQT file.
-        center: 3-element array of (x, y, z) box centre coordinates.
-        box_size: Tuple of (x, y, z) box dimensions in Ångström.
-        timeout: Maximum wall-clock seconds for the GNINA subprocess.
-
-    Returns:
-        CNNscore (0–1), or None if docking failed.
-    """
-    if CONFIG.dry_run:
-        return float(np.random.uniform(0.5, 0.95))
-
-    cmd = [
-        CONFIG.gnina_binary_path,
-        "--receptor", receptor_pdbqt,
-        "--ligand", ligand_pdbqt,
-        "--out", output_pdbqt,
-        "--center_x", f"{center[0]:.3f}",
-        "--center_y", f"{center[1]:.3f}",
-        "--center_z", f"{center[2]:.3f}",
-        "--size_x", f"{box_size[0]:.1f}",
-        "--size_y", f"{box_size[1]:.1f}",
-        "--size_z", f"{box_size[2]:.1f}",
-        "--exhaustiveness", str(CONFIG.vina_exhaustiveness),
-        "--num_modes", str(CONFIG.vina_num_modes),
-    ]
-
-    try:
-        result = run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
-        if result.returncode != 0:
-            log.warning(f"  GNINA error: {result.stderr.strip()}")
-            return None
-        score = parse_gnina_energy(result.stdout)
-        if score is not None:
-            return score
-        score = parse_gnina_energy(result.stderr)
-        return score
-    except RuntimeError as exc:
-        log.warning(f"  GNINA execution failed: {exc}")
+        log.warning(f"  {binary} execution failed: {exc}")
         return None
 
 
@@ -477,11 +431,9 @@ def dock_compound(
     cache: _CacheLike = None,
     use_cache: bool = False,
 ) -> Optional[float]:
-    """Full docking pipeline for a single compound: PDBQT prep → Vina → parse."""
-    if CONFIG.dry_run:
-        return float(np.random.uniform(-10.0, -5.0))
-
-    cache_key = make_cache_key(record.smiles, tag)
+    """Full docking pipeline for a single compound: PDBQT prep → dock → parse."""
+    tool_name = "gnina" if CONFIG.use_gnina else "vina"
+    cache_key = make_cache_key(record.smiles, tool_name)
     if use_cache and cache is not None and cache_key in cache:
         return cache[cache_key]
 
@@ -498,22 +450,10 @@ def dock_compound(
     if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
         return None
 
-    if CONFIG.use_gnina:
-        energy = _run_gnina_docking(
-            receptor_pdbqt, lig_pdbqt, out_pdbqt,
-            center, box_size,
-        )
-        if energy is None:
-            log.warning("  GNINA docking failed, falling back to Vina.")
-            energy = _run_vina_docking(
-                receptor_pdbqt, lig_pdbqt, out_pdbqt,
-                center, box_size,
-            )
-    else:
-        energy = _run_vina_docking(
-            receptor_pdbqt, lig_pdbqt, out_pdbqt,
-            center, box_size,
-        )
+    energy = _run_docking_tool(tool_name, receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+    if energy is None and CONFIG.use_gnina:
+        log.warning("  GNINA docking failed, falling back to Vina.")
+        energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
 
     for f in (lig_pdbqt, out_pdbqt):
         try:
@@ -870,8 +810,9 @@ def _parallel_dock(
     results: List[Tuple[str, Optional[float]]] = []
     to_dock: List[Tuple[str, str, str]] = []
 
+    tool_name = "gnina" if CONFIG.use_gnina else "vina"
     for cid, smiles in items:
-        cache_key = make_cache_key(smiles, tag)
+        cache_key = make_cache_key(smiles, tool_name)
         if use_cache and cache is not None and cache_key in cache:
             cached_val = cache[cache_key]
             results.append((cid, cached_val))

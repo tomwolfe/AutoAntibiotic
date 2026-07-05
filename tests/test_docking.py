@@ -13,8 +13,7 @@ from rdkit import Chem
 from autoantibiotic.config import CONFIG
 from autoantibiotic.models import CompoundRecord
 from autoantibiotic.docking import (
-    _run_gnina_docking,
-    _run_vina_docking,
+    _run_docking_tool,
     dock_compound,
     dock_compound_ensemble,
     _parallel_dock_ensemble,
@@ -96,18 +95,19 @@ def _make_tool_result(
 
 
 class TestRunGninaDocking:
-    """``_run_gnina_docking`` invokes GNINA and returns the CNNscore."""
+    """``_run_docking_tool("gnina", …)`` invokes GNINA and returns the CNNscore."""
 
     @pytest.fixture(autouse=True)
     def reset_gnina_config(self) -> None:
-        saved = CONFIG.use_gnina, CONFIG.gnina_binary_path, CONFIG.dry_run
+        saved = CONFIG.gnina_binary_path, CONFIG.dry_run
         CONFIG.dry_run = False
         yield
-        CONFIG.use_gnina, CONFIG.gnina_binary_path, CONFIG.dry_run = saved
+        CONFIG.gnina_binary_path, CONFIG.dry_run = saved
 
     def test_successful_docking_returns_cnnscore(self) -> None:
         with patch("autoantibiotic.docking.run_tool", return_value=_make_tool_result()):
-            score = _run_gnina_docking(
+            score = _run_docking_tool(
+                "gnina",
                 receptor_pdbqt="rec.pdbqt",
                 ligand_pdbqt="lig.pdbqt",
                 output_pdbqt="out.pdbqt",
@@ -121,7 +121,8 @@ class TestRunGninaDocking:
             "autoantibiotic.docking.run_tool",
             return_value=_make_tool_result(returncode=1, stderr=_GNINA_FAILURE_STDERR),
         ):
-            score = _run_gnina_docking(
+            score = _run_docking_tool(
+                "gnina",
                 receptor_pdbqt="rec.pdbqt",
                 ligand_pdbqt="lig.pdbqt",
                 output_pdbqt="out.pdbqt",
@@ -134,7 +135,8 @@ class TestRunGninaDocking:
         saved = CONFIG.dry_run
         CONFIG.dry_run = True
         try:
-            score = _run_gnina_docking(
+            score = _run_docking_tool(
+                "gnina",
                 receptor_pdbqt="rec.pdbqt",
                 ligand_pdbqt="lig.pdbqt",
                 output_pdbqt="out.pdbqt",
@@ -152,7 +154,8 @@ class TestRunGninaDocking:
         try:
             with patch("autoantibiotic.docking.run_tool") as mock_run:
                 mock_run.return_value = _make_tool_result()
-                _run_gnina_docking(
+                _run_docking_tool(
+                    "gnina",
                     receptor_pdbqt="rec.pdbqt",
                     ligand_pdbqt="lig.pdbqt",
                     output_pdbqt="out.pdbqt",
@@ -215,7 +218,7 @@ class TestDockCompoundWithGnina:
 
     def test_gnina_success_returns_score(self) -> None:
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking._run_gnina_docking", return_value=0.9123):
+            with patch("autoantibiotic.docking._run_docking_tool", return_value=0.9123):
                 energy = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
@@ -227,47 +230,47 @@ class TestDockCompoundWithGnina:
         assert energy == pytest.approx(0.9123)
 
     def test_gnina_failure_falls_back_to_vina(self) -> None:
+        def _mock_dock(tool_name, *args, **kwargs):
+            return None if tool_name == "gnina" else -8.5
+
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking._run_gnina_docking", return_value=None):
-                with patch("autoantibiotic.docking._run_vina_docking", return_value=-8.5):
-                    energy = dock_compound(
-                        self.record,
-                        receptor_pdbqt="rec.pdbqt",
-                        center=np.array([0.0, 0.0, 0.0]),
-                        box_size=(20.0, 20.0, 20.0),
-                        work_dir=self.work_dir,
-                        tag="test",
-                    )
+            with patch("autoantibiotic.docking._run_docking_tool", side_effect=_mock_dock):
+                energy = dock_compound(
+                    self.record,
+                    receptor_pdbqt="rec.pdbqt",
+                    center=np.array([0.0, 0.0, 0.0]),
+                    box_size=(20.0, 20.0, 20.0),
+                    work_dir=self.work_dir,
+                    tag="test",
+                )
         assert energy == pytest.approx(-8.5)
 
     def test_both_fail_return_none(self) -> None:
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking._run_gnina_docking", return_value=None):
-                with patch("autoantibiotic.docking._run_vina_docking", return_value=None):
-                    energy = dock_compound(
-                        self.record,
-                        receptor_pdbqt="rec.pdbqt",
-                        center=np.array([0.0, 0.0, 0.0]),
-                        box_size=(20.0, 20.0, 20.0),
-                        work_dir=self.work_dir,
-                        tag="test",
-                    )
+            with patch("autoantibiotic.docking._run_docking_tool", return_value=None):
+                energy = dock_compound(
+                    self.record,
+                    receptor_pdbqt="rec.pdbqt",
+                    center=np.array([0.0, 0.0, 0.0]),
+                    box_size=(20.0, 20.0, 20.0),
+                    work_dir=self.work_dir,
+                    tag="test",
+                )
         assert energy is None
 
     def test_gnina_not_used_when_disabled(self) -> None:
         CONFIG.use_gnina = False
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking._run_gnina_docking") as mock_gnina:
-                with patch("autoantibiotic.docking._run_vina_docking", return_value=-7.2):
-                    dock_compound(
-                        self.record,
-                        receptor_pdbqt="rec.pdbqt",
-                        center=np.array([0.0, 0.0, 0.0]),
-                        box_size=(20.0, 20.0, 20.0),
-                        work_dir=self.work_dir,
-                        tag="test",
-                    )
-                mock_gnina.assert_not_called()
+            with patch("autoantibiotic.docking._run_docking_tool", return_value=-7.2) as mock_dock:
+                dock_compound(
+                    self.record,
+                    receptor_pdbqt="rec.pdbqt",
+                    center=np.array([0.0, 0.0, 0.0]),
+                    box_size=(20.0, 20.0, 20.0),
+                    work_dir=self.work_dir,
+                    tag="test",
+                )
+                assert mock_dock.call_args[0][0] == "vina"
 
 
 # ── Ensemble docking ───────────────────────────────────────────────
