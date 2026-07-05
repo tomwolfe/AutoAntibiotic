@@ -936,7 +936,7 @@ def _compute_shape_fallback_score(
 
         shape_score = min(protrude / CONFIG.shape_score_norm_factor, 10.0) if protrude > 0 else 0.0
 
-        from .analysis import compute_pharmacophore_score
+        from .scoring_metrics import compute_pharmacophore_score
 
         pharm_score = compute_pharmacophore_score(mol, ref_mol)
         if pharm_score is not None:

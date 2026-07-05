@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from rdkit import Chem, RDLogger as rdklog
+from rdkit import RDLogger as rdklog
 
 from .config import CONFIG
 from .models import ToolResult
@@ -28,27 +28,8 @@ log = logging.getLogger("AutoAntibiotic")
 
 
 class AutoAntibioticError(Exception):
-    """Base exception for pipeline-specific errors."""
+    """Pipeline-specific error with a clear, actionable message."""
 
-
-class ToolExecutionError(AutoAntibioticError):
-    """Raised when an external tool (Vina, GNINA, OpenBabel, etc.) fails."""
-
-
-_VINA_ERROR_PATTERNS: List[str] = [
-    r"(?i)\berror\b",
-    r"(?i)\bfatal\b",
-    r"(?i)could not open",
-    r"(?i)could not read",
-    r"(?i)is not a valid",
-    r"(?i)segmentation fault",
-    r"(?i)exception",
-    r"(?i)traceback",
-    r"(?i)out of memory",
-    r"(?i)cannot allocate",
-    r"(?i)ligand too large",
-    r"(?i)too many atoms",
-]
 
 _INSTALL_GUIDE: Dict[str, str] = {
     "rdkit": "  → Install: conda install -c conda-forge rdkit  |  pip install rdkit-pypi",
@@ -139,75 +120,13 @@ def save_json_cache(cache_path: Path, data: Dict[str, float]) -> None:
         log.warning("  ⚠  Failed to save cache file — pipeline will continue without persistence.")
 
 
-_TOOL_ERROR_MESSAGES: Dict[str, str] = {
-    "ligand too large": (
-        "Ligand too large for Vina search box — increase box size or "
-        "filter by molecular weight."
-    ),
-    "too many atoms": (
-        "Ligand exceeds Vina atom limit — reduce molecular complexity "
-        "or use a smaller compound."
-    ),
-    "could not open": (
-        "Vina could not open a required file — check file paths and "
-        "permissions."
-    ),
-    "could not read": (
-        "Vina could not read a PDBQT file — ensure PDBQT format is "
-        "valid and the file is not empty."
-    ),
-    "out of memory": (
-        "Vina ran out of memory — reduce search-box size or use fewer "
-        "CPU cores."
-    ),
-    "cannot allocate": (
-        "System cannot allocate memory for Vina — close other "
-        "applications or reduce box size."
-    ),
-}
-
-
-def _classify_tool_error(cmd: List[str], stderr: str) -> ToolExecutionError:
-    """Classify a tool error into a domain-specific exception."""
-    stderr_lower = stderr.lower()
-    tool_name = cmd[0] if cmd else ""
-
-    for keyword, msg in _TOOL_ERROR_MESSAGES.items():
-        if keyword in stderr_lower:
-            return ToolExecutionError(
-                f"{tool_name} failed: {msg}\n  stderr: {stderr.strip()}"
-            )
-
-    return ToolExecutionError(
-        f"Tool {' '.join(cmd)} failed:\n  stderr: {stderr.strip()}"
-    )
-
-
 def run_tool(
     cmd: List[str],
     timeout: int = 120,
     check: bool = True,
     ignore_stderr_warnings: bool = False,
 ) -> ToolResult:
-    """Execute an external binary with timeout and exit-code checking.
-
-    Args:
-        cmd: Command and arguments.
-        timeout: Maximum wall-clock seconds.
-        check: If True, a non-zero exit code raises an error.
-        ignore_stderr_warnings: When ``True`` and the tool exits with
-            return code 0, stderr output is inspected:
-              - If it matches ``_VINA_ERROR_PATTERNS``, a :class:`ToolExecutionError`
-                is still raised.
-              - Otherwise it is logged as a warning and execution continues.
-
-    Returns:
-        ``ToolResult`` with parsed stdout/stderr.
-
-    Raises:
-        ToolExecutionError: For tool-specific failures.
-        AutoAntibioticError: For other tool failures (e.g. timeout).
-    """
+    """Execute an external binary with timeout and exit-code checking."""
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
@@ -219,12 +138,12 @@ def run_tool(
         )
 
         if check and proc.returncode != 0:
-            raise _classify_tool_error(cmd, proc.stderr)
+            raise AutoAntibioticError(
+                f"Tool {' '.join(cmd)} failed (exit {proc.returncode}):\n"
+                f"  stderr: {proc.stderr.strip()}"
+            )
 
         if ignore_stderr_warnings and proc.returncode == 0 and proc.stderr.strip():
-            for pattern in _VINA_ERROR_PATTERNS:
-                if re.search(pattern, proc.stderr):
-                    raise _classify_tool_error(cmd, proc.stderr)
             log.warning(f"  Tool stderr (benign): {proc.stderr.strip()}")
 
         return result
