@@ -1,4 +1,4 @@
-# Changelog — AutoAntibiotic v3.3.0
+# Changelog — AutoAntibiotic v4.0.0
 
 ## Phase 1: Robustness & Reproducibility
 
@@ -55,6 +55,42 @@
 ### 4.2 Dockerfile
 - **`Dockerfile`**: New Docker image based on `ubuntu:22.04` with Miniconda, Python 3.11, RDKit 2023.9.6, OpenBabel 3.1.1, AutoDock Vina 1.2.3, and all Python dependencies pre-installed. Entry point: `python -m autoantibiotic`.
 
-## Dependency Changes
-- **`requirements.txt`**: Added `pyyaml>=6.0`.
-- **`pyproject.toml`**: Added `pyyaml>=6.0` to dependencies.
+---
+
+## v4.0.0 Major Enhancements
+
+### 1. Enhanced Resistance Risk Profiling
+- **`analysis.py`**: New `profile_resistance_mutation_sensitivity` function docks candidates against multiple mutant receptor PDBQTs and computes the standard deviation of binding energies (high std = high resistance risk).
+- **`analysis.py`**: `profile_resistance_risk` accepts an optional `mutant_pdbqts` list and stores the result in `record.resistance_stability_score`.
+- **`models.py`**: `CompoundRecord` gains `resistance_stability_score: Optional[float]` field.
+- **`config.py`**: New flags `use_mutation_sampling` (default `False`) and `mutation_variants`.
+
+### 2. Dynamic Fragment Growth
+- **`library_gen.py`**: New `generate_grown_library` function iteratively attaches BRICS building blocks to reactive sites on high-scoring cores, filtering by Lipinski/QED at each growth step to prevent combinatorial explosion. Yields `CompoundRecord` objects.
+
+### 3. Meta-Learner Consensus Scoring
+- **`analysis.py`**: New `MetaScorer` class — a stacking regressor (`RandomForestRegressor`) trained on benchmark actives/inactives from `benchmarks/reference_data.py`.
+  - Features: Vina Energy, GNINA Score, Shape Score, IFP Score, QED, LogP, MolWt, Rotatable Bonds.
+  - Target: Binary activity label (1 = active, 0 = inactive).
+  - Model saved/loaded via `joblib` in the `output/` directory.
+- **`analysis.py`**: New `predict_meta_score` function replaces `compute_consensus_score` when `use_meta_scoring=True`.
+- **`analysis.py`**: `compute_consensus_score` retained as fallback.
+
+### 4. MD Validation Stub
+- **`md_validation.py`**: New module with `run_short_md(ligand_mol, receptor_pdb, duration_ns=10)`.
+  - Uses OpenMM when available (`_HAVE_OPENMM`); gracefully returns `None` otherwise.
+  - Returns a dict with `ligand_rmsd_angstrom` stability metric.
+- **`orchestrator.py`**: Integrated as optional final step (`apply_md_validation`).
+- **`main.py`**: New `--run-md-validation` CLI flag.
+
+### Configuration Changes
+- **`config.py`**: New fields in `PipelineConfig`:
+  - `use_mutation_sampling: bool = False`
+  - `use_meta_scoring: bool = True`
+  - `meta_scorer_model_path: str = "output/meta_scorer.joblib"`
+  - `md_validation_duration_ns: int = 10`
+  - `mutation_variants: List[str] = ["G246", "N146"]`
+
+### Dependency Changes
+- **`requirements.txt`**: Added `joblib>=1.3.0`.
+- **`pyproject.toml`**: Added `joblib>=1.3.0`; version bumped to `4.0.0`.

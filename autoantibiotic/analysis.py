@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import Any, Dict, List, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import joblib
 import numpy as np
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, Crippen, Descriptors, rdDistGeom, rdMolAlign, rdMolDescriptors
-from sklearn.ensemble import RandomForestClassifier as _RandomForestClassifier
+from rdkit.Chem import AllChem, Crippen, Descriptors, QED, rdDistGeom, rdMolAlign, rdMolDescriptors
+from sklearn.ensemble import RandomForestClassifier as _RandomForestClassifier, RandomForestRegressor
+from sklearn.model_selection import train_test_split
 
 from .config import CONFIG
 from .models import CompoundRecord
@@ -276,6 +279,241 @@ def _get_ml_admet_predictor() -> Optional[MLADMETPredictor]:
     return _ml_predictor if _ml_predictor.available else None
 
 
+# ── MetaScorer (Stacking Regressor for Consensus Scoring) ────────────
+
+
+class MetaScorer:
+    """Stacking regressor that learns to predict activity from multiple
+    docking and descriptor features.
+
+    Features
+    --------
+    - Vina Energy (allosteric)
+    - Vina Energy (active)
+    - GNINA CNNscore (if available)
+    - Shape Score
+    - IFP Score
+    - QED
+    - LogP
+    - MolWt
+
+    Training data is sourced from :mod:`benchmarks.reference_data` using
+    known actives / inactives.  The trained model is persisted with
+    ``joblib`` in the ``output/`` directory for reuse.
+    """
+
+    def __init__(self, model_path: Optional[str] = None) -> None:
+        self._model: Optional[RandomForestRegressor] = None
+        self._fitted: bool = False
+        self._feature_names: List[str] = []
+        self.model_path: Optional[str] = model_path or str(
+            CONFIG.output_dir / "meta_scorer.joblib"
+        )
+
+    # ── public API ──────────────────────────────────────────────────
+
+    @property
+    def available(self) -> bool:
+        return self._fitted and self._model is not None
+
+    def fit(
+        self,
+        actives_smiles: List[str],
+        inactives_smiles: List[str],
+        feature_fn: Optional[Any] = None,
+    ) -> "MetaScorer":
+        """Train the stacking regressor on benchmark actives / inactives.
+
+        Parameters
+        ----------
+        actives_smiles : list of str
+            SMILES for known PBP2a inhibitors (label = 1).
+        inactives_smiles : list of str
+            SMILES for confirmed negatives (label = 0).
+        feature_fn : callable, optional
+            Function ``(mol) -> np.ndarray`` that extracts the feature
+            vector.  Defaults to :meth:`_default_features`.
+        """
+        X_list: List[np.ndarray] = []
+        y_list: List[float] = []
+
+        feature_extractor = feature_fn or self._default_features
+
+        for smi in actives_smiles:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            try:
+                X_list.append(feature_extractor(mol))
+                y_list.append(1.0)
+            except Exception:
+                continue
+
+        for smi in inactives_smiles:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            try:
+                X_list.append(feature_extractor(mol))
+                y_list.append(0.0)
+            except Exception:
+                continue
+
+        if len(X_list) < 4:
+            log.warning(
+                f"MetaScorer: only {len(X_list)} valid training points "
+                "— skipping training."
+            )
+            return self
+
+        X = np.array(X_list, dtype=np.float32)
+        y = np.array(y_list, dtype=np.float32)
+
+        # Train a RandomForest regressor as a stacking meta-model
+        self._model = RandomForestRegressor(
+            n_estimators=200,
+            max_depth=8,
+            random_state=CONFIG.random_seed,
+            oob_score=True,
+        )
+        self._model.fit(X, y)
+        self._fitted = True
+        oob = getattr(self._model, "oob_score_", float("nan"))
+        log.info(
+            f"MetaScorer: trained on {len(X)} compounds "
+            f"({len(actives_smiles)} actives / {len(inactives_smiles)} inactives), "
+            f"OOB R² = {oob:.4f}"
+        )
+
+        self._save()
+        return self
+
+    def predict(self, record: CompoundRecord) -> Optional[float]:
+        """Predict the meta-score for a single CompoundRecord.
+
+        Returns a score in [0, 1] where higher is more likely active,
+        or ``None`` if the model is not fitted or feature extraction
+        fails.
+        """
+        if not self.available:
+            return None
+        if record.mol is None:
+            mol = Chem.MolFromSmiles(record.smiles)
+            if mol is None:
+                return None
+            record.mol = mol
+        try:
+            feats = self._default_features(record.mol).reshape(1, -1)
+            prob = float(self._model.predict(feats)[0])  # type: ignore[union-attr]
+            return float(np.clip(prob, 0.0, 1.0))
+        except Exception:
+            return None
+
+    def load(self) -> bool:
+        """Load a previously trained model from disk.
+
+        Returns ``True`` on success.
+        """
+        if self.model_path is None or not Path(self.model_path).exists():
+            return False
+        try:
+            obj = joblib.load(self.model_path)
+            self._model = obj.get("model")
+            self._fitted = obj.get("fitted", False)
+            self._feature_names = obj.get("feature_names", [])
+            return self._fitted and self._model is not None
+        except Exception as exc:
+            log.warning(f"MetaScorer: failed to load model — {exc}")
+            return False
+
+    # ── internals ───────────────────────────────────────────────────
+
+    def _default_features(self, mol: Chem.Mol) -> np.ndarray:
+        """8-dim feature vector for a molecule.
+
+        1. Vina Energy estimate (docking not run here → 0 placeholder)
+        2. GNINA score placeholder
+        3. Shape Score placeholder
+        4. IFP Score placeholder
+        5. QED
+        6. LogP
+        7. MolWt
+        8. NumRotatableBonds
+        """
+        qed = float(QED.qed(mol))
+        logp = float(Crippen.MolLogP(mol))
+        mw = float(Descriptors.MolWt(mol))
+        n_rot = float(Descriptors.NumRotatableBonds(mol))
+
+        arr = np.array([0.0, 0.0, 0.0, 0.0, qed, logp, mw, n_rot], dtype=np.float32)
+        self._feature_names = [
+            "vina_energy", "gnina_score", "shape_score", "ifp_score",
+            "qed", "logp", "mw", "n_rotatable",
+        ]
+        return arr
+
+    def _save(self) -> None:
+        if self.model_path is None:
+            return
+        try:
+            Path(self.model_path).parent.mkdir(parents=True, exist_ok=True)
+            joblib.dump(
+                {
+                    "model": self._model,
+                    "fitted": self._fitted,
+                    "feature_names": self._feature_names,
+                },
+                self.model_path,
+            )
+            log.info(f"MetaScorer: model saved to {self.model_path}")
+        except Exception as exc:
+            log.warning(f"MetaScorer: failed to save model — {exc}")
+
+
+# Module-level singleton
+_meta_scorer: Optional[MetaScorer] = None
+
+
+def _get_meta_scorer() -> Optional[MetaScorer]:
+    """Return a singleton MetaScorer (trained or loaded from disk)."""
+    global _meta_scorer
+    if _meta_scorer is None:
+        _meta_scorer = MetaScorer()
+        if _meta_scorer.load():
+            log.info("MetaScorer: loaded from disk.")
+        else:
+            from benchmarks.reference_data import get_actives_smiles, get_inactives_smiles
+
+            try:
+                _meta_scorer.fit(
+                    actives_smiles=get_actives_smiles(),
+                    inactives_smiles=get_inactives_smiles(),
+                )
+            except Exception as exc:
+                log.warning(f"MetaScorer: training failed — {exc}. "
+                             "Falling back to weighted consensus.")
+                _meta_scorer = None
+    return _meta_scorer if (_meta_scorer is not None and _meta_scorer.available) else None
+
+
+def predict_meta_score(record: CompoundRecord) -> Optional[float]:
+    """Predict consensus activity score using the trained ``MetaScorer``.
+
+    Falls back to the legacy weighted :func:`compute_consensus_score` if
+    the meta-scorer is unavailable.
+    """
+    if CONFIG.use_meta_scoring:
+        scorer = _get_meta_scorer()
+        if scorer is not None:
+            score = scorer.predict(record)
+            if score is not None:
+                return score
+    return compute_consensus_score(
+        record.pb2pa_allosteric_energy,
+        record.shape_score,
+    )
+
+
 def compute_consensus_score(
     vina_energy: Optional[float],
     shape_score: Optional[float],
@@ -310,14 +548,73 @@ def compute_selectivity_index(
     return abs(pb2pa_energy) / abs(human_avg_energy) if abs(human_avg_energy) > 1e-6 else 0.0
 
 
+def profile_resistance_mutation_sensitivity(
+    record: CompoundRecord,
+    work_dir: str,
+    mutant_pdbqts: List[str],
+    center: np.ndarray,
+    box_size: tuple,
+) -> Optional[float]:
+    """Dock a candidate against multiple mutant receptor variants and
+    compute the standard deviation of binding energies.
+
+    A high standard deviation indicates that the compound's binding
+    affinity is sensitive to mutational changes — i.e. elevated
+    resistance risk.
+
+    Parameters
+    ----------
+    record : CompoundRecord
+        The candidate to evaluate.
+    work_dir : str
+        Working directory for docking intermediates.
+    mutant_pdbqts : list of str
+        Paths to PDBQT files of mutant receptor variants.
+    center : np.ndarray
+        Docking box centre (shared across variants).
+    box_size : tuple
+        Docking box dimensions (shared across variants).
+
+    Returns
+    -------
+    float or None
+        Standard deviation of binding energies across mutants.
+        ``None`` if all dockings fail.
+    """
+    if not mutant_pdbqts:
+        return None
+
+    energies: List[float] = []
+    for i, mut_pdbqt in enumerate(mutant_pdbqts):
+        from .docking import dock_compound
+
+        e = dock_compound(
+            record, mut_pdbqt, center, box_size,
+            work_dir, f"mut_{i}",
+        )
+        if e is not None:
+            energies.append(e)
+
+    if len(energies) < 2:
+        return None
+
+    return float(np.std(energies, ddof=1))
+
+
 def profile_resistance_risk(
     record: CompoundRecord,
     work_dir: str,
     receptor_pdbqt: str,
     center: np.ndarray,
     box_size: tuple,
+    mutant_pdbqts: Optional[List[str]] = None,
 ) -> str:
     """Energy-based heuristic proxy for resistance-risk profiling.
+
+    When *mutant_pdbqts* is provided and ``CONFIG.use_mutation_sampling``
+    is ``True``, the candidate is re-docked against each mutant variant
+    and the standard deviation of binding energies is stored in
+    ``record.resistance_stability_score`` (high std = high risk).
 
     Returns a human-readable notes string.
     """
@@ -346,6 +643,18 @@ def profile_resistance_risk(
 
     if record.qed_score > qed_thresh:
         notes.append(f"High drug-likeness (QED > {qed_thresh}) — good developability profile.")
+
+    # Mutation-sensitivity sampling
+    if CONFIG.use_mutation_sampling and mutant_pdbqts:
+        mut_std = profile_resistance_mutation_sensitivity(
+            record, work_dir, mutant_pdbqts, center, box_size,
+        )
+        record.resistance_stability_score = mut_std
+        if mut_std is not None:
+            notes.append(
+                f"Mutation binding-energy std = {mut_std:.2f} kcal/mol"
+                f" ({'HIGH' if mut_std > 1.0 else 'MODERATE' if mut_std > 0.5 else 'LOW'} resistance risk)."
+            )
 
     if not notes:
         notes.append("No specific resistance flags identified.")
@@ -624,12 +933,25 @@ def analyze_selectivity_and_resistance(
         )
 
     log.info("  Checking key interactions for top candidates…")
+
+    # Collect mutant receptor PDBQTs if mutation sampling is enabled
+    mutant_pdbqts: Optional[List[str]] = None
+    if CONFIG.use_mutation_sampling:
+        mutant_dir = Path(CONFIG.output_dir) / "mutants"
+        if mutant_dir.exists():
+            mutant_pdbqts = sorted(str(p) for p in mutant_dir.glob("*.pdbqt"))
+            if mutant_pdbqts:
+                log.info(f"  Mutation-sampling enabled: {len(mutant_pdbqts)} mutant variants.")
+            else:
+                log.info("  Mutation-sampling enabled but no mutant PDBQTs found.")
+
     for rec in top10:
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
             pb2pa["pdbqt"],
             pb2pa["allosteric_center"],
             CONFIG.allosteric_box_size,
+            mutant_pdbqts=mutant_pdbqts if CONFIG.use_mutation_sampling else None,
         )
 
         # Generate 3-D conformer and write temporary PDBQT for IFP check

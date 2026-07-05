@@ -1,5 +1,5 @@
 """
-AutoAntibiotic Discovery Pipeline v3.2
+AutoAntibiotic Discovery Pipeline v4.0
 MRSA PBP2a Inhibitor Screening
 """
 

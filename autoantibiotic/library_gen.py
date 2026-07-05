@@ -878,3 +878,168 @@ def apply_filters(
 
     log.info("─── Phase 2 complete ───")
     return passed
+
+
+def generate_grown_library(
+    core_records: List[CompoundRecord],
+    building_blocks: Optional[List[str]] = None,
+    max_growth_steps: int = 1,
+    target_per_core: int = 50,
+) -> Iterator[CompoundRecord]:
+    """Iteratively grow core fragments by attaching BRICS-compatible
+    building blocks to reactive sites on the core.
+
+    For each core record:
+
+    1. Decompose the core into BRICS fragments to expose reactive
+       (dummy-atom) sites.
+    2. Combine the core fragments with the provided *building_blocks*
+       using RDKit's :func:`BRICS.BRICSBuild`.
+    3. Filter intermediate products by Lipinski Rule-of-5 and QED
+       at each growth step to prevent combinatorial explosion.
+    4. Yield each valid product as a ``CompoundRecord``.
+
+    Only products that contain at least one core fragment as a
+    substructure are retained, ensuring that the core scaffold is
+    preserved.
+
+    Parameters
+    ----------
+    core_records : list of CompoundRecord
+        High-scoring core fragments from a previous pipeline run.
+    building_blocks : list of str, optional
+        BRICS-compatible building block SMILES (with dummy atoms).
+        Defaults to ``CONFIG.brics_building_blocks``.
+    max_growth_steps : int
+        Number of iterative growth cycles (default 1).
+    target_per_core : int
+        Maximum number of grown compounds to yield per core (default 50).
+
+    Yields
+    ------
+    CompoundRecord
+        Each valid growth product.
+    """
+    bbs: List[str] = building_blocks if building_blocks is not None else CONFIG.brics_building_blocks
+    bb_mols: List[Chem.Mol] = [
+        m for m in (Chem.MolFromSmiles(s) for s in bbs) if m is not None
+    ]
+    if not bb_mols:
+        log.warning("generate_grown_library: no valid building blocks.")
+        return
+
+    seen_smiles: set = set()
+    compound_counter: int = 0
+    rng = np.random.default_rng(CONFIG.random_seed)
+
+    for core_rec in core_records:
+        core_mol = core_rec.mol
+        if core_mol is None:
+            core_mol = Chem.MolFromSmiles(core_rec.smiles)
+            if core_mol is None:
+                continue
+        core_smi = Chem.MolToSmiles(core_mol)
+        seen_smiles.add(core_smi)
+
+        # Decompose core to expose BRICS reactive sites
+        core_frag_smiles: List[str] = list(
+            BRICS.BRICSDecompose(core_mol, minFragmentSize=CONFIG.brics_min_fragment_size)
+        )
+        if not core_frag_smiles:
+            continue
+
+        core_frags: List[Chem.Mol] = [
+            m for m in (Chem.MolFromSmiles(s) for s in core_frag_smiles)
+            if m is not None
+        ]
+        if not core_frags:
+            continue
+
+        growth_mols: List[Chem.Mol] = [core_mol]
+
+        for step in range(max_growth_steps):
+            next_gen: List[Chem.Mol] = []
+            for parent in growth_mols:
+                parent_frags: List[Chem.Mol] = [
+                    m for m in (Chem.MolFromSmiles(s) for s in list(
+                        BRICS.BRICSDecompose(parent, minFragmentSize=CONFIG.brics_min_fragment_size)
+                    )) if m is not None
+                ]
+                if not parent_frags:
+                    parent_frags = core_frags
+
+                pool = parent_frags + bb_mols
+                rng.shuffle(pool)
+
+                try:
+                    builder = BRICS.BRICSBuild(pool)
+                except Exception:
+                    continue
+
+                for product in itertools.islice(
+                    builder, target_per_core * 20
+                ):
+                    if product is None:
+                        continue
+                    try:
+                        Chem.SanitizeMol(product)
+                        smi = Chem.MolToSmiles(product)
+                    except Exception:
+                        continue
+
+                    if smi in seen_smiles:
+                        continue
+
+                    ring_info = product.GetRingInfo()
+                    if ring_info.NumRings() == 0:
+                        continue
+
+                    # Ensure the core scaffold is preserved
+                    has_core_fragment = any(
+                        product.HasSubstructMatch(f) for f in core_frags
+                    )
+                    if not has_core_fragment:
+                        continue
+
+                    # Lipinski + QED filter
+                    try:
+                        mw = Descriptors.MolWt(product)
+                        logp_val = Crippen.MolLogP(product)
+                        hbd = Descriptors.NumHDonors(product)
+                        hba = Descriptors.NumHAcceptors(product)
+                        qed = QED.qed(product)
+                    except Exception:
+                        continue
+
+                    lipinski_ok = (
+                        mw <= CONFIG.lipinski_mw_max
+                        and logp_val <= CONFIG.lipinski_logp_max
+                        and hbd <= CONFIG.lipinski_hbd_max
+                        and hba <= CONFIG.lipinski_hba_max
+                    )
+                    if not lipinski_ok or qed < CONFIG.qed_threshold:
+                        continue
+
+                    seen_smiles.add(smi)
+                    rec = CompoundRecord(
+                        compound_id=f"GROWN-{compound_counter:04d}",
+                        smiles=smi,
+                        mol=product,
+                        qed_score=qed,
+                        passes_lipinski=lipinski_ok,
+                    )
+                    compound_counter += 1
+                    next_gen.append(product)
+                    yield rec
+
+                    if compound_counter >= target_per_core * max(1, len(core_records)):
+                        return
+
+            growth_mols = next_gen
+            if not growth_mols:
+                break
+
+    log.info(
+        f"  generate_grown_library: {compound_counter} compounds "
+        f"generated from {len(core_records)} cores."
+    )

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 from .config import CONFIG, PipelineConfig
 from .models import CompoundRecord
 from .docking import run_redocking_validation, screen_library
-from .analysis import analyze_selectivity_and_resistance
+from .analysis import analyze_selectivity_and_resistance, predict_meta_score
 from .io_utils import (
     ensure_output_dir,
     load_json_cache,
@@ -32,6 +32,12 @@ try:
     _HAVE_WATER = True
 except ImportError:
     _HAVE_WATER = False
+
+try:
+    from .md_validation import run_short_md
+    _HAVE_MD = True
+except ImportError:
+    _HAVE_MD = False
 
 
 class PipelineOrchestrator:
@@ -68,7 +74,7 @@ class PipelineOrchestrator:
         ensure_output_dir()
         self._setup_logging()
 
-        log.info("─── AutoAntibiotic Pipeline v3.2 ───")
+        log.info("─── AutoAntibiotic Pipeline v4.0 ───")
 
         self.prepare_environment()
         self.run_water_analysis()
@@ -77,6 +83,8 @@ class PipelineOrchestrator:
         self.generate_and_filter_library()
         self.screen_candidates()
         self.analyze_selectivity()
+        self.apply_meta_scoring()
+        self.apply_md_validation()
         self.generate_reports()
         self._finalize()
 
@@ -180,6 +188,68 @@ class PipelineOrchestrator:
             self.top_candidates, self.targets, str(self.config.work_dir),
             self.deps, cache=self.cache, use_cache=self.use_cache,
         )
+
+    def apply_meta_scoring(self) -> None:
+        """Phase 4.5 — Meta-learner consensus scoring on top candidates.
+
+        Replaces the fixed weighted-average consensus with a trained
+        stacking regressor when ``CONFIG.use_meta_scoring`` is enabled.
+        """
+        if not CONFIG.use_meta_scoring:
+            log.info("  Meta-scoring disabled (use_meta_scoring=False).")
+            return
+        if not self.top_candidates:
+            return
+        log.info("─── Phase 4.5: Meta-Learner Consensus Scoring ───")
+        for rec in self.top_candidates:
+            meta_score = predict_meta_score(rec)
+            if meta_score is not None:
+                log.debug(
+                    f"  {rec.compound_id}: meta-score = {meta_score:.4f}"
+                )
+            else:
+                log.debug(
+                    f"  {rec.compound_id}: meta-score not computed."
+                )
+
+    def apply_md_validation(self) -> None:
+        """Phase 4.7 — Optional MD validation of top candidates.
+
+        Runs a short explicit-solvent MD simulation on the top
+        candidates when ``CONFIG.md_validation_duration_ns > 0``
+        and the ``--run-md-validation`` flag is set.
+        """
+        md_duration = CONFIG.md_validation_duration_ns
+        if not (md_duration > 0 and _HAVE_MD and self.top_candidates):
+            return
+        log.info("─── Phase 4.7: MD Validation ───")
+        pb2pa = self.targets.get("PBP2a", {})
+        receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
+        if not os.path.isfile(receptor_pdb):
+            log.warning("  Receptor PDB not found; skipping MD validation.")
+            return
+
+        for rec in self.top_candidates[:3]:
+            if rec.mol is None:
+                mol = Chem.MolFromSmiles(rec.smiles)
+                if mol is None:
+                    continue
+                rec.mol = mol
+            try:
+                result = run_short_md(
+                    rec.mol,
+                    receptor_pdb,
+                    duration_ns=float(md_duration),
+                )
+                if result is not None:
+                    log.info(
+                        f"  {rec.compound_id}: MD ligand RMSD = "
+                        f"{result.get('ligand_rmsd_angstrom', 'N/A'):.2f} Å"
+                    )
+                else:
+                    log.info(f"  {rec.compound_id}: MD not available.")
+            except Exception as exc:
+                log.warning(f"  MD validation failed for {rec.compound_id}: {exc}")
 
     def generate_reports(self) -> None:
         """Phase 5: CSV, images, and HTML report generation."""

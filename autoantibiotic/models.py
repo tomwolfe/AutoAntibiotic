@@ -36,6 +36,7 @@ class CompoundRecord:
     passes_pains: bool = False
 
     resistance_notes: str = ""
+    resistance_stability_score: Optional[float] = None
 
     ifp_score: Optional[float] = None
 

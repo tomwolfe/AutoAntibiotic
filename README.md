@@ -7,9 +7,13 @@ A virtual screening pipeline for discovering novel MRSA PBP2a inhibitors. The pi
 - **Redocking Validation (Phase 0)** — Validates the docking protocol by re-docking the co-crystallised ligand and computing RMSD.
 - **Target Preparation (Phase 1)** — Downloads PDB structures, removes crystallographic artifacts, adds hydrogens, and converts to PDBQT. Grid centres are auto-computed for allosteric (Ala237/Met241/Tyr159) and active (Ser403) pockets.
 - **Library Generation (Phase 2)** — Generates a diverse, drug-like library via BRICS fragment recombination from natural-product-inspired scaffolds and synthetic building blocks.
+- **Dynamic Fragment Growth (Phase 2)** — Iteratively grows high-scoring core fragments by attaching BRICS-compatible building blocks, filtering by Lipinski/QED at each step.
 - **Filtering (Phase 2)** — Applies β-lactam exclusion, Tanimoto similarity vs reference antibiotics, Lipinski Rule-of-5, QED ≥ 0.6, PAINS alerts, and **Synthetic Accessibility (SA) Score** (SA ≤ 6.0).
 - **Virtual Screening (Phase 3)** — AutoDock Vina or GNINA (deep-learning) docking against allosteric (full library) and active (top 50) sites. Supports ensemble docking against multiple receptor structures with consensus scoring. Falls back to RDKit Shape Protrude scoring when Vina/GNINA is unavailable.
+- **Meta-Learner Consensus Scoring (Phase 4.5)** — Trains a stacking regressor on benchmark actives/inactives to predict activity from Vina energy, shape score, IFP, QED, and LogP features. Replaces fixed weighted-average consensus.
 - **Selectivity Profiling (Phase 4)** — Docks top candidates against human trypsin (1UTN) and CES1 (3KJZ) off-targets; computes Selectivity Index and resistance-risk profile.
+- **Resistance Mutation Profiling (Phase 4)** — Optionally docks candidates against mutant receptor variants and computes binding-energy standard deviation as a resistance-risk metric.
+- **MD Validation (Phase 4.7)** — Optional explicit-solvent MD simulation (OpenMM) of top candidates to assess ligand stability via RMSD.
 - **Reporting (Phase 5)** — Generates a CSV report, 2D structure images (top 3), and an interactive HTML report with embedded matplotlib figures.
 
 ## Prerequisites
@@ -134,11 +138,28 @@ python -m autoantibiotic --ensemble-dir /path/to/receptor/structures
 
 Docks against every receptor in the directory and computes a consensus score (mean by default). The directory should contain PDB or PDBQT files.
 
+### MD validation (requires OpenMM)
+
+```bash
+python -m autoantibiotic --run-md-validation
+```
+
+Runs a 10 ns explicit-solvent MD simulation (OpenMM) on top candidates and reports ligand RMSD. Skips gracefully if OpenMM is not installed.
+
+### Mutation sampling (resistance profiling)
+
+```bash
+python -m autoantibiotic --use-mutation-sampling
+```
+
+Docks top candidates against mutant receptor variants and reports binding-energy variance as a resistance-risk indicator.
+
 ### Combining options
 
 ```bash
 python -m autoantibiotic --dry-run --use-cache
 python -m autoantibiotic --use-gnina --ensemble-dir /path/to/structures
+python -m autoantibiotic --run-md-validation --use-mutation-sampling
 ```
 
 ## Output
@@ -173,6 +194,10 @@ Key parameters are defined in the `PipelineConfig` dataclass (`autoantibiotic/co
 | `ensemble_mode` | `False` | Enable ensemble docking against multiple receptor structures |
 | `ensemble_structures_dir` | `None` | Directory containing receptor PDB/PDBQT files for ensemble docking |
 | `consensus_scoring_method` | `"mean"` | Consensus scoring: `"mean"`, `"median"`, or `"min"` |
+| `use_mutation_sampling` | `False` | Enable mutation-sensitivity resistance profiling |
+| `use_meta_scoring` | `True` | Enable MetaScorer stacking-regressor consensus |
+| `meta_scorer_model_path` | `"output/meta_scorer.joblib"` | Path to saved MetaScorer model |
+| `md_validation_duration_ns` | `10` | MD simulation length in nanoseconds |
 
 ## Troubleshooting
 

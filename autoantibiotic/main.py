@@ -1,5 +1,5 @@
 """
-AutoAntibiotic Discovery Pipeline v3.2
+AutoAntibiotic Discovery Pipeline v4.0
 ========================================
 MRSA PBP2a Inhibitor Screening
 
@@ -58,6 +58,14 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--no-water-analysis", action="store_true",
         help="Skip crystallographic water analysis.",
     )
+    parser.add_argument(
+        "--run-md-validation", action="store_true",
+        help="Run short explicit-solvent MD validation on top candidates.",
+    )
+    parser.add_argument(
+        "--use-mutation-sampling", action="store_true",
+        help="Dock against mutant receptor variants to profile resistance risk.",
+    )
     args = parser.parse_args(argv)
 
     # ── Apply CLI overrides to CONFIG ──
@@ -77,6 +85,12 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.no_water_analysis:
         CONFIG.use_water_analysis = False
+
+    if args.run_md_validation:
+        CONFIG.md_validation_duration_ns = 10
+
+    if args.use_mutation_sampling:
+        CONFIG.use_mutation_sampling = True
 
     if args.use_mm_gbsa or args.use_mm_gbsa_rescoring:
         CONFIG.use_mm_gbsa = True

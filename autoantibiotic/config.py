@@ -42,6 +42,19 @@ class PipelineConfig:
     consensus_vina_weight: float = 0.7
     consensus_shape_weight: float = 0.3
 
+    # Mutation sampling / resistance profiling
+    use_mutation_sampling: bool = False
+    mutation_variants: List[str] = field(default_factory=lambda: [
+        "G246", "N146",
+    ])
+
+    # Meta-learner consensus scoring
+    use_meta_scoring: bool = True
+    meta_scorer_model_path: str = "output/meta_scorer.joblib"
+
+    # MD validation
+    md_validation_duration_ns: int = 10
+
     # Benchmark
     benchmark_mode: bool = False
     reference_actives_path: Optional[Path] = None
