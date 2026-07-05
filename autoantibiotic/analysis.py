@@ -5,8 +5,9 @@ import tempfile
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
-from rdkit import Chem
-from rdkit.Chem import AllChem, Crippen, Descriptors, rdDistGeom, rdMolAlign
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem, Crippen, Descriptors, rdDistGeom, rdMolAlign, rdMolDescriptors
+from sklearn.ensemble import RandomForestClassifier as _RandomForestClassifier
 
 from .config import CONFIG
 from .models import CompoundRecord
@@ -14,6 +15,163 @@ from .docking import _parallel_dock
 from .io_utils import log
 
 _CacheLike = Optional[Dict[str, float]]
+
+_HAVE_TORCH = True
+_HAVE_TRANSFORMERS = True
+try:
+    import torch  # noqa: F401
+except ImportError:
+    _HAVE_TORCH = False
+try:
+    import transformers  # noqa: F401
+except ImportError:
+    _HAVE_TRANSFORMERS = False
+
+
+# ── ML-ADMET Predictor ─────────────────────────────────────────────────────
+
+class MLADMETPredictor:
+    """Lightweight ML-based ADMET predictor using RDKit descriptors +
+    Morgan fingerprints + RandomForest.
+
+    Trains on a built-in reference set of known hERG blockers and safe
+    compounds at initialisation time.  Provides :meth:`predict_herg_probability`
+    and :meth:`predict_cyp_inhibition_probability` (both return 0–1).
+
+    If PyTorch / Transformers are installed, a more sophisticated
+    transformer-based predictor can be substituted in the future.
+    """
+
+    _REFERENCE_COMPOUNDS: List[tuple] = [
+        # (SMILES, hERG_label, CYP_label, name)
+        # hERG blockers (positive)
+        ("OC1(C2=CC=C(Cl)C=C2)CCN(CCCC(=O)C3=CC=C(F)C=C3)CC1",   1, 1, "Haloperidol"),
+        ("CN1C2=CC=CC=C2SC3=C1C=CC=C3CCCN4CCN(C)CC4",            1, 1, "Thioridazine"),
+        ("COC1=CC2=C(C=CN=C2)C=C1C(O)C3CC4CCN3CC4C=C",           1, 1, "Quinidine"),
+        ("CC1(C(=O)OC2=C1C=C3CC4=CC5=C(C=C4CN3C2=O)OC6=C(C=C(C=C6)C(=O)O)OC5)O", 1, 1, "Doxorubicin"),
+        # Safe compounds (negative)
+        ("CN1C=NC2=C1C(=O)N(C)C(=O)N2C",  0, 0, "Caffeine"),
+        ("CC(=O)OC1=CC=CC=C1C(=O)O",      0, 0, "Aspirin"),
+        ("CC(C)CC1=CC=C(C=C1)C(C)C(=O)O", 0, 0, "Ibuprofen"),
+        ("CC(=O)NC1=CC=C(C=C1)O",         0, 0, "Acetaminophen"),
+        ("c1ccccc1",                       0, 0, "Benzene"),
+        ("CCO",                            0, 0, "Ethanol"),
+        ("c1ccccc1O",                      0, 0, "Phenol"),
+    ]
+
+    def __init__(self) -> None:
+        self.herg_model: Optional[_RandomForestClassifier] = None
+        self.cyp_model: Optional[_RandomForestClassifier] = None
+        self._fitted: bool = False
+        self._ndim: int = 0
+        try:
+            self._fit_models()
+        except Exception as exc:
+            log.warning(f"ML-ADMET: Model fitting failed — {exc}. "
+                         "Falling back to rule-based ADMET.")
+
+    # ── feature engineering ──────────────────────────────────────────
+
+    @staticmethod
+    def compute_features(mol: Chem.Mol) -> np.ndarray:
+        """2055-dim feature vector: 2048-bit Morgan FP + 7 RDKit descriptors."""
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, 2048)
+        arr = np.zeros((2048,), dtype=np.float32)
+        DataStructs.ConvertToNumpyArray(fp, arr)
+        descs = np.array([
+            Descriptors.MolWt(mol),
+            Crippen.MolLogP(mol),
+            Descriptors.NumHDonors(mol),
+            Descriptors.NumHAcceptors(mol),
+            Descriptors.TPSA(mol),
+            Descriptors.NumRotatableBonds(mol),
+            float(mol.GetNumHeavyAtoms()),
+        ], dtype=np.float32)
+        return np.concatenate([arr, descs])
+
+    # ── model fitting ────────────────────────────────────────────────
+
+    def _fit_models(self) -> None:
+        X_list: List[np.ndarray] = []
+        y_herg: List[int] = []
+        y_cyp: List[int] = []
+
+        for smi, h_label, c_label, name in self._REFERENCE_COMPOUNDS:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                log.warning(f"ML-ADMET: Skipping '{name}' — invalid SMILES")
+                continue
+            try:
+                X_list.append(self.compute_features(mol))
+                y_herg.append(h_label)
+                y_cyp.append(c_label)
+            except Exception as exc:
+                log.warning(f"ML-ADMET: Skipping '{name}' — {exc}")
+                continue
+
+        n_pos = sum(y_herg)
+        n_neg = len(y_herg) - n_pos
+        if n_pos < 1 or n_neg < 1:
+            log.warning("ML-ADMET: Need at least one positive and one negative "
+                        "reference compound — disabling ML models.")
+            return
+
+        X = np.array(X_list, dtype=np.float32)
+        self._ndim = X.shape[1]
+
+        self.herg_model = _RandomForestClassifier(
+            n_estimators=100, random_state=42, class_weight="balanced",
+        )
+        self.herg_model.fit(X, y_herg)
+
+        self.cyp_model = _RandomForestClassifier(
+            n_estimators=100, random_state=42, class_weight="balanced",
+        )
+        self.cyp_model.fit(X, y_cyp)
+
+        self._fitted = True
+        log.info(f"ML-ADMET: Models fitted ({len(y_herg)} training compounds, "
+                 f"{self._ndim} features).")
+
+    # ── prediction API ───────────────────────────────────────────────
+
+    @property
+    def available(self) -> bool:
+        return self._fitted and self.herg_model is not None
+
+    def predict_herg_probability(self, mol: Chem.Mol) -> Optional[float]:
+        """Probability of hERG blockage in [0, 1], or *None* if unavailable."""
+        if not self.available:
+            return None
+        try:
+            feats = self.compute_features(mol).reshape(1, -1)
+            return float(self.herg_model.predict_proba(feats)[0, 1])  # type: ignore[union-attr]
+        except Exception:
+            return None
+
+    def predict_cyp_inhibition_probability(self, mol: Chem.Mol) -> Optional[float]:
+        """Probability of CYP inhibition in [0, 1], or *None* if unavailable."""
+        if not self.available:
+            return None
+        try:
+            feats = self.compute_features(mol).reshape(1, -1)
+            return float(self.cyp_model.predict_proba(feats)[0, 1])  # type: ignore[union-attr]
+        except Exception:
+            return None
+
+
+# Module-level predictor (lazy singleton)
+_ml_predictor: Optional[MLADMETPredictor] = None
+
+
+def _get_ml_admet_predictor() -> Optional[MLADMETPredictor]:
+    global _ml_predictor
+    if not CONFIG.use_ml_admet:
+        _ml_predictor = None
+        return None
+    if _ml_predictor is None:
+        _ml_predictor = MLADMETPredictor()
+    return _ml_predictor if _ml_predictor.available else None
 
 
 def compute_consensus_score(
@@ -233,13 +391,48 @@ def predict_herg_risk(mol: Chem.Mol) -> str:
     return "Low"
 
 
+def predict_herg_ml(mol: Chem.Mol) -> str:
+    """ML-based hERG blockage risk using the global predictor.
+
+    Returns ``"High"``, ``"Moderate"``, or ``"Low"``.
+    Falls back to the rule-based method if ML not available.
+    """
+    predictor = _get_ml_admet_predictor()
+    if predictor is None:
+        return predict_herg_risk(mol)
+    prob = predictor.predict_herg_probability(mol)
+    if prob is None:
+        return predict_herg_risk(mol)
+    if prob >= CONFIG.ml_admet_herg_threshold:
+        return "High"
+    if prob >= CONFIG.ml_admet_herg_threshold * 0.5:
+        return "Moderate"
+    return "Low"
+
+
+def predict_cyp_inhibition(mol: Chem.Mol) -> str:
+    """ML-based CYP inhibition prediction.
+
+    Returns ``"Yes"`` or ``"No"`` based on the probability threshold.
+    Falls back to a simple rule (any basic N) if ML not available.
+    """
+    predictor = _get_ml_admet_predictor()
+    if predictor is None:
+        return "Yes" if _has_basic_nitrogen(mol) else "No"
+    prob = predictor.predict_cyp_inhibition_probability(mol)
+    if prob is None:
+        return "Yes" if _has_basic_nitrogen(mol) else "No"
+    return "Yes" if prob >= CONFIG.ml_admet_herg_threshold else "No"
+
+
 def predict_admet_profile(record: CompoundRecord) -> CompoundRecord:
     """Compute ADMET properties for a compound and populate *admet_flags*.
 
     Evaluates:
       1. **Solubility (LogS)**: predicted via ESOL model.
-      2. **hERG blockage risk**: rule-based (LogP + basic nitrogen).
-      3. **Lipinski Rule-of-5** and **QED** (already computed in filtering).
+      2. **hERG blockage risk**: ML-based (RandomForest) with rule-based fallback.
+      3. **CYP inhibition risk**: ML-based (RandomForest) with rule-based fallback.
+      4. **Lipinski Rule-of-5** and **QED** (already computed in filtering).
 
     Flags are appended to ``record.admet_flags``.
 
@@ -258,26 +451,42 @@ def predict_admet_profile(record: CompoundRecord) -> CompoundRecord:
     # Solubility
     try:
         logs = predict_logs(mol)
-        if logs < -5.0:
+        if logs < CONFIG.ml_admet_solubility_threshold - 1.0:
             flags.append(f"Poor solubility (LogS={logs:.2f})")
-        elif logs < -3.0:
+        elif logs < CONFIG.ml_admet_solubility_threshold:
             flags.append(f"Moderate solubility (LogS={logs:.2f})")
         else:
             flags.append(f"Good solubility (LogS={logs:.2f})")
     except Exception:
         flags.append("Solubility prediction failed")
 
-    # hERG risk
+    # hERG risk — ML with rule-based fallback
     try:
-        herg = predict_herg_risk(mol)
-        if herg == "High":
-            flags.append("High hERG risk (LogP>4 + basic N)")
-        elif herg == "Moderate":
-            flags.append("Moderate hERG risk")
+        herg = predict_herg_ml(mol)
+        predictor = _get_ml_admet_predictor()
+        if predictor is not None:
+            prob = predictor.predict_herg_probability(mol)
+            prob_str = f" (ML Prob: {prob:.2f})" if prob is not None else ""
         else:
-            flags.append("Low hERG risk")
+            prob_str = ""
+        if herg == "High":
+            flags.append(f"High hERG risk{prob_str}")
+        elif herg == "Moderate":
+            flags.append(f"Moderate hERG risk{prob_str}")
+        else:
+            flags.append(f"Low hERG risk{prob_str}")
     except Exception:
         flags.append("hERG prediction failed")
+
+    # CYP inhibition — ML with rule-based fallback
+    try:
+        cyp = predict_cyp_inhibition(mol)
+        if cyp == "Yes":
+            flags.append("CYP inhibition predicted")
+        else:
+            flags.append("No CYP inhibition predicted")
+    except Exception:
+        flags.append("CYP prediction failed")
 
     # Lipinski (already computed, just annotate)
     if record.passes_lipinski:

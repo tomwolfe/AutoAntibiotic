@@ -23,6 +23,12 @@ from .models import CompoundRecord
 from .io_utils import log
 
 try:
+    from .analysis import _get_ml_admet_predictor, predict_herg_ml
+    _HAVE_ML_ADMET = True
+except ImportError:
+    _HAVE_ML_ADMET = False
+
+try:
     from tqdm import tqdm as _tqdm
     _HAVE_TQDM = True
 except ImportError:
@@ -757,6 +763,32 @@ def _filter_strain(
     return True, ""
 
 
+def _filter_ml_admet(
+    record: CompoundRecord, mol: Chem.Mol,
+) -> tuple[bool, str]:
+    """Remove compounds flagged by the ML-ADMET predictor.
+
+    Runs *after* Lipinski/QED but *before* PAINS and docking.
+    Uses the same predictor instance as :func:`predict_admet_profile`.
+    """
+    if not CONFIG.use_ml_admet:
+        return True, ""
+
+    predictor = _get_ml_admet_predictor()
+    if predictor is None:
+        # ML unavailable — pass through (rule-based ADMET is separate)
+        return True, ""
+
+    try:
+        herg_prob = predictor.predict_herg_probability(mol)
+        if herg_prob is not None and herg_prob > CONFIG.ml_admet_herg_threshold:
+            return False, "ml_admet"
+    except Exception:
+        pass
+
+    return True, ""
+
+
 def apply_filters(
     records: Union[List[CompoundRecord], Iterator[CompoundRecord]],
     similarity_threshold: float = CONFIG.similarity_threshold,
@@ -787,6 +819,7 @@ def apply_filters(
         ("structural", lambda r, m: _filter_beta_lactam(r, m, lactam_pattern)),
         ("similarity", lambda r, m: _filter_similarity(r, m, ref_fps, similarity_threshold)),
         ("admet", _filter_lipinski),
+        ("ml_admet", _filter_ml_admet),
         ("pains", lambda r, m: _filter_pains(r, m, pains_catalog)),
         ("sa_score", _filter_sa_score),
         ("toxicity", lambda r, m: _filter_toxicity(r, m, tox_catalog)),
@@ -816,6 +849,10 @@ def apply_filters(
     log.info(f"  Structural exclusion (β-lactam): {skipped['structural']} removed.")
     log.info(f"  Similarity filter (Tc < {similarity_threshold}): {skipped['similarity']} removed.")
     log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped['admet']} removed.")
+    if CONFIG.use_ml_admet:
+        log.info(f"  ML-ADMET filter (hERG probability > {CONFIG.ml_admet_herg_threshold}): {skipped['ml_admet']} removed.")
+    else:
+        log.info("  ML-ADMET filter: disabled (use_ml_admet=False).")
     log.info(f"  PAINS filter: {skipped['pains']} removed.")
     if _HAVE_SA_SCORE:
         log.info(f"  SA Score filter (> {CONFIG.sa_score_threshold}): {skipped['sa_score']} removed.")

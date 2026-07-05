@@ -172,6 +172,12 @@ class PipelineConfig:
     pharmacophore_rmsd_threshold: float = 1.5
     pharmacophore_ref_ligand_smi: str = ""
 
+    # ── ML-ADMET parameters ──
+    use_ml_admet: bool = True
+    ml_admet_herg_threshold: float = 0.5
+    ml_admet_solubility_threshold: float = -4.0
+    ml_admet_model_name: str = "seyonec/ChemBERTa-zinc-base-v1"
+
     # ── Water analysis parameters ──
     use_water_analysis: bool = True
     water_distance_cutoff: float = 5.0
