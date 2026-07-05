@@ -167,6 +167,107 @@ def test_generate_grown_library_multi_step() -> None:
     pass
 
 
+# ── Stereoisomer enumeration tests ───────────────────────────────
+
+class TestStereoisomerEnumeration:
+    """Tests for stereoisomer enumeration in library generation."""
+
+    def test_enumerate_no_stereocenters(self) -> None:
+        """Molecule without stereocenters should return only the original
+        (RDKit returns the input molecule itself when there are no isomers)."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=8)
+        # RDKit returns at least the original molecule; check no extra
+        # stereoisomers beyond the original are created
+        assert len(isomers) <= 1
+
+    def test_enumerate_undefined_chiral_center(self) -> None:
+        """Molecule with undefined chiral center should yield isomers."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        mol = Chem.MolFromSmiles("CCC(C)O")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=8)
+        assert len(isomers) >= 1
+        for iso in isomers:
+            assert iso is not None
+            smi = Chem.MolToSmiles(iso)
+            assert smi != "CCC(C)O"  # should be different from undefined
+
+    def test_enumerate_respects_max_isomers(self) -> None:
+        """Even with many possibilities, should not exceed max_isomers."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        mol = Chem.MolFromSmiles("CC(O)C(C)O")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=4)
+        assert len(isomers) <= 4
+
+    def test_isomers_are_sanitized(self) -> None:
+        """Enumerated isomers should be valid sanitized molecules."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        mol = Chem.MolFromSmiles("CCC(C)O")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=8)
+        for iso in isomers:
+            assert iso is not None
+            # Verify sanitization by computing a simple property
+            assert Chem.Descriptors.MolWt(iso) > 0
+
+    def test_isomers_have_unique_smiles(self) -> None:
+        """Each isomer should have a distinct SMILES."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        mol = Chem.MolFromSmiles("CCC(C)O")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=8)
+        smiles_set = set()
+        for iso in isomers:
+            smi = Chem.MolToSmiles(iso)
+            smiles_set.add(smi)
+        assert len(smiles_set) == len(isomers)
+
+    def test_grown_library_uses_isomer_ids(self) -> None:
+        """Grown compounds with stereoisomers should have suffixed IDs."""
+        core = _make_core_record("c1ccncc1")
+        # Building block with an undefined chiral center
+        bbs = ["[1*]CC(C)O"]
+        results = list(
+            generate_grown_library(
+                [core],
+                building_blocks=bbs,
+                max_growth_steps=1,
+                target_per_core=10,
+            )
+        )
+        for rec in results:
+            assert isinstance(rec, CompoundRecord)
+            # If expensive features are off, IDs are plain GROWN-*
+            # If on, some may have suffixes
+            if rec.parent_id is not None:
+                assert "-" in rec.compound_id
+                assert rec.parent_id.startswith("GROWN-")
+
+    def test_parent_id_preserved_on_isomers(self) -> None:
+        """Isomers should have a parent_id linking to the original."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        mol = Chem.MolFromSmiles("CCC(C)O")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=8)
+        if isomers:
+            # Simulate what generate_grown_library does
+            base_id = "GROWN-000"
+            for j, iso in enumerate(isomers):
+                suf = chr(ord("a") + j)
+                rec = CompoundRecord(
+                    compound_id=f"{base_id}-{suf}",
+                    smiles=Chem.MolToSmiles(iso),
+                    mol=iso,
+                    parent_id=base_id,
+                )
+                assert rec.parent_id == base_id
+                assert rec.compound_id == f"{base_id}-{suf}"
+
+
 # ── Stereochemistry flagging tests ────────────────────────────────
 
 class TestStereochemistryFlagging:

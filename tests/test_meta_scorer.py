@@ -131,3 +131,64 @@ def test_predict_meta_score_no_docking() -> None:
 def test_use_meta_scoring_config_toggle() -> None:
     """CONFIG.use_meta_scoring should default to True."""
     assert CONFIG.use_meta_scoring is True
+
+
+# ── Active-learning / uncertainty threshold tests ──────────────
+
+
+def test_metascorer_uncertainty_threshold_default() -> None:
+    """MetaScorer should not set needs_manual_review without threshold."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+    rec = _make_record(actives[0])
+    scorer.predict(rec)
+    assert rec.needs_manual_review is False
+
+
+def test_metascorer_uncertainty_threshold_low() -> None:
+    """With a very low threshold, predictions may trigger manual review."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives, uncertainty_threshold=1e-6)
+    rec = _make_record(actives[0])
+    score = scorer.predict(rec)
+    assert score is not None
+    assert 0.0 <= score <= 1.0
+
+
+def test_metascorer_uncertainty_threshold_high_never_triggers() -> None:
+    """With a very high threshold, needs_manual_review should stay False."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives, uncertainty_threshold=100.0)
+    rec = _make_record(actives[0])
+    scorer.predict(rec)
+    assert rec.needs_manual_review is False

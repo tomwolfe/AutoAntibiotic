@@ -395,6 +395,7 @@ class MetaScorer:
         actives_smiles: List[str],
         inactives_smiles: List[str],
         feature_fn: Optional[Any] = None,
+        uncertainty_threshold: Optional[float] = None,
     ) -> "MetaScorer":
         """Train the stacking regressor on benchmark actives / inactives.
 
@@ -407,6 +408,11 @@ class MetaScorer:
         feature_fn : callable, optional
             Function ``(mol) -> np.ndarray`` that extracts the feature
             vector.  Defaults to :meth:`_default_features`.
+        uncertainty_threshold : float, optional
+            If set, during :meth:`predict` the standard deviation of
+            predictions across all trees is compared to this threshold.
+            When exceeded, ``record.needs_manual_review`` is set to
+            ``True``, flagging the compound for manual inspection.
         """
         X_list: List[np.ndarray] = []
         y_list: List[float] = []
@@ -452,6 +458,7 @@ class MetaScorer:
         )
         self._model.fit(X, y)
         self._fitted = True
+        self._uncertainty_threshold = uncertainty_threshold
         oob = getattr(self._model, "oob_score_", float("nan"))
         log.info(
             f"MetaScorer: trained on {len(X)} compounds "
@@ -468,6 +475,11 @@ class MetaScorer:
         Returns a score in [0, 1] where higher is more likely active,
         or ``None`` if the model is not fitted or feature extraction
         fails.
+
+        When ``uncertainty_threshold`` was set at fit time, the standard
+        deviation of predictions across all trees is computed.  If it
+        exceeds the threshold, ``record.needs_manual_review`` is set to
+        ``True``.
         """
         if not self.available:
             return None
@@ -479,6 +491,21 @@ class MetaScorer:
         try:
             feats = self._default_features(record.mol).reshape(1, -1)
             prob = float(self._model.predict(feats)[0])  # type: ignore[union-attr]
+
+            # Active-learning: ensemble variance check
+            threshold = getattr(self, "_uncertainty_threshold", None)
+            if threshold is not None and hasattr(self._model, "estimators_"):
+                tree_preds = np.array([
+                    tree.predict(feats)[0] for tree in self._model.estimators_
+                ])
+                std = float(np.std(tree_preds, ddof=1))
+                if std > threshold:
+                    record.needs_manual_review = True
+                    log.debug(
+                        f"MetaScorer: {record.compound_id} flagged for review "
+                        f"(std={std:.3f} > threshold={threshold})"
+                    )
+
             return float(np.clip(prob, 0.0, 1.0))
         except Exception:
             return None

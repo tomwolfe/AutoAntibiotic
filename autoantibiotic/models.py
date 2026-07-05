@@ -43,5 +43,8 @@ class CompoundRecord:
     shape_score: Optional[float] = None
 
     ml_score: Optional[float] = None
+    ml_score_std: Optional[float] = None
     admet_flags: List[str] = field(default_factory=list)
     has_undefined_stereo: bool = False
+    needs_manual_review: bool = False
+    parent_id: Optional[str] = None

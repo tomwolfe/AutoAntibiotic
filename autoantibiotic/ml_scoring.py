@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
+from rdkit.Chem import rdMolTransforms
 
 from .config import CONFIG
 from .models import CompoundRecord
@@ -267,6 +268,42 @@ def _rescore_with_chemberta(
     return top_candidates
 
 
+_VDW_RADII: Dict[int, float] = {
+    1: 1.20,  6: 1.70,  7: 1.55,  8: 1.52,  9: 1.47,
+    16: 1.80, 17: 1.75, 15: 1.80, 14: 2.10, 5: 1.92,
+    35: 1.85, 53: 1.98,
+}
+"""Van der Waals radii (Å) by atomic number."""
+
+
+def _check_vdw_overlap(
+    ligand_mol: Chem.Mol,
+    water_position: np.ndarray,
+    scaling: float = 0.8,
+) -> bool:
+    """Check whether a water oxygen falls within the VDW radius of any
+    ligand heavy atom.
+
+    Uses a *scaling* factor (default 0.8) to soften the criterion and
+    avoid penalising borderline contacts.  Returns ``True`` if a steric
+    clash is detected.
+    """
+    conf = ligand_mol.GetConformer()
+    for i in range(ligand_mol.GetNumAtoms()):
+        atom = ligand_mol.GetAtomWithIdx(i)
+        atomic_num = atom.GetAtomicNum()
+        if atomic_num <= 1:
+            continue
+        vdw = _VDW_RADII.get(atomic_num, 1.70)
+        pt = conf.GetAtomPosition(i)
+        dist = np.linalg.norm(
+            np.array([pt.x, pt.y, pt.z]) - water_position
+        )
+        if dist < vdw * scaling:
+            return True
+    return False
+
+
 def _prepare_receptor_for_mmgbsa(
     receptor_pdb: str, work_dir_mm: str,
 ) -> Optional[Tuple[Any, Any, Any, float]]:
@@ -453,19 +490,17 @@ def rescore_with_mmgbsa(
 
     where each G = E_MM (bonded + vdW + Coulomb) + E_GB (Born).
 
-    When *water_results* is provided and contains high-energy waters
-    that clash with the ligand (distance < 2.5 Å), a favourable water
-    displacement correction is applied:
+    **Ensemble averaging** (when ``CONFIG.use_expensive_ml_features``
+    is ``True``): generates ``CONFIG.mmgbsa_n_conformers`` conformers
+    for the ligand via ETKDG + MMFF and computes the mean ΔG and
+    standard deviation.  The mean is stored in ``record.ml_score`` and
+    the std dev in ``record.ml_score_std``.  A larger std dev indicates
+    higher sensitivity to ligand conformation.
 
-        ΔG_corrected = ΔG_binding - Σ E_displacement
-
-    The correction makes the binding energy more negative when
-    displaceable (high-energy) waters are sterically incompatible
-    with the docked ligand.
-
-    Uses ``CONFIG.mm_gbsa_top_n`` to determine how many candidates
-    are rescored.  If *parmed* is available, an alternative Amber
-    GB computation is used as a consistency check.
+    **Water displacement correction**: high-energy waters that sterically
+    clash with the ligand (VDW overlap with *scaling* = 0.8) contribute
+    a favourable displacement penalty.  This uses a proper volume-overlap
+    check rather than a simple distance cutoff.
 
     Args:
         top_candidates: Docked candidates (uses SMILES for 3D generation).
@@ -474,8 +509,8 @@ def rescore_with_mmgbsa(
         water_results: Optional crystallographic water analysis result.
 
     Returns:
-        Updated candidates with ``ml_score`` set to the MM-GB/SA ΔG
-        (more negative = stronger predicted binding).
+        Updated candidates with ``ml_score`` set to the ensemble-mean
+        MM-GB/SA ΔG (more negative = stronger predicted binding).
     """
     n_to_rescore = min(len(top_candidates), CONFIG.mm_gbsa_top_n)
     log.info(f"  Rescoring top {n_to_rescore}/{len(top_candidates)} with MM-GB/SA…")
@@ -487,6 +522,9 @@ def rescore_with_mmgbsa(
     if not os.path.exists(receptor_pdb):
         log.warning(f"  Receptor PDB not found: {receptor_pdb}. Skipping MM-GB/SA.")
         return top_candidates
+
+    use_ensemble = CONFIG.use_expensive_ml_features
+    n_conf = CONFIG.mmgbsa_n_conformers if use_ensemble else 1
 
     work_dir_mm = os.path.join(work_dir, "mmgbsa")
     os.makedirs(work_dir_mm, exist_ok=True)
@@ -500,7 +538,6 @@ def rescore_with_mmgbsa(
     rec_pdb_prepared = os.path.join(work_dir_mm, "receptor_prepared.pdb")
 
     to_rescore = top_candidates[:n_to_rescore]
-    mm_gbsa_scores: Dict[str, Optional[float]] = {}
 
     for rank, rec in enumerate(to_rescore):
         log.info(f"  MM-GB/SA [{rank + 1}/{n_to_rescore}]: {rec.compound_id}")
@@ -509,76 +546,96 @@ def rescore_with_mmgbsa(
             if mol is None:
                 mol = Chem.MolFromSmiles(rec.smiles)
                 if mol is None:
-                    mm_gbsa_scores[rec.compound_id] = None
                     continue
                 rec.mol = mol
 
             tag = rec.compound_id.replace("/", "_").replace(" ", "_")
 
-            lig_energy = _compute_ligand_gb_energy(
-                mol, forcefield, cpu_platform,
-                work_dir_mm, tag, CONFIG.random_seed + rank,
-            )
-            if lig_energy is None:
-                mm_gbsa_scores[rec.compound_id] = None
+            binding_energies: List[float] = []
+
+            for conf_idx in range(n_conf):
+                seed = CONFIG.random_seed + rank * n_conf + conf_idx
+
+                lig_energy = _compute_ligand_gb_energy(
+                    mol, forcefield, cpu_platform,
+                    work_dir_mm, f"{tag}_c{conf_idx}", seed,
+                )
+                if lig_energy is None:
+                    continue
+
+                complex_energy = _compute_complex_gb_energy(
+                    rec_pdb_prepared, f"{tag}_c{conf_idx}", forcefield,
+                    cpu_platform, work_dir_mm, f"{tag}_c{conf_idx}",
+                )
+                if complex_energy is None:
+                    continue
+
+                binding_energy = complex_energy - rec_energy - lig_energy
+
+                # ── Water displacement correction (VDW overlap) ──
+                if water_results is not None and water_results.high_energy_waters:
+                    penalty = _compute_water_displacement_penalty(
+                        mol, water_results.high_energy_waters, seed,
+                    )
+                    if penalty > 0.0:
+                        binding_energy -= penalty
+                        log.info(f"      Water displacement penalty: "
+                                 f"-{penalty:.2f} kcal/mol (conf {conf_idx})")
+
+                binding_energies.append(binding_energy)
+
+                if not use_ensemble:
+                    break
+
+            if not binding_energies:
+                log.warning(f"  No valid conformers for {rec.compound_id}")
                 continue
 
-            complex_energy = _compute_complex_gb_energy(
-                rec_pdb_prepared, tag, forcefield,
-                cpu_platform, work_dir_mm, tag,
-            )
-            if complex_energy is None:
-                mm_gbsa_scores[rec.compound_id] = None
-                continue
+            mean_binding = float(np.mean(binding_energies))
+            std_binding = float(np.std(binding_energies, ddof=1)) if len(binding_energies) > 1 else 0.0
 
-            binding_energy = complex_energy - rec_energy - lig_energy
+            rec.ml_score = mean_binding
+            rec.ml_score_std = std_binding
 
-            # ── Water displacement correction ─────────────────────
-            total_displacement_penalty = 0.0
-            if water_results is not None and water_results.high_energy_waters:
-                mol_3d_lig = Chem.RWMol(mol)
-                mol_3d_lig = Chem.AddHs(mol_3d_lig)
-                params = Chem.rdDistGeom.ETKDGv3()
-                params.randomSeed = CONFIG.random_seed + rank
-                if Chem.rdDistGeom.EmbedMolecule(mol_3d_lig, params) >= 0:
-                    AllChem.MMFFOptimizeMolecule(mol_3d_lig, maxIters=500)
-                    lig_conf = mol_3d_lig.GetConformer()
-                    # Use only heavy atoms for distance check
-                    lig_coords = np.array([
-                        [lig_conf.GetAtomPosition(i).x,
-                         lig_conf.GetAtomPosition(i).y,
-                         lig_conf.GetAtomPosition(i).z]
-                        for i in range(mol_3d_lig.GetNumAtoms())
-                        if mol_3d_lig.GetAtomWithIdx(i).GetAtomicNum() > 1
-                    ])
-                    for w in water_results.high_energy_waters:
-                        min_dist = float(np.min(
-                            np.linalg.norm(lig_coords - w.position, axis=1)
-                        ))
-                        if min_dist < 2.5:
-                            total_displacement_penalty += w.displacement_energy
-                if total_displacement_penalty > 0.0:
-                    binding_energy -= total_displacement_penalty
-                log.info(f"      Water displacement correction: "
-                         f"-{total_displacement_penalty:.2f} kcal/mol "
-                         f"(corrected ΔG = {binding_energy:.2f})")
-
-            mm_gbsa_scores[rec.compound_id] = binding_energy
-            log.info(f"    ΔG ≈ {binding_energy:.2f} kcal/mol  "
-                     f"(rec={rec_energy:.1f} + lig={lig_energy:.1f} → "
-                     f"complex={complex_energy:.1f})")
+            log.info(f"    ΔG ≈ {mean_binding:.2f} ± {std_binding:.2f} kcal/mol "
+                     f"({len(binding_energies)} conformers)")
 
         except Exception as exc:
             log.warning(f"  MM-GB/SA failed for {rec.compound_id}: {exc}")
-            mm_gbsa_scores[rec.compound_id] = None
-
-    # Apply scores back to all candidates (None for those not rescored)
-    for rec in top_candidates:
-        score = mm_gbsa_scores.get(rec.compound_id)
-        if score is not None:
-            rec.ml_score = score
 
     return top_candidates
+
+
+def _compute_water_displacement_penalty(
+    mol: Chem.Mol,
+    high_energy_waters: List[Any],
+    seed: int,
+) -> float:
+    """Compute the total water displacement penalty for a ligand.
+
+    For each high-energy water, generates a 3D conformer of the ligand
+    (ETKDG + MMFF) and checks for VDW overlap using
+    :func:`_check_vdw_overlap`.  Only waters that sterically clash
+    with the ligand contribute their displacement energy.
+
+    Returns the sum of displacement energies of clashing waters (kcal/mol).
+    """
+    try:
+        mol_3d = Chem.RWMol(mol)
+        mol_3d = Chem.AddHs(mol_3d)
+        params = Chem.rdDistGeom.ETKDGv3()
+        params.randomSeed = seed
+        if Chem.rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
+            return 0.0
+        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
+    except Exception:
+        return 0.0
+
+    total = 0.0
+    for w in high_energy_waters:
+        if _check_vdw_overlap(mol_3d, w.position):
+            total += w.displacement_energy
+    return total
 
 
 def rescore_with_ml(

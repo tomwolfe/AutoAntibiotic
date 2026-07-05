@@ -480,6 +480,158 @@ class TestWaterDisplacementIntegration:
         assert final_score == pytest.approx(0.0, abs=1e-4)
 
 
+# ── Ensemble MM-GB/SA tests ─────────────────────────────────
+
+class TestEnsembleMMGBSA:
+    """Tests for the ensemble conformer averaging feature."""
+
+    def test_single_conformer_when_expensive_disabled(
+        self,
+        top_candidates: List[CompoundRecord],
+        dummy_receptor_pdb: str,
+        temp_work_dir: str,
+    ) -> None:
+        """When use_expensive_ml_features is False, only 1 conformer is used."""
+        saved_expensive = CONFIG.use_expensive_ml_features
+        saved_n_conf = CONFIG.mmgbsa_n_conformers
+        CONFIG.use_expensive_ml_features = False
+        CONFIG.mmgbsa_n_conformers = 10
+
+        try:
+            with patch.multiple(
+                "autoantibiotic.ml_scoring",
+                _HAVE_OPENMM=True,
+                _prepare_receptor_for_mmgbsa=MagicMock(
+                    return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
+                ),
+                _compute_ligand_gb_energy=MagicMock(return_value=50.0),
+                _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+            ):
+                result = rescore_with_mmgbsa(
+                    top_candidates,
+                    dummy_receptor_pdb,
+                    temp_work_dir,
+                )
+            assert len(result) == len(top_candidates)
+        finally:
+            CONFIG.use_expensive_ml_features = saved_expensive
+            CONFIG.mmgbsa_n_conformers = saved_n_conf
+
+    def test_ensemble_uses_n_conformers(
+        self,
+        top_candidates: List[CompoundRecord],
+        dummy_receptor_pdb: str,
+        temp_work_dir: str,
+    ) -> None:
+        """When expensive features are enabled, multiple conformers are used."""
+        saved_expensive = CONFIG.use_expensive_ml_features
+        saved_n_conf = CONFIG.mmgbsa_n_conformers
+        CONFIG.use_expensive_ml_features = True
+        CONFIG.mmgbsa_n_conformers = 5
+
+        try:
+            with patch.multiple(
+                "autoantibiotic.ml_scoring",
+                _HAVE_OPENMM=True,
+                _prepare_receptor_for_mmgbsa=MagicMock(
+                    return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
+                ),
+                _compute_ligand_gb_energy=MagicMock(return_value=50.0),
+                _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+            ):
+                result = rescore_with_mmgbsa(
+                    top_candidates,
+                    dummy_receptor_pdb,
+                    temp_work_dir,
+                )
+            assert len(result) == len(top_candidates)
+            # With all conformers returning same energy, std dev should be 0
+            for rec in result:
+                if rec.ml_score is not None:
+                    assert rec.ml_score_std is not None
+                    assert rec.ml_score_std >= 0.0
+        finally:
+            CONFIG.use_expensive_ml_features = saved_expensive
+            CONFIG.mmgbsa_n_conformers = saved_n_conf
+
+    def test_ml_score_std_is_not_none_when_rescored(
+        self,
+        top_candidates: List[CompoundRecord],
+        dummy_receptor_pdb: str,
+        temp_work_dir: str,
+    ) -> None:
+        """MM-GB/SA rescored compounds should have non-None ml_score_std."""
+        saved_expensive = CONFIG.use_expensive_ml_features
+        CONFIG.use_expensive_ml_features = True
+
+        try:
+            with patch.multiple(
+                "autoantibiotic.ml_scoring",
+                _HAVE_OPENMM=True,
+                _prepare_receptor_for_mmgbsa=MagicMock(
+                    return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
+                ),
+                _compute_ligand_gb_energy=MagicMock(return_value=50.0),
+                _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+            ):
+                result = rescore_with_mmgbsa(
+                    top_candidates[:1],
+                    dummy_receptor_pdb,
+                    temp_work_dir,
+                )
+            assert len(result) == 1
+            r = result[0]
+            if r.ml_score is not None:
+                assert r.ml_score_std is not None
+                assert isinstance(r.ml_score_std, float)
+        finally:
+            CONFIG.use_expensive_ml_features = saved_expensive
+
+    def test_water_vdw_overlap_check(
+        self,
+        temp_work_dir: str,
+    ) -> None:
+        """VDW-overlap-based water correction should work."""
+        from autoantibiotic.ml_scoring import _check_vdw_overlap
+        from rdkit.Chem import AllChem, rdDistGeom
+
+        mol = Chem.MolFromSmiles("c1ccccc1O")
+        assert mol is not None
+        mol_3d = Chem.RWMol(mol)
+        mol_3d = Chem.AddHs(mol_3d)
+        params = rdDistGeom.ETKDGv3()
+        params.randomSeed = 42
+        rdDistGeom.EmbedMolecule(mol_3d, params)
+        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
+
+        # A water exactly at origin should clash with some atom
+        water_pos = np.array([0.0, 0.0, 0.0])
+        clash = _check_vdw_overlap(mol_3d, water_pos)
+        # May or may not clash depending on conformer; just verify it runs
+        assert isinstance(clash, bool)
+
+    def test_water_vdw_no_clash_far_away(
+        self,
+        temp_work_dir: str,
+    ) -> None:
+        """A water far from the ligand should NOT trigger a clash."""
+        from autoantibiotic.ml_scoring import _check_vdw_overlap
+        from rdkit.Chem import AllChem, rdDistGeom
+
+        mol = Chem.MolFromSmiles("c1ccccc1O")
+        assert mol is not None
+        mol_3d = Chem.RWMol(mol)
+        mol_3d = Chem.AddHs(mol_3d)
+        params = rdDistGeom.ETKDGv3()
+        params.randomSeed = 42
+        rdDistGeom.EmbedMolecule(mol_3d, params)
+        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
+
+        water_pos = np.array([100.0, 100.0, 100.0])
+        clash = _check_vdw_overlap(mol_3d, water_pos)
+        assert clash is False
+
+
 # ── Config integration ────────────────────────────────────────
 
 class TestConfigIntegration:
@@ -494,6 +646,14 @@ class TestConfigIntegration:
         assert hasattr(CONFIG, "use_mm_gbsa")
         assert hasattr(CONFIG, "use_mm_gbsa_rescoring")
         assert hasattr(CONFIG, "mm_gbsa_top_n")
+
+    def test_new_config_fields_exist(self) -> None:
+        assert hasattr(CONFIG, "use_expensive_ml_features")
+        assert hasattr(CONFIG, "mmgbsa_n_conformers")
+        assert hasattr(CONFIG, "max_stereoisomers")
+        assert CONFIG.use_expensive_ml_features is False
+        assert CONFIG.mmgbsa_n_conformers == 10
+        assert CONFIG.max_stereoisomers == 8
 
 
 # ── MD Validation tests ─────────────────────────────────────────

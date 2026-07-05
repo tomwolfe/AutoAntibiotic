@@ -185,6 +185,17 @@ class PipelineConfig:
     pharmacophore_rmsd_threshold: float = 1.5
     pharmacophore_ref_ligand_smi: str = ""
 
+    # ── Expensive ML feature toggle ──
+    use_expensive_ml_features: bool = False
+    """Enable expensive features: ensemble MM-GB/SA, stereoisomer enumeration.
+    Set to ``True`` for production runs; keep ``False`` for dry-run / quick-test."""
+
+    mmgbsa_n_conformers: int = 10
+    """Number of ligand-receptor conformers for ensemble MM-GB/SA averaging."""
+
+    max_stereoisomers: int = 8
+    """Maximum stereoisomers to enumerate per undefined-stereo molecule."""
+
     # ── ML-ADMET parameters ──
     use_ml_admet: bool = True
     ml_admet_herg_threshold: float = 0.5

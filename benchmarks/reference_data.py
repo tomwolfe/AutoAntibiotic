@@ -716,11 +716,24 @@ _NON_CYP_INHIBITORS: List[str] = [
 def load_chembl_admet_subset() -> Dict[str, List[Dict[str, Any]]]:
     """Return an expanded training set for ML-ADMET models.
 
+    Tries the ChEMBL API via :mod:`autoantibiotic.data_loaders` first.
+    Falls back to the hardcoded reference sets if the API is unavailable.
+
     Returns a dict with keys ``"herg"`` and ``"cyp"``, each mapping to a
-    list of ``{"smiles": str, "label": int}`` dicts containing >200
-    samples per class where ``label = 1`` means "blocker/inhibitor"
-    and ``label = 0`` means "safe/non-inhibitor".
+    list of ``{"smiles": str, "label": int}`` dicts containing >500
+    samples per class where possible (``label = 1`` means "blocker/inhibitor"
+    and ``label = 0`` means "safe/non-inhibitor").
     """
+    try:
+        from autoantibiotic.data_loaders import fetch_chembl_admet_data
+        chembl_data = fetch_chembl_admet_data()
+        n_herg = len(chembl_data.get("herg", []))
+        n_cyp = len(chembl_data.get("cyp", []))
+        if n_herg >= 20 and n_cyp >= 20:
+            return chembl_data
+    except (ImportError, Exception):
+        pass
+
     result: Dict[str, List[Dict[str, Any]]] = {
         "herg": [],
         "cyp": [],
@@ -739,6 +752,13 @@ def load_chembl_admet_subset() -> Dict[str, List[Dict[str, Any]]]:
 
 
 def get_actives_smiles() -> List[str]:
+    try:
+        from autoantibiotic.data_loaders import fetch_chembl_pbp2a_actives
+        chembl = fetch_chembl_pbp2a_actives()
+        if len(chembl) > len(PBP2A_ACTIVES):
+            return [d["smiles"] for d in chembl]
+    except (ImportError, Exception):
+        pass
     return [d["smiles"] for d in PBP2A_ACTIVES]
 
 

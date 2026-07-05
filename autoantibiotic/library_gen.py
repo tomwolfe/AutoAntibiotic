@@ -12,6 +12,7 @@ from rdkit.Chem import (
     ChemicalFeatures,
     Crippen,
     Descriptors,
+    EnumerateStereoisomers,
     QED,
     rdDistGeom,
 )
@@ -73,6 +74,38 @@ def _check_undefined_stereo(mol: Chem.Mol) -> bool:
         return False
     except Exception:
         return False
+
+
+def _enumerate_stereoisomers(
+    mol: Chem.Mol,
+    max_isomers: int = 8,
+) -> List[Chem.Mol]:
+    """Enumerate all plausible stereoisomers for a molecule with
+    undefined stereocenters.
+
+    Uses ``rdkit.Chem.EnumerateStereoisomers.EnumerateStereoisomers``
+    and limits the output to *max_isomers* to prevent combinatorial
+    explosion.  Each isomer is sanitised before being returned.
+
+    Returns a list of RDKit Mol objects (may be empty).
+    """
+    try:
+        isomers = list(
+            EnumerateStereoisomers.EnumerateStereoisomers(mol)
+        )
+    except Exception:
+        return []
+
+    valid: List[Chem.Mol] = []
+    for iso in isomers:
+        try:
+            Chem.SanitizeMol(iso)
+            valid.append(iso)
+        except Exception:
+            continue
+        if len(valid) >= max_isomers:
+            break
+    return valid
 
 
 def _validate_mol(smiles: str) -> Optional[Chem.Mol]:
@@ -142,10 +175,27 @@ def _brics_recombination(
                 continue
             seen_smiles.add(smi)
             has_undefined = _check_undefined_stereo(product)
+            base_id = f"AA-{n_produced:04d}"
             if has_undefined:
-                log.debug(f"  Stereochemistry warning: AA-{n_produced:04d} has undefined stereocenters.")
+                log.debug(f"  Stereochemistry warning: {base_id} has undefined stereocenters.")
+            if has_undefined and CONFIG.use_expensive_ml_features:
+                isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
+                if isomers:
+                    for j, iso in enumerate(isomers):
+                        iso_smi = Chem.MolToSmiles(iso)
+                        suf = chr(ord("a") + j)
+                        rec = CompoundRecord(
+                            compound_id=f"{base_id}-{suf}",
+                            smiles=iso_smi,
+                            mol=iso,
+                            has_undefined_stereo=False,
+                            parent_id=base_id,
+                        )
+                        n_produced += 1
+                        yield rec
+                    continue
             rec = CompoundRecord(
-                compound_id=f"AA-{n_produced:04d}",
+                compound_id=base_id,
                 smiles=smi,
                 mol=product,
                 has_undefined_stereo=has_undefined,
@@ -1043,10 +1093,46 @@ def generate_grown_library(
 
                     seen_smiles.add(smi)
                     has_undefined = _check_undefined_stereo(product)
+                    base_id = f"GROWN-{compound_counter:04d}"
                     if has_undefined:
-                        log.debug(f"  Stereochemistry warning: GROWN-{compound_counter:04d} has undefined stereocenters.")
+                        log.debug(f"  Stereochemistry warning: {base_id} has undefined stereocenters.")
+                    if has_undefined and CONFIG.use_expensive_ml_features:
+                        isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
+                        if isomers:
+                            for j, iso in enumerate(isomers):
+                                iso_smi = Chem.MolToSmiles(iso)
+                                suf = chr(ord("a") + j)
+                                try:
+                                    iso_qed = QED.qed(iso)
+                                    iso_mw = Descriptors.MolWt(iso)
+                                    iso_logp = Crippen.MolLogP(iso)
+                                    iso_hbd = Descriptors.NumHDonors(iso)
+                                    iso_hba = Descriptors.NumHAcceptors(iso)
+                                    iso_lipinski = (
+                                        iso_mw <= CONFIG.lipinski_mw_max
+                                        and iso_logp <= CONFIG.lipinski_logp_max
+                                        and iso_hbd <= CONFIG.lipinski_hbd_max
+                                        and iso_hba <= CONFIG.lipinski_hba_max
+                                    )
+                                except Exception:
+                                    continue
+                                if not iso_lipinski or iso_qed < CONFIG.qed_threshold:
+                                    continue
+                                rec = CompoundRecord(
+                                    compound_id=f"{base_id}-{suf}",
+                                    smiles=iso_smi,
+                                    mol=iso,
+                                    qed_score=iso_qed,
+                                    passes_lipinski=iso_lipinski,
+                                    has_undefined_stereo=False,
+                                    parent_id=base_id,
+                                )
+                                compound_counter += 1
+                                next_gen.append(iso)
+                                yield rec
+                            continue
                     rec = CompoundRecord(
-                        compound_id=f"GROWN-{compound_counter:04d}",
+                        compound_id=base_id,
                         smiles=smi,
                         mol=product,
                         qed_score=qed,
