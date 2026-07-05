@@ -32,7 +32,12 @@ class AutoAntibioticError(Exception):
 
 
 class VinaError(AutoAntibioticError):
-    """Error raised when AutoDock Vina or GNINA fails with a recognised
+    """Error raised when AutoDock Vina fails with a recognised
+    pattern in its output, providing an actionable message."""
+
+
+class GninaError(AutoAntibioticError):
+    """Error raised when GNINA fails with a recognised
     pattern in its output, providing an actionable message."""
 
 
@@ -83,26 +88,43 @@ _INSTALL_GUIDE: Dict[str, str] = {
     "biopython": "  → Install: conda install -c conda-forge biopython  |  pip install biopython",
     "vina": (
         "  → Install AutoDock Vina:\n"
-        "       Linux/macOS:  conda install -c conda-forge vina\n"
-        "       Or download from https://vina.scripps.edu/\n"
-        "       Then ensure 'vina' is on your PATH."
+        "       # Conda (Linux/macOS):\n"
+        "       conda install -c conda-forge vina\n"
+        "       # Or download from https://vina.scripps.edu/\n"
+        "       # Verify:\n"
+        "       vina --version"
     ),
     "gnina": (
         "  → Install GNINA:\n"
-        "       Download from https://github.com/gnina/gnina/releases\n"
-        "       or build from source: https://github.com/gnina/gnina\n"
-        "       Then ensure 'gnina' is on your PATH."
+        "       # Option A — download pre-compiled binary:\n"
+        "       wget https://github.com/gnina/gnina/releases/latest/download/gnina \\\n"
+        "         -O /usr/local/bin/gnina && chmod +x /usr/local/bin/gnina\n"
+        "       # Option B — Conda (Linux only):\n"
+        "       conda install -c conda-forge gnina\n"
+        "       # Verify:\n"
+        "       gnina --help"
     ),
     "obabel": (
         "  → Install OpenBabel:\n"
+        "       # Conda (cross-platform):\n"
         "       conda install -c conda-forge openbabel\n"
-        "       or: brew install openbabel (macOS)\n"
-        "       or: apt install openbabel (Debian/Ubuntu)"
+        "       # macOS:\n"
+        "       brew install openbabel\n"
+        "       # Debian/Ubuntu:\n"
+        "       sudo apt install openbabel\n"
+        "       # Verify:\n"
+        "       obabel --version"
     ),
     "prepare_receptor": (
-        "  → Install ADFR suite:\n"
-        "       Download from https://ccsb.scripps.edu/adfr/\n"
-        "       and add 'prepare_receptor' to your PATH."
+        "  → Install ADFR suite (prepare_receptor):\n"
+        "       # Download from https://ccsb.scripps.edu/adfr/\n"
+        "       # Example:\n"
+        "       wget https://ccsb.scripps.edu/adfr/downloads/adfr-1.0rc1-Linux-64bit.tar.gz \\\n"
+        "         -O /tmp/adfr.tar.gz && \\\n"
+        "       tar xzf /tmp/adfr.tar.gz -C /opt/adfr --strip-components=1 && \\\n"
+        "       ln -s /opt/adfr/bin/prepare_receptor /usr/local/bin/prepare_receptor\n"
+        "       # Verify:\n"
+        "       prepare_receptor --help"
     ),
 }
 
@@ -187,8 +209,13 @@ def run_tool(
             binary_name = os.path.basename(cmd[0])
             error_msg = _classify_tool_error(binary_name, proc.stderr)
             if error_msg:
-                if binary_name in ("vina", "gnina"):
+                if binary_name == "vina":
                     raise VinaError(
+                        f"{binary_name} failed (exit {proc.returncode}): {error_msg}\n"
+                        f"  stderr: {proc.stderr.strip()}"
+                    )
+                elif binary_name == "gnina":
+                    raise GninaError(
                         f"{binary_name} failed (exit {proc.returncode}): {error_msg}\n"
                         f"  stderr: {proc.stderr.strip()}"
                     )

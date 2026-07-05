@@ -45,7 +45,9 @@ class PipelineConfig:
     # Mutation sampling / resistance profiling
     use_mutation_sampling: bool = False
     mutation_variants: List[str] = field(default_factory=lambda: [
-        "G246", "N146",
+        "G246", "N146", "E150", "H351", "E644",
+        "A601", "F241", "N104", "G298", "S403",
+        "Y159", "M241",
     ])
 
     # Meta-learner consensus scoring
@@ -68,7 +70,7 @@ class PipelineConfig:
     trypsin_active_site_residues: List[str] = field(default_factory=lambda: ["HIS57", "ASP102", "SER195"])
     ces1_active_site_residues: List[str] = field(default_factory=lambda: ["SER221", "HIS468", "GLU354"])
     conserved_residues: set = field(default_factory=lambda: {"SER403", "KYS406", "TYR446"})
-    mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
+    mutable_residues: set = field(default_factory=lambda: {"G246", "N146", "E150", "H351", "E644", "A601", "F241", "N104", "G298", "S403", "Y159", "M241"})
     use_pharmacophore_filter: bool = True
 
     pdb_ids: Dict[str, str] = field(default_factory=lambda: {

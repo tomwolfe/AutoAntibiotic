@@ -50,10 +50,58 @@ RUN conda install -c conda-forge \
     scikit-learn>=1.3.0 \
     && conda clean --all -f -y
 
+# ── ADFR Suite (prepare_receptor) ───────────────────────────────────
+RUN wget --quiet https://ccsb.scripps.edu/adfr/downloads/adfr-1.0rc1-Linux-64bit.tar.gz \
+    -O /tmp/adfr.tar.gz && \
+    mkdir -p /opt/adfr && \
+    tar xzf /tmp/adfr.tar.gz -C /opt/adfr --strip-components=1 && \
+    rm /tmp/adfr.tar.gz && \
+    ln -s /opt/adfr/bin/prepare_receptor /usr/local/bin/prepare_receptor && \
+    chmod +x /usr/local/bin/prepare_receptor && \
+    prepare_receptor --help > /dev/null 2>&1 && \
+    echo "ADFR Suite installed: prepare_receptor OK"
+
+# ── GNINA (pre-compiled binary, CPU-only) ───────────────────────────
+RUN wget --quiet https://github.com/gnina/gnina/releases/latest/download/gnina \
+    -O /usr/local/bin/gnina && \
+    chmod +x /usr/local/bin/gnina && \
+    gnina --help > /dev/null 2>&1 && \
+    echo "GNINA installed: OK"
+
+# ── Verify all binaries ─────────────────────────────────────────────
+RUN echo "=== Binary Verification ===" && \
+    for bin in vina gnina obabel prepare_receptor; do \
+        if command -v $bin &> /dev/null; then \
+            echo "  ✓ $bin found at $(which $bin)"; \
+        else \
+            echo "  ✗ $bin NOT FOUND"; \
+            exit 1; \
+        fi; \
+    done && \
+    echo "=== All binaries verified ==="
+
 # ── Python packages (pip) ───────────────────────────────────────────
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
+
+# ── Startup verification script ─────────────────────────────────────
+COPY docker/healthcheck.sh /healthcheck.sh 2>/dev/null || true
+RUN if [ ! -f /healthcheck.sh ]; then \
+        echo '#!/bin/bash' > /healthcheck.sh && \
+        echo 'for bin in vina gnina obabel prepare_receptor; do' >> /healthcheck.sh && \
+        echo '  if ! command -v $bin &> /dev/null; then' >> /healthcheck.sh && \
+        echo '    echo "MISSING: $bin"' >> /healthcheck.sh && \
+        echo '    exit 1' >> /healthcheck.sh && \
+        echo '  fi' >> /healthcheck.sh && \
+        echo 'done' >> /healthcheck.sh && \
+        echo 'python -c "from autoantibiotic import CONFIG; print(\"Python imports OK\")"' >> /healthcheck.sh && \
+        echo 'echo "All dependencies available"' >> /healthcheck.sh; \
+    fi && \
+    chmod +x /healthcheck.sh
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD /healthcheck.sh
 
 # ── Application code ────────────────────────────────────────────────
 WORKDIR /app

@@ -17,6 +17,7 @@ from .config import CONFIG
 from .models import CompoundRecord
 from .io_utils import (
     AutoAntibioticError,
+    GninaError,
     VinaError,
     OpenBabelError,
     log,
@@ -266,8 +267,8 @@ def run_redocking_validation(
 
     try:
         run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s, ignore_stderr_warnings=True)
-    except (RuntimeError, VinaError, AutoAntibioticError) as exc:
-        log.warning(f"  ⚠  Vina redocking failed: {exc}")
+except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
+        log.warning(f"  Vina redocking failed: {exc}")
         return False, None
 
     try:
@@ -425,7 +426,7 @@ def _run_docking_tool(
             if energy is not None:
                 return energy
             return parse_vina_energy(result.stderr)
-    except (RuntimeError, VinaError, AutoAntibioticError) as exc:
+    except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
         log.warning(f"  {binary} execution failed: {exc}")
         return None
 
