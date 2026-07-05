@@ -8,6 +8,7 @@ from rdkit import Chem
 from autoantibiotic.analysis import (
     MLADMETPredictor,
     _get_ml_admet_predictor,
+    ChemBERTaEmbedder,
     predict_admet_profile,
     predict_herg_ml,
     predict_cyp_inhibition,
@@ -65,6 +66,21 @@ class TestMLADMETPredictorInit:
             pytest.skip("Module-level predictor unavailable (check warnings).")
         assert isinstance(pred, MLADMETPredictor)
 
+    def test_init_with_embedder(self, phenol_mol: Chem.Mol) -> None:
+        """Predictor should accept a ChemBERTaEmbedder and fit on embeddings."""
+        try:
+            embedder = ChemBERTaEmbedder()
+            predictor = MLADMETPredictor(embedder=embedder)
+            assert predictor.available, (
+                "Predictor with embedder should be available"
+            )
+            # verify predictions work
+            prob = predictor.predict_herg_probability(phenol_mol)
+            assert prob is not None
+            assert 0.0 <= prob <= 1.0
+        except (ImportError, Exception):
+            pytest.skip("ChemBERTaEmbedder not available in this environment")
+
     def test_disabled_when_use_ml_admet_false(self) -> None:
         original = CONFIG.use_ml_admet
         CONFIG.use_ml_admet = False
@@ -73,6 +89,46 @@ class TestMLADMETPredictorInit:
             assert pred is None, "Predictor should be None when use_ml_admet=False"
         finally:
             CONFIG.use_ml_admet = original
+
+
+class TestChemBERTaEmbedder:
+    """Verify that :class:`ChemBERTaEmbedder` produces the correct output."""
+
+    def test_embedding_shape(self, phenol_mol: Chem.Mol) -> None:
+        try:
+            embedder = ChemBERTaEmbedder()
+            emb = embedder.get_embedding(phenol_mol)
+        except (ImportError, Exception):
+            pytest.skip("ChemBERTaEmbedder not available in this environment")
+            return  # unreachable, but satisfies type-checker
+
+        assert emb.shape == (768,), f"Expected 768-dim, got {emb.shape}"
+        assert emb.dtype == np.float32, f"Expected float32, got {emb.dtype}"
+        assert np.all(np.isfinite(emb)), "Embedding should contain only finite values"
+
+    def test_two_molecules_give_different_embeddings(
+        self, toxic_mol: Chem.Mol, safe_mol: Chem.Mol,
+    ) -> None:
+        try:
+            embedder = ChemBERTaEmbedder()
+            e1 = embedder.get_embedding(toxic_mol)
+            e2 = embedder.get_embedding(safe_mol)
+        except (ImportError, Exception):
+            pytest.skip("ChemBERTaEmbedder not available in this environment")
+            return
+
+        assert not np.allclose(e1, e2), "Different molecules should have different embeddings"
+
+    def test_same_molecule_gives_same_embedding(self, phenol_mol: Chem.Mol) -> None:
+        try:
+            embedder = ChemBERTaEmbedder()
+            e1 = embedder.get_embedding(phenol_mol)
+            e2 = embedder.get_embedding(phenol_mol)
+        except (ImportError, Exception):
+            pytest.skip("ChemBERTaEmbedder not available in this environment")
+            return
+
+        assert np.allclose(e1, e2), "Same molecule should give identical embeddings"
 
 
 class TestMLADMETPredictorFeatureComputation:

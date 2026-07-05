@@ -28,6 +28,54 @@ except ImportError:
     _HAVE_TRANSFORMERS = False
 
 
+# ── ChemBERTa Embedder ─────────────────────────────────────────────────────
+
+class ChemBERTaEmbedder:
+    """Extract 768-dimensional [CLS] embeddings from a pre-trained ChemBERTa
+    model for use as features in downstream ML models.
+
+    Loads the model/tokenizer once at the class level (singleton) so that
+    repeated calls do not re-download.
+    """
+
+    _model: Any = None
+    _tokenizer: Any = None
+    _device: Any = None
+
+    def __init__(self, model_name: str = "seyonec/ChemBERTa-zinc-base-v1") -> None:
+        self.model_name = model_name
+        self._initialize()
+
+    def _initialize(self) -> None:
+        if ChemBERTaEmbedder._model is not None:
+            return
+        import torch
+        from transformers import AutoModel, AutoTokenizer
+
+        ChemBERTaEmbedder._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        ChemBERTaEmbedder._model = AutoModel.from_pretrained(self.model_name)
+        ChemBERTaEmbedder._model.eval()
+        ChemBERTaEmbedder._device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        ChemBERTaEmbedder._model.to(ChemBERTaEmbedder._device)
+
+    def get_embedding(self, mol: Chem.Mol) -> np.ndarray:
+        """Return the 768-dim [CLS] embedding for *mol*."""
+        import torch
+
+        smiles = Chem.MolToSmiles(mol)
+        inputs = self._tokenizer(
+            smiles, return_tensors="pt", truncation=True, max_length=512,
+        )
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+        with torch.no_grad():
+            outputs = self._model(**inputs)
+        # [CLS] token is at index 0
+        emb = outputs.last_hidden_state[0, 0, :].cpu().numpy().astype(np.float32)
+        return emb
+
+
 # ── ML-ADMET Predictor ─────────────────────────────────────────────────────
 
 class MLADMETPredictor:
@@ -59,7 +107,8 @@ class MLADMETPredictor:
         ("c1ccccc1O",                      0, 0, "Phenol"),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, embedder: Optional[ChemBERTaEmbedder] = None) -> None:
+        self._embedder: Optional[ChemBERTaEmbedder] = embedder
         self.herg_model: Optional[_RandomForestClassifier] = None
         self.cyp_model: Optional[_RandomForestClassifier] = None
         self._fitted: bool = False
@@ -69,6 +118,12 @@ class MLADMETPredictor:
         except Exception as exc:
             log.warning(f"ML-ADMET: Model fitting failed — {exc}. "
                          "Falling back to rule-based ADMET.")
+
+    def _get_features(self, mol: Chem.Mol) -> np.ndarray:
+        """Get feature vector — either ChemBERTa embedding or RDKit descriptors."""
+        if self._embedder is not None:
+            return self._embedder.get_embedding(mol)
+        return self.compute_features(mol)
 
     # ── feature engineering ──────────────────────────────────────────
 
@@ -102,7 +157,7 @@ class MLADMETPredictor:
                 log.warning(f"ML-ADMET: Skipping '{name}' — invalid SMILES")
                 continue
             try:
-                X_list.append(self.compute_features(mol))
+                X_list.append(self._get_features(mol))
                 y_herg.append(h_label)
                 y_cyp.append(c_label)
             except Exception as exc:
@@ -144,7 +199,7 @@ class MLADMETPredictor:
         if not self.available:
             return None
         try:
-            feats = self.compute_features(mol).reshape(1, -1)
+            feats = self._get_features(mol).reshape(1, -1)
             return float(self.herg_model.predict_proba(feats)[0, 1])  # type: ignore[union-attr]
         except Exception:
             return None
@@ -154,7 +209,7 @@ class MLADMETPredictor:
         if not self.available:
             return None
         try:
-            feats = self.compute_features(mol).reshape(1, -1)
+            feats = self._get_features(mol).reshape(1, -1)
             return float(self.cyp_model.predict_proba(feats)[0, 1])  # type: ignore[union-attr]
         except Exception:
             return None
@@ -162,6 +217,24 @@ class MLADMETPredictor:
 
 # Module-level predictor (lazy singleton)
 _ml_predictor: Optional[MLADMETPredictor] = None
+_chemberta_embedder: Optional[ChemBERTaEmbedder] = None
+
+
+def _get_chemberta_embedder() -> Optional[ChemBERTaEmbedder]:
+    """Return a singleton ChemBERTaEmbedder, or *None* on failure."""
+    global _chemberta_embedder
+    if _chemberta_embedder is None:
+        try:
+            _chemberta_embedder = ChemBERTaEmbedder(
+                model_name=CONFIG.chemberta_model_name,
+            )
+        except Exception as exc:
+            log.warning(
+                f"ChemBERTa embedder failed to load — {exc}. "
+                "Falling back to fingerprint-based features."
+            )
+            _chemberta_embedder = None  # ensure it stays None
+    return _chemberta_embedder
 
 
 def _get_ml_admet_predictor() -> Optional[MLADMETPredictor]:
@@ -170,7 +243,29 @@ def _get_ml_admet_predictor() -> Optional[MLADMETPredictor]:
         _ml_predictor = None
         return None
     if _ml_predictor is None:
-        _ml_predictor = MLADMETPredictor()
+        embedder: Optional[ChemBERTaEmbedder] = None
+
+        if CONFIG.ml_admet_model_type == "chemberta_rf":
+            if _HAVE_TRANSFORMERS and _HAVE_TORCH:
+                embedder = _get_chemberta_embedder()
+                if embedder is not None:
+                    log.info("Using ChemBERTa embeddings for ML-ADMET")
+                else:
+                    log.warning(
+                        "ChemBERTa not available, "
+                        "falling back to fingerprint-based RF"
+                    )
+            else:
+                log.warning(
+                    "Transformers not available, "
+                    "falling back to fingerprint-based RF"
+                )
+        elif CONFIG.ml_admet_model_type == "rule_based":
+            _ml_predictor = None
+            return None
+        # "rf_legacy" → embedder stays None (fingerprint RF)
+
+        _ml_predictor = MLADMETPredictor(embedder=embedder)
     return _ml_predictor if _ml_predictor.available else None
 
 

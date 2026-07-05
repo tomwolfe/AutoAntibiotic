@@ -176,7 +176,14 @@ class PipelineConfig:
     use_ml_admet: bool = True
     ml_admet_herg_threshold: float = 0.5
     ml_admet_solubility_threshold: float = -4.0
-    ml_admet_model_name: str = "seyonec/ChemBERTa-zinc-base-v1"
+    ml_admet_model_type: str = "chemberta_rf"
+    """Model type for ML-ADMET: ``"rule_based"`` (no ML), ``"rf_legacy"``
+    (fingerprint + RandomForest), or ``"chemberta_rf"`` (ChemBERTa
+    embeddings + RandomForest — falls back to ``rf_legacy`` if
+    transformers/torch are unavailable)."""
+
+    chemberta_model_name: str = "seyonec/ChemBERTa-zinc-base-v1"
+    """HuggingFace model name for ChemBERTa embeddings."""
 
     # ── Water analysis parameters ──
     use_water_analysis: bool = True
