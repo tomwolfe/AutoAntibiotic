@@ -25,6 +25,7 @@ from .io_utils import (
     verify_dependencies,
 )
 from .library_gen import apply_filters, generate_candidate_library, generate_pharmacophore_aware_library
+from .ml_scoring.scoring import rescore_with_explicit_mmgbsa
 from .reporting import generate_csv_report, generate_html_report, generate_images, print_summary
 from .structure_prep import prepare_targets
 
@@ -84,8 +85,13 @@ class PipelineOrchestrator:
         self.generate_and_filter_library()
         self.screen_candidates()
         self.analyze_selectivity()
-        self.apply_meta_scoring()
+        # MD validation runs BEFORE meta-scoring so that dynamic features
+        # (ligand RMSD, pocket Rg stability) are available to the MetaScorer.
         self.apply_md_validation()
+        # Explicit-solvent MM-GB/SA rescoring (if enabled) — uses the
+        # solvated complex from MD preparation for rigorous ΔG prediction.
+        self.apply_explicit_solvent_rescoring()
+        self.apply_meta_scoring()
         self.generate_reports()
         self._finalize()
 
@@ -190,6 +196,33 @@ class PipelineOrchestrator:
             self.deps, cache=self.cache, use_cache=self.use_cache,
         )
 
+    def apply_explicit_solvent_rescoring(self) -> None:
+        """Phase 4.6 — Explicit-solvent MM-GB/SA rescoring (if enabled).
+
+        When ``CONFIG.use_explicit_solvent_mmgbsa`` is True, replaces the
+        default implicit-solvent MM-GB/SA heuristic with a more rigorous
+        explicit-solvent calculation on the top candidates.
+        """
+        if not self.config.use_explicit_solvent_mmgbsa:
+            return
+        if not self.top_candidates:
+            return
+        log.info("─── Phase 4.6: Explicit-Solvent MM-GB/SA Rescoring ───")
+        pb2pa = self.targets.get("PBP2a", {})
+        receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
+        if not os.path.isfile(receptor_pdb):
+            log.warning("  Receptor PDB not found; skipping explicit-solvent rescoring.")
+            return
+        try:
+            rescore_with_explicit_mmgbsa(
+                self.top_candidates,
+                receptor_pdb,
+                str(self.config.work_dir),
+                water_results=self.water_results,
+            )
+        except Exception as exc:
+            log.warning(f"  Explicit-solvent rescoring failed: {exc}")
+
     def apply_meta_scoring(self) -> None:
         """Phase 4.5 — Meta-learner consensus scoring on top candidates.
 
@@ -237,9 +270,9 @@ class PipelineOrchestrator:
     def apply_md_validation(self) -> None:
         """Phase 4.7 — Optional MD validation of top candidates.
 
-        Runs a short explicit-solvent MD simulation on the top
-        candidates when ``self.config.md_validation_duration_ns > 0``
-        and the ``--run-md-validation`` flag is set.
+        Stores MD-derived dynamic features (*ligand_rmsd*, *pocket_rg_stability*)
+        in each ``CompoundRecord`` so they are available to the MetaScorer
+        (Phase 4.5) and for downstream analysis.
         """
         md_duration = self.config.md_validation_duration_ns
         if not (md_duration > 0 and _HAVE_MD and self.top_candidates):
@@ -264,9 +297,12 @@ class PipelineOrchestrator:
                     duration_ns=float(md_duration),
                 )
                 if result is not None:
+                    rec.md_ligand_rmsd = result.get("ligand_rmsd_angstrom")
+                    rec.md_pocket_rg_stability = result.get("pocket_rg_stability")
                     log.info(
                         f"  {rec.compound_id}: MD ligand RMSD = "
-                        f"{result.get('ligand_rmsd_angstrom', 'N/A'):.2f} Å"
+                        f"{rec.md_ligand_rmsd:.2f} A, "
+                        f"pocket Rg stability = {rec.md_pocket_rg_stability:.3f}"
                     )
                 else:
                     log.info(f"  {rec.compound_id}: MD not available.")

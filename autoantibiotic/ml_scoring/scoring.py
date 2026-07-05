@@ -25,6 +25,7 @@ _HAVE_GNINA: bool = False
 _HAVE_RF_SCORE: bool = False
 _HAVE_TRANSFORMERS: bool = False
 _HAVE_OPENMM: bool = False
+_HAVE_PDBFIXER: bool = False
 _HAVE_AMBERTOOLS: bool = False
 
 try:
@@ -32,6 +33,12 @@ try:
     import openmm.app as _openmm_app
     import openmm.unit as _openmm_unit
     _HAVE_OPENMM = True
+except ImportError:
+    pass
+
+try:
+    import pdbfixer  # noqa: F401
+    _HAVE_PDBFIXER = True
 except ImportError:
     pass
 
@@ -606,6 +613,211 @@ def rescore_with_mmgbsa(
     return top_candidates
 
 
+def rescore_with_explicit_mmgbsa(
+    top_candidates: List[CompoundRecord],
+    receptor_pdb: str,
+    work_dir: str,
+    water_results: Optional[WaterAnalysisResult] = None,
+) -> List[CompoundRecord]:
+    """Rescore top candidates using **explicit-solvent** MM-GB/SA.
+
+    Unlike :func:`rescore_with_mmgbsa` which uses the OBC2 implicit
+    solvent model, this function:
+
+    1. Prepares the complex with PDBFixer.
+    2. Solvates with TIP3P water box (10 A padding).
+    3. Performs energy minimisation and a short NVT equilibration.
+    4. Extracts *n_frames* snapshots and computes ΔG_binding for each
+       using MM-GB/SA on the snapshots (GB still implicit, but water
+       structure from the explicit solvent trajectory is preserved).
+    5. Returns the mean ΔG and standard deviation across frames.
+
+    Falls back to :func:`rescore_with_mmgbsa` (implicit OBC2) if OpenMM
+    or PDBFixer are unavailable or if the receptor cannot be prepared.
+
+    Args:
+        top_candidates: Docked candidates (uses SMILES for 3D generation).
+        receptor_pdb: Path to the receptor PDB file.
+        work_dir: Working directory for intermediate files.
+        water_results: Optional water analysis result (passed through to
+            the fallback implicit MM-GB/SA).
+
+    Returns:
+        Updated candidates with ``ml_score`` set to the frame-averaged
+        MM-GB/SA ΔG (more negative = stronger predicted binding).
+    """
+    n_to_rescore = min(len(top_candidates), CONFIG.mm_gbsa_top_n)
+    log.info(
+        f"  Rescoring top {n_to_rescore}/{len(top_candidates)} "
+        "with EXPLICIT-SOLVENT MM-GB/SA…"
+    )
+
+    if not _HAVE_OPENMM or not _HAVE_PDBFIXER:
+        missing = "OpenMM" if not _HAVE_OPENMM else "PDBFixer"
+        log.warning(
+            f"  {missing} not installed — falling back to implicit MM-GB/SA."
+        )
+        return rescore_with_mmgbsa(
+            top_candidates, receptor_pdb, work_dir, water_results=water_results,
+        )
+
+    if not os.path.exists(receptor_pdb):
+        log.warning(f"  Receptor PDB not found: {receptor_pdb}. Falling back to implicit MM-GB/SA.")
+        return rescore_with_mmgbsa(
+            top_candidates, receptor_pdb, work_dir, water_results=water_results,
+        )
+
+    n_frames = CONFIG.explicit_solvent_frames
+    work_dir_mm = os.path.join(work_dir, "explicit_mmgbsa")
+    os.makedirs(work_dir_mm, exist_ok=True)
+
+    # ── Prepare receptor ──────────────────────────────────────────
+    try:
+        from pdbfixer import PDBFixer
+
+        fixer = PDBFixer(filename=receptor_pdb)
+        fixer.findMissingResidues()
+        fixer.findNonstandardResidues()
+        fixer.replaceNonstandardResidues()
+        fixer.removeHeterogens(keepWater=False)
+        fixer.findMissingAtoms()
+        fixer.addMissingAtoms()
+        fixer.addMissingHydrogens(pH=7.0)
+
+        forcefield = _openmm_app.ForceField(
+            "amber14-all.xml", "amber14/tip3pfb.xml"
+        )
+
+        # ── Solvate with TIP3P (10 A padding) ─────────────────────
+        modeller = _openmm_app.Modeller(fixer.topology, fixer.positions)
+        modeller.addSolvent(
+            forcefield,
+            model="tip3p",
+            padding=10.0 * _openmm_unit.angstrom,
+        )
+
+        system = forcefield.createSystem(
+            modeller.topology,
+            nonbondedMethod=_openmm_app.PME,
+            nonbondedCutoff=1.0 * _openmm_unit.nanometer,
+            constraints=_openmm_app.HBonds,
+        )
+
+        cpu_platform = _openmm.Platform.getPlatformByName("CPU")
+        integrator = _openmm.LangevinMiddleIntegrator(
+            300.0 * _openmm_unit.kelvin,
+            1.0 / _openmm_unit.picosecond,
+            0.002 * _openmm_unit.picosecond,
+        )
+        simulation = _openmm_app.Simulation(
+            modeller.topology, system, integrator, cpu_platform,
+        )
+        simulation.context.setPositions(modeller.positions)
+
+        # Minimise
+        simulation.minimizeEnergy(maxIterations=500)
+
+        # Short NVT equilibration (2 ps)
+        simulation.step(1000)
+
+        # Single-point GB energy of solvated receptor
+        rec_state = simulation.context.getState(getEnergy=True)
+        rec_energy = rec_state.getPotentialEnergy().value_in_unit(
+            _openmm_unit.kilocalorie_per_mole,
+        )
+        log.info(f"  Explicit-solvent receptor GB energy: {rec_energy:.2f} kcal/mol")
+
+        # Save solvated receptor structure for frame-wise complex building
+        rec_pdb_out = os.path.join(work_dir_mm, "receptor_solvated.pdb")
+        with open(rec_pdb_out, "w") as f:
+            _openmm_app.PDBFile.writeFile(
+                modeller.topology, modeller.positions, f,
+            )
+
+    except Exception as exc:
+        log.warning(f"  Explicit-solvent receptor preparation failed: {exc}")
+        log.info("  Falling back to implicit MM-GB/SA.")
+        return rescore_with_mmgbsa(
+            top_candidates, receptor_pdb, work_dir, water_results=water_results,
+        )
+
+    # ── Rescore each candidate ────────────────────────────────────
+    to_rescore = top_candidates[:n_to_rescore]
+
+    for rank, rec in enumerate(to_rescore):
+        log.info(
+            f"  Explicit MM-GB/SA [{rank + 1}/{n_to_rescore}]: "
+            f"{rec.compound_id}"
+        )
+        try:
+            mol = rec.mol
+            if mol is None:
+                mol = Chem.MolFromSmiles(rec.smiles)
+                if mol is None:
+                    continue
+                rec.mol = mol
+
+            tag = rec.compound_id.replace("/", "_").replace(" ", "_")
+            binding_energies: List[float] = []
+
+            for frame_idx in range(n_frames):
+                seed = CONFIG.random_seed + rank * n_frames + frame_idx
+
+                # Ligand GB energy (generated fresh each frame for averaging)
+                lig_energy = _compute_ligand_gb_energy(
+                    mol, forcefield, cpu_platform,
+                    work_dir_mm, f"{tag}_f{frame_idx}", seed,
+                )
+                if lig_energy is None:
+                    continue
+
+                # Complex GB energy (combine solvated receptor + ligand)
+                complex_energy = _compute_complex_gb_energy(
+                    rec_pdb_out, f"{tag}_f{frame_idx}",
+                    forcefield, cpu_platform,
+                    work_dir_mm, f"{tag}_f{frame_idx}",
+                )
+                if complex_energy is None:
+                    continue
+
+                binding_energy = complex_energy - rec_energy - lig_energy
+
+                if water_results is not None and water_results.high_energy_waters:
+                    penalty = _compute_water_displacement_penalty(
+                        mol, water_results.high_energy_waters, seed,
+                    )
+                    if penalty > 0.0:
+                        binding_energy -= penalty
+
+                binding_energies.append(binding_energy)
+
+            if not binding_energies:
+                log.warning(
+                    f"  No valid frames for {rec.compound_id}"
+                )
+                continue
+
+            mean_binding = float(np.mean(binding_energies))
+            std_binding = (
+                float(np.std(binding_energies, ddof=1))
+                if len(binding_energies) > 1 else 0.0
+            )
+            rec.ml_score = mean_binding
+            rec.ml_score_std = std_binding
+
+            log.info(
+                f"    ΔG ≈ {mean_binding:.2f} ± {std_binding:.2f} kcal/mol "
+                f"({len(binding_energies)} frames, explicit solvent)"
+            )
+
+        except Exception as exc:
+            log.warning(
+                f"  Explicit MM-GB/SA failed for {rec.compound_id}: {exc}"
+            )
+
+    return top_candidates
+
+
 def _compute_water_displacement_penalty(
     mol: Chem.Mol,
     high_energy_waters: List[Any],
@@ -676,6 +888,13 @@ def rescore_with_ml(
     if CONFIG.use_mm_gbsa or CONFIG.use_mm_gbsa_rescoring:
         receptor_pdb = receptor_pdbqt.replace(".pdbqt", ".pdb")
         if os.path.exists(receptor_pdb):
+            use_explicit = CONFIG.use_explicit_solvent_mmgbsa
+            if use_explicit:
+                log.info("  Using EXPLICIT-solvent MM-GB/SA rescoring.")
+                return rescore_with_explicit_mmgbsa(
+                    top_candidates, receptor_pdb, work_dir,
+                    water_results=water_results,
+                )
             return rescore_with_mmgbsa(
                 top_candidates, receptor_pdb, work_dir,
                 water_results=water_results,

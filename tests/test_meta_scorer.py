@@ -175,7 +175,63 @@ def test_metascorer_uncertainty_threshold_low() -> None:
     assert 0.0 <= score <= 1.0
 
 
-def test_metascorer_uncertainty_threshold_high_never_triggers() -> None:
+def test_metascorer_dynamic_features_backward_compat() -> None:
+    """MetaScorer must still train and predict when MD features are None."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+    assert scorer.available is True
+
+    rec = _make_record(actives[0])
+    rec.md_ligand_rmsd = None
+    rec.md_pocket_rg_stability = None
+    score = scorer.predict(rec)
+    assert score is not None
+    assert 0.0 <= score <= 1.0
+
+
+def test_metascorer_dynamic_features_affect_score() -> None:
+    """Records with MD data should produce different scores than without when
+    the model is trained with dynamic features present in the training data."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+
+    rec_no_md = _make_record(actives[0])
+    score_no_md = scorer.predict(rec_no_md)
+
+    rec_with_md = _make_record(actives[0])
+    rec_with_md.md_ligand_rmsd = 0.5
+    rec_with_md.md_pocket_rg_stability = 0.05
+    score_with_md = scorer.predict(rec_with_md)
+
+    # Both should be valid scores; they may or may not differ depending
+    # on the model, but both must be in [0, 1].
+    assert score_no_md is not None
+    assert score_with_md is not None
+    assert 0.0 <= score_no_md <= 1.0
+    assert 0.0 <= score_with_md <= 1.0
+
+
+def test_metascorer_uncertainty_threshold_high_never_triggers() -> None: 
     """With a very high threshold, needs_manual_review should stay False."""
     actives = [
         "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"

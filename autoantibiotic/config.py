@@ -57,8 +57,15 @@ class PipelineConfig:
     # MD validation
     md_validation_duration_ns: int = 10
     md_production_duration_ns: int = 50
-    """Production MD duration (ns) for top hits. Default 50 ns."""
     md_relaxation_duration_ns: int = 1
+
+    # Explicit-solvent MM-GB/SA rescoring
+    use_explicit_solvent_mmgbsa: bool = False
+    """When True, use explicit-solvent (TIP3P) MM-GB/SA for rescoring top
+    candidates instead of the implicit-solvent (OBC2) heuristic."""
+    explicit_solvent_frames: int = 10
+    """Number of trajectory snapshots to average for explicit-solvent
+    MM-GB/SA rescoring (default 10)."""
     """Relaxation MD duration (ns) with strong position restraints. Default 1 ns."""
 
     # Benchmark
@@ -192,15 +199,19 @@ class PipelineConfig:
     pharmacophore_ref_ligand_smi: str = ""
 
     # ── Expensive ML feature toggle ──
+    # Stereochemistry enumeration is ALWAYS enabled (removed from this gate)
+    # and uses a Smart Filter (MMFF94 strain > 10 kcal/mol → discard).
     use_expensive_ml_features: bool = False
-    """Enable expensive features: ensemble MM-GB/SA, stereoisomer enumeration.
-    Set to ``True`` for production runs; keep ``False`` for dry-run / quick-test."""
+    """Enable expensive features: ensemble MM-GB/SA, and similar.
+    Set to ``True`` for production runs; keep ``False`` for dry-run / quick-test.
+    NOTE: stereoisomer enumeration is now always on (not gated by this flag)."""
 
     mmgbsa_n_conformers: int = 10
     """Number of ligand-receptor conformers for ensemble MM-GB/SA averaging."""
 
     max_stereoisomers: int = 8
-    """Maximum stereoisomers to enumerate per undefined-stereo molecule."""
+    """Maximum stereoisomers to enumerate per undefined-stereo molecule.
+    Each isomer is strain-filtered via MMFF94 before entering the library pool."""
 
     # ── ML-ADMET parameters ──
     use_ml_admet: bool = True

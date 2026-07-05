@@ -48,3 +48,9 @@ class CompoundRecord:
     has_undefined_stereo: bool = False
     needs_manual_review: bool = False
     parent_id: Optional[str] = None
+
+    # MD-derived dynamic stability features (for MetaScorer)
+    md_ligand_rmsd: Optional[float] = None
+    """Ligand heavy-atom RMSD (Å) from MD simulation, mean across frames."""
+    md_pocket_rg_stability: Optional[float] = None
+    """Fractional pocket Rg change from MD simulation (0=stable)."""

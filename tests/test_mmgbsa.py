@@ -759,3 +759,222 @@ class TestMDValidation:
                 assert result is None
             finally:
                 os.unlink(pdb_path)
+
+
+# ── Explicit-solvent MM-GB/SA tests ─────────────────────────────
+
+class TestExplicitSolventMMGBSA:
+    """Tests for the explicit-solvent MM-GB/SA rescoring function."""
+
+    def test_fallback_to_implicit_when_no_openmm(
+        self,
+        top_candidates: List[CompoundRecord],
+        dummy_receptor_pdb: str,
+        temp_work_dir: str,
+    ) -> None:
+        """When OpenMM is unavailable, fall back to implicit MM-GB/SA."""
+        with patch.multiple(
+            "autoantibiotic.ml_scoring.scoring",
+            _HAVE_OPENMM=False,
+            rescore_with_mmgbsa=MagicMock(
+                return_value=top_candidates,
+            ),
+        ):
+            from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
+            result = rescore_with_explicit_mmgbsa(
+                top_candidates, dummy_receptor_pdb, temp_work_dir,
+            )
+        assert len(result) == len(top_candidates)
+
+    def test_fallback_when_receptor_missing(
+        self,
+        top_candidates: List[CompoundRecord],
+        temp_work_dir: str,
+    ) -> None:
+        """When the receptor PDB does not exist, fall back to implicit."""
+        with patch.multiple(
+            "autoantibiotic.ml_scoring.scoring",
+            _HAVE_OPENMM=True,
+            rescore_with_mmgbsa=MagicMock(
+                return_value=top_candidates,
+            ),
+        ):
+            from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
+            result = rescore_with_explicit_mmgbsa(
+                top_candidates, "/nonexistent.pdb", temp_work_dir,
+            )
+        assert len(result) == len(top_candidates)
+
+    def test_explicit_config_flags_exist(self) -> None:
+        """Verify the config flags for explicit solvent exist."""
+        assert hasattr(CONFIG, "use_explicit_solvent_mmgbsa")
+        assert hasattr(CONFIG, "explicit_solvent_frames")
+        assert CONFIG.use_explicit_solvent_mmgbsa is False
+        assert CONFIG.explicit_solvent_frames == 10
+
+    def test_explicit_uses_configured_frames(
+        self,
+        top_candidates: List[CompoundRecord],
+        temp_work_dir: str,
+    ) -> None:
+        """When explicit solvent is enabled, frames from config are used."""
+        import sys as _sys
+        _pdbfixer_mock = MagicMock()
+        _sys.modules["pdbfixer"] = _pdbfixer_mock
+        _pdbfixer_mock.PDBFixer = MagicMock()
+
+        # Configure mock OpenMM simulation to return numeric energies
+        _mock_sim = MagicMock()
+        _mock_state = MagicMock()
+        _mock_energy = MagicMock()
+        _mock_energy.value_in_unit.return_value = -2000.0
+        _mock_state.getPotentialEnergy.return_value = _mock_energy
+        _mock_sim.context.getState.return_value = _mock_state
+
+        _mock_openmm_app = MagicMock()
+        _mock_openmm_app.Simulation.return_value = _mock_sim
+        _mock_openmm_app.PDBFile.writeFile = MagicMock()
+        _mock_openmm_app.ForceField = MagicMock()
+        modeller_instance = MagicMock()
+        _mock_openmm_app.Modeller.return_value = modeller_instance
+
+        class _MockUnit:
+            """Simple mock that supports float arithmetic."""
+            def __mul__(self, other):
+                return _MockUnit()
+            def __rmul__(self, other):
+                return _MockUnit()
+            def __truediv__(self, other):
+                return _MockUnit()
+
+        class _MockUnit:
+            """Simple mock that supports float arithmetic."""
+            def __mul__(self, other):
+                return _MockUnit()
+            def __rmul__(self, other):
+                return _MockUnit()
+            def __truediv__(self, other):
+                return _MockUnit()
+            def __rtruediv__(self, other):
+                return _MockUnit()
+
+        _mock_openmm_unit = MagicMock()
+        _mock_openmm_unit.kilocalorie_per_mole = MagicMock()
+        _mock_openmm_unit.kilocalorie_per_mole.__rmul__ = lambda self, x: _MockUnit()
+        _mock_openmm_unit.kelvin = _MockUnit()
+        _mock_openmm_unit.picosecond = _MockUnit()
+        _mock_openmm_unit.femtoseconds = _MockUnit()
+        _mock_openmm_unit.angstrom = _MockUnit()
+        _mock_openmm_unit.nanometer = _MockUnit()
+
+        saved_flag = CONFIG.use_explicit_solvent_mmgbsa
+
+        saved_frames = CONFIG.explicit_solvent_frames
+        CONFIG.use_explicit_solvent_mmgbsa = True
+        CONFIG.explicit_solvent_frames = 5
+        try:
+            pdb_path = os.path.join(temp_work_dir, "receptor.pdb")
+            with open(pdb_path, "w") as f:
+                f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+
+            with patch("autoantibiotic.ml_scoring.scoring._HAVE_OPENMM", True, create=True):
+                with patch("autoantibiotic.ml_scoring.scoring._HAVE_PDBFIXER", True, create=True):
+                    with patch("autoantibiotic.ml_scoring.scoring._openmm", MagicMock(), create=True):
+                        with patch("autoantibiotic.ml_scoring.scoring._openmm_app", _mock_openmm_app, create=True):
+                            with patch("autoantibiotic.ml_scoring.scoring._openmm_unit", _mock_openmm_unit, create=True):
+                                with patch("autoantibiotic.ml_scoring.scoring._compute_ligand_gb_energy", return_value=50.0):
+                                    with patch("autoantibiotic.ml_scoring.scoring._compute_complex_gb_energy", return_value=-1950.0):
+                                        mock_fixer = MagicMock()
+                                        mock_fixer.topology = MagicMock()
+                                        mock_fixer.positions = []
+                                        _pdbfixer_mock.PDBFixer.return_value = mock_fixer
+
+                                        from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
+                                        result = rescore_with_explicit_mmgbsa(
+                                            top_candidates, pdb_path, temp_work_dir,
+                                        )
+            assert len(result) == len(top_candidates)
+        finally:
+            CONFIG.use_explicit_solvent_mmgbsa = saved_flag
+            CONFIG.explicit_solvent_frames = saved_frames
+            _sys.modules.pop("pdbfixer", None)
+
+    def test_explicit_returns_valid_floats(
+        self,
+        temp_work_dir: str,
+    ) -> None:
+        """Explicit MM-GB/SA returns valid float scores when mocked."""
+        import sys as _sys
+        _pdbfixer_mock = MagicMock()
+        _sys.modules["pdbfixer"] = _pdbfixer_mock
+        _pdbfixer_mock.PDBFixer = MagicMock()
+
+        # Configure mock OpenMM simulation to return numeric energies
+        _mock_sim = MagicMock()
+        _mock_state = MagicMock()
+        _mock_energy = MagicMock()
+        _mock_energy.value_in_unit.return_value = -2000.0
+        _mock_state.getPotentialEnergy.return_value = _mock_energy
+        _mock_sim.context.getState.return_value = _mock_state
+
+        _mock_openmm_app = MagicMock()
+        _mock_openmm_app.Simulation.return_value = _mock_sim
+        _mock_openmm_app.PDBFile.writeFile = MagicMock()
+        _mock_openmm_app.ForceField = MagicMock()
+        modeller_instance = MagicMock()
+        _mock_openmm_app.Modeller.return_value = modeller_instance
+
+        class _MockUnit:
+            """Simple mock that supports float arithmetic."""
+            def __mul__(self, other):
+                return _MockUnit()
+            def __rmul__(self, other):
+                return _MockUnit()
+            def __truediv__(self, other):
+                return _MockUnit()
+            def __rtruediv__(self, other):
+                return _MockUnit()
+
+        _mock_openmm_unit = MagicMock()
+        _mock_openmm_unit.kilocalorie_per_mole = _MockUnit()
+        _mock_openmm_unit.kelvin = _MockUnit()
+        _mock_openmm_unit.picosecond = _MockUnit()
+        _mock_openmm_unit.femtoseconds = _MockUnit()
+        _mock_openmm_unit.angstrom = _MockUnit()
+        _mock_openmm_unit.nanometer = _MockUnit()
+
+        candidates = [
+            CompoundRecord(
+                compound_id="CMP-EXP-001",
+                smiles="c1ccccc1O",
+                mol=Chem.MolFromSmiles("c1ccccc1O"),
+                pb2pa_allosteric_energy=-7.5,
+            ),
+        ]
+        pdb_path = os.path.join(temp_work_dir, "receptor.pdb")
+        with open(pdb_path, "w") as f:
+            f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+
+        with patch("autoantibiotic.ml_scoring.scoring._HAVE_OPENMM", True, create=True):
+            with patch("autoantibiotic.ml_scoring.scoring._HAVE_PDBFIXER", True, create=True):
+                with patch("autoantibiotic.ml_scoring.scoring._openmm", MagicMock(), create=True):
+                    with patch("autoantibiotic.ml_scoring.scoring._openmm_app", _mock_openmm_app, create=True):
+                        with patch("autoantibiotic.ml_scoring.scoring._openmm_unit", _mock_openmm_unit, create=True):
+                            with patch("autoantibiotic.ml_scoring.scoring._compute_ligand_gb_energy", return_value=50.0):
+                                with patch("autoantibiotic.ml_scoring.scoring._compute_complex_gb_energy", return_value=-1950.0):
+                                    mock_fixer = MagicMock()
+                                    mock_fixer.topology = MagicMock()
+                                    mock_fixer.positions = []
+                                    _pdbfixer_mock.PDBFixer.return_value = mock_fixer
+
+                                    from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
+                                    result = rescore_with_explicit_mmgbsa(
+                                        candidates, pdb_path, temp_work_dir,
+                                    )
+        _sys.modules.pop("pdbfixer", None)
+        assert len(result) == 1
+        final_score = result[0].ml_score
+        assert final_score is not None
+        assert isinstance(final_score, float)
+        # ΔG_binding = -1950 - (-2000) - 50 = 0.0 with our mocked values
+        assert final_score == pytest.approx(0.0, abs=1e-4)

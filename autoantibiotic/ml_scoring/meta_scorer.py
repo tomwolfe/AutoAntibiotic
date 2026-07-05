@@ -138,6 +138,10 @@ class MetaScorer:
         or ``None`` if the model is not fitted or feature extraction
         fails.
 
+        If the record contains MD-derived dynamic features
+        (``md_ligand_rmsd``, ``md_pocket_rg_stability``) they are
+        included in the feature vector automatically.
+
         When ``uncertainty_threshold`` was set at fit time, the standard
         deviation of predictions across all trees is computed.  If it
         exceeds the threshold, ``record.needs_manual_review`` is set to
@@ -151,7 +155,11 @@ class MetaScorer:
                 return None
             record.mol = mol
         try:
-            feats = self._default_features(record.mol).reshape(1, -1)
+            feats = self._default_features(
+                record.mol,
+                md_ligand_rmsd=record.md_ligand_rmsd,
+                md_pocket_rg_stability=record.md_pocket_rg_stability,
+            ).reshape(1, -1)
             prob = float(self._model.predict(feats)[0])  # type: ignore[union-attr]
 
             # Active-learning: ensemble variance check
@@ -175,6 +183,11 @@ class MetaScorer:
     def load(self) -> bool:
         """Load a previously trained model from disk.
 
+        Checks that the stored feature dimension matches the current
+        expected dimension (11).  If mismatched, logs a warning and
+        returns ``False`` so the caller retrains with the new feature
+        space.
+
         Returns ``True`` on success.
         """
         if self.model_path is None or not Path(self.model_path).exists():
@@ -186,6 +199,20 @@ class MetaScorer:
             self._feature_names = obj.get("feature_names", [])
             self._training_actives = obj.get("training_actives", [])
             self._training_inactives = obj.get("training_inactives", [])
+
+            # Backward compatibility: retrain if feature dimension has changed
+            expected_dim = 11
+            if self._model is not None and hasattr(self._model, "n_features_in_"):
+                if self._model.n_features_in_ != expected_dim:
+                    log.warning(
+                        f"MetaScorer: loaded model has "
+                        f"{self._model.n_features_in_} features, "
+                        f"current code expects {expected_dim}. "
+                        "Triggering retrain."
+                    )
+                    self._fitted = False
+                    self._model = None
+
             return self._fitted and self._model is not None
         except Exception as exc:
             log.warning(f"MetaScorer: failed to load model — {exc}")
@@ -213,7 +240,11 @@ class MetaScorer:
                 if mol is None:
                     continue
             try:
-                feats = self._default_features(mol).reshape(1, -1)
+                feats = self._default_features(
+                    mol,
+                    md_ligand_rmsd=record.md_ligand_rmsd,
+                    md_pocket_rg_stability=record.md_pocket_rg_stability,
+                ).reshape(1, -1)
                 tree_preds = np.array([
                     tree.predict(feats)[0] for tree in self._model.estimators_
                 ])
@@ -254,27 +285,44 @@ class MetaScorer:
 
     # ── internals ───────────────────────────────────────────────────
 
-    def _default_features(self, mol: Chem.Mol) -> np.ndarray:
-        """8-dim feature vector for a molecule.
+    def _default_features(
+        self,
+        mol: Chem.Mol,
+        md_ligand_rmsd: Optional[float] = None,
+        md_pocket_rg_stability: Optional[float] = None,
+    ) -> np.ndarray:
+        """11-dim feature vector for a molecule.
 
-        1. Vina Energy estimate (docking not run here → 0 placeholder)
-        2. GNINA score placeholder
-        3. Shape Score placeholder
-        4. IFP Score placeholder
-        5. QED
-        6. LogP
-        7. MolWt
-        8. NumRotatableBonds
+        Static descriptors (8):
+        1-4. Vina/GNINA/Shape/IFP placeholders (0.0)
+        5.   QED
+        6.   LogP
+        7.   MolWt
+        8.   NumRotatableBonds
+
+        Dynamic MD features (3), default 0.0 when unavailable:
+        9.  ligand_rmsd_mean
+        10. ligand_rmsd_std
+        11. pocket_rg_stability
         """
         qed = float(QED.qed(mol))
         logp = float(Crippen.MolLogP(mol))
         mw = float(Descriptors.MolWt(mol))
         n_rot = float(Descriptors.NumRotatableBonds(mol))
 
-        arr = np.array([0.0, 0.0, 0.0, 0.0, qed, logp, mw, n_rot], dtype=np.float32)
+        rmsd_mean = md_ligand_rmsd if md_ligand_rmsd is not None else 0.0
+        rmsd_std = 0.0
+        rg_stab = md_pocket_rg_stability if md_pocket_rg_stability is not None else 0.0
+
+        arr = np.array(
+            [0.0, 0.0, 0.0, 0.0, qed, logp, mw, n_rot,
+             rmsd_mean, rmsd_std, rg_stab],
+            dtype=np.float32,
+        )
         self._feature_names = [
             "vina_energy", "gnina_score", "shape_score", "ifp_score",
             "qed", "logp", "mw", "n_rotatable",
+            "ligand_rmsd_mean", "ligand_rmsd_std", "pocket_rg_stability",
         ]
         return arr
 

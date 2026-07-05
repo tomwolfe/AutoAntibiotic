@@ -79,15 +79,19 @@ def _check_undefined_stereo(mol: Chem.Mol) -> bool:
 def _enumerate_stereoisomers(
     mol: Chem.Mol,
     max_isomers: int = 8,
+    strain_threshold: float = 10.0,
 ) -> List[Chem.Mol]:
     """Enumerate all plausible stereoisomers for a molecule with
     undefined stereocenters.
 
     Uses ``rdkit.Chem.EnumerateStereoisomers.EnumerateStereoisomers``
     and limits the output to *max_isomers* to prevent combinatorial
-    explosion.  Each isomer is sanitised before being returned.
+    explosion.  Each isomer is sanitised and then filtered by MMFF94
+    strain energy — isomers with strain > *strain_threshold* kcal/mol
+    are discarded ("Smart Filter").
 
-    Returns a list of RDKit Mol objects (may be empty).
+    Returns a list of RDKit Mol objects with defined stereochemistry
+    and acceptable strain (may be empty).
     """
     try:
         isomers = list(
@@ -100,9 +104,12 @@ def _enumerate_stereoisomers(
     for iso in isomers:
         try:
             Chem.SanitizeMol(iso)
-            valid.append(iso)
         except Exception:
             continue
+        strain = _compute_strain_energy(iso)
+        if strain is not None and strain > strain_threshold:
+            continue
+        valid.append(iso)
         if len(valid) >= max_isomers:
             break
     return valid
@@ -177,8 +184,6 @@ def _brics_recombination(
             has_undefined = _check_undefined_stereo(product)
             base_id = f"AA-{n_produced:04d}"
             if has_undefined:
-                log.debug(f"  Stereochemistry warning: {base_id} has undefined stereocenters.")
-            if has_undefined and CONFIG.use_expensive_ml_features:
                 isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
                 if isomers:
                     for j, iso in enumerate(isomers):
@@ -194,6 +199,7 @@ def _brics_recombination(
                         n_produced += 1
                         yield rec
                     continue
+                log.debug(f"  All stereoisomers of {base_id} exceeded strain threshold; keeping undefined.")
             rec = CompoundRecord(
                 compound_id=base_id,
                 smiles=smi,
@@ -1095,8 +1101,6 @@ def generate_grown_library(
                     has_undefined = _check_undefined_stereo(product)
                     base_id = f"GROWN-{compound_counter:04d}"
                     if has_undefined:
-                        log.debug(f"  Stereochemistry warning: {base_id} has undefined stereocenters.")
-                    if has_undefined and CONFIG.use_expensive_ml_features:
                         isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
                         if isomers:
                             for j, iso in enumerate(isomers):
@@ -1131,6 +1135,7 @@ def generate_grown_library(
                                 next_gen.append(iso)
                                 yield rec
                             continue
+                        log.debug(f"  All stereoisomers of {base_id} exceeded strain threshold; keeping undefined.")
                     rec = CompoundRecord(
                         compound_id=base_id,
                         smiles=smi,

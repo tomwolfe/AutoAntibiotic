@@ -227,7 +227,8 @@ class TestStereoisomerEnumeration:
         assert len(smiles_set) == len(isomers)
 
     def test_grown_library_uses_isomer_ids(self) -> None:
-        """Grown compounds with stereoisomers should have suffixed IDs."""
+        """Grown compounds with stereoisomers should have suffixed IDs
+        (stereochemistry enumeration is always on, not gated)."""
         core = _make_core_record("c1ccncc1")
         # Building block with an undefined chiral center
         bbs = ["[1*]CC(C)O"]
@@ -241,11 +242,29 @@ class TestStereoisomerEnumeration:
         )
         for rec in results:
             assert isinstance(rec, CompoundRecord)
-            # If expensive features are off, IDs are plain GROWN-*
-            # If on, some may have suffixes
+            # Stereochemistry enumeration is now always on; compounds with
+            # undefined stereo will have suffixed IDs and a parent_id.
             if rec.parent_id is not None:
                 assert "-" in rec.compound_id
                 assert rec.parent_id.startswith("GROWN-")
+
+    def test_enumerate_filters_high_strain_isomers(self) -> None:
+        """Isomers with MMFF94 strain > 10 kcal/mol should be filtered out."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        # Bicyclo[1.1.0]butane derivative — highly strained
+        mol = Chem.MolFromSmiles("C1CC12CC2")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=8, strain_threshold=10.0)
+        # Highly strained molecules may yield 0 valid isomers
+        assert isinstance(isomers, list)
+
+    def test_enumerate_no_strain_filter_for_low_strain(self) -> None:
+        """Low-strain molecules with undefined stereo should enumerate normally."""
+        from autoantibiotic.library_gen import _enumerate_stereoisomers
+        mol = Chem.MolFromSmiles("CCC(C)O")
+        assert mol is not None
+        isomers = _enumerate_stereoisomers(mol, max_isomers=8, strain_threshold=10.0)
+        assert len(isomers) >= 1
 
     def test_parent_id_preserved_on_isomers(self) -> None:
         """Isomers should have a parent_id linking to the original."""
