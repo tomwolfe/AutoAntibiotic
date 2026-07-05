@@ -15,6 +15,7 @@ from .config import CONFIG, PipelineConfig
 from .models import CompoundRecord
 from .docking import run_redocking_validation, screen_library
 from .analysis import analyze_selectivity_and_resistance, predict_meta_score
+from .ml_scoring.meta_scorer import _get_meta_scorer
 from .io_utils import (
     ensure_output_dir,
     load_json_cache,
@@ -193,7 +194,8 @@ class PipelineOrchestrator:
         """Phase 4.5 — Meta-learner consensus scoring on top candidates.
 
         Uses a trained stacking regressor when ``self.config.use_meta_scoring``
-        is enabled.
+        is enabled.  After scoring, flags uncertain predictions for manual
+        review and saves them to ``output/review_queue.csv``.
         """
         if not self.config.use_meta_scoring:
             log.info("  Meta-scoring disabled (use_meta_scoring=False).")
@@ -210,6 +212,26 @@ class PipelineOrchestrator:
             else:
                 log.debug(
                     f"  {rec.compound_id}: meta-score not computed."
+                )
+
+        # Active learning: flag uncertain predictions
+        scorer = _get_meta_scorer()
+        if scorer is not None:
+            scorer.flag_uncertain_predictions(
+                self.top_candidates, threshold=0.1,
+            )
+            flagged = [r for r in self.top_candidates if r.needs_manual_review]
+            if flagged:
+                log.info(
+                    f"  Active learning: {len(flagged)}/{len(self.top_candidates)} "
+                    "compounds flagged for manual review "
+                    "(prediction std > 0.1)."
+                )
+                self._save_review_queue(flagged)
+            else:
+                log.info(
+                    "  Active learning: no compounds flagged for review "
+                    "(all predictions within uncertainty threshold)."
                 )
 
     def apply_md_validation(self) -> None:
@@ -314,5 +336,25 @@ class PipelineOrchestrator:
             self.n_total, self.n_filtered, self.top_candidates,
             self.validation_ok, self.redock_rmsd, self.deps,
         )
+
+    def _save_review_queue(self, flagged: List[CompoundRecord]) -> None:
+        """Save flagged compounds to a CSV for manual review or FEP."""
+        import csv
+
+        review_path = self.config.output_dir / "review_queue.csv"
+        try:
+            review_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(review_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["compound_id", "smiles", "meta_score", "reason"])
+                for rec in flagged:
+                    writer.writerow([
+                        rec.compound_id, rec.smiles,
+                        getattr(rec, "ml_score", ""),
+                        "High prediction uncertainty",
+                    ])
+            log.info(f"  Review queue saved to {review_path}")
+        except Exception as exc:
+            log.warning(f"  Failed to save review queue: {exc}")
 
         log.info("Pipeline complete. Exiting.")

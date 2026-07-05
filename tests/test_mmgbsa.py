@@ -12,7 +12,7 @@ from rdkit import Chem
 
 from autoantibiotic.config import CONFIG
 from autoantibiotic.models import CompoundRecord
-from autoantibiotic.ml_scoring import (
+from autoantibiotic.ml_scoring.scoring import (
     rescore_with_mmgbsa,
     rescore_with_ml,
     _compute_rdkit_descriptors,
@@ -101,7 +101,7 @@ class TestRescoreWithMMGBSA:
         temp_work_dir: str,
     ) -> None:
         """If OpenMM is not available, scores should remain unchanged."""
-        with patch("autoantibiotic.ml_scoring._HAVE_OPENMM", False):
+        with patch("autoantibiotic.ml_scoring.scoring._HAVE_OPENMM", False):
             result = rescore_with_mmgbsa(
                 top_candidates,
                 "/nonexistent/file.pdb",
@@ -145,7 +145,7 @@ class TestRescoreWithMMGBSA:
         dummy_receptor_pdb: str,
     ) -> None:
         """Empty/minimal PDB should fail PDBFixer but not crash."""
-        with patch("autoantibiotic.ml_scoring._HAVE_OPENMM", False):
+        with patch("autoantibiotic.ml_scoring.scoring._HAVE_OPENMM", False):
             result = rescore_with_mmgbsa(
                 top_candidates,
                 dummy_receptor_pdb,
@@ -166,7 +166,7 @@ class TestRescoreWithMMGBSA:
         saved = CONFIG.mm_gbsa_top_n
         CONFIG.mm_gbsa_top_n = 1
         # Simulate the internal flow by checking what _rescore_with_mmgbsa is called with
-        with patch("autoantibiotic.ml_scoring._HAVE_OPENMM", False):
+        with patch("autoantibiotic.ml_scoring.scoring._HAVE_OPENMM", False):
             result = rescore_with_mmgbsa(
                 top_candidates,
                 dummy_receptor_pdb,
@@ -191,7 +191,7 @@ class TestRescoreWithML:
         CONFIG.use_mm_gbsa_rescoring = True
 
         try:
-            with patch("autoantibiotic.ml_scoring.rescore_with_mmgbsa") as mock_mm:
+            with patch("autoantibiotic.ml_scoring.scoring.rescore_with_mmgbsa") as mock_mm:
                 mock_mm.return_value = top_candidates
                 # Create a dummy pdb alongside pdbqt
                 pdbqt = os.path.join(temp_work_dir, "receptor.pdbqt")
@@ -216,7 +216,7 @@ class TestRescoreWithML:
         saved = CONFIG.use_mm_gbsa
         CONFIG.use_mm_gbsa = True
         try:
-            with patch("autoantibiotic.ml_scoring._rescore_with_gnina") as mock_gnina:
+            with patch("autoantibiotic.ml_scoring.scoring._rescore_with_gnina") as mock_gnina:
                 mock_gnina.return_value = top_candidates
                 result = rescore_with_ml(
                     top_candidates,
@@ -280,7 +280,7 @@ class TestWaterDisplacementCorrection:
             f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
 
         with patch.multiple(
-            "autoantibiotic.ml_scoring",
+            "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(
@@ -334,7 +334,7 @@ class TestWaterDisplacementCorrection:
             f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
 
         with patch.multiple(
-            "autoantibiotic.ml_scoring",
+            "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
@@ -370,7 +370,7 @@ class TestWaterDisplacementCorrection:
             f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
 
         with patch.multiple(
-            "autoantibiotic.ml_scoring",
+            "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
@@ -419,7 +419,7 @@ class TestWaterDisplacementIntegration:
             f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
 
         with patch.multiple(
-            "autoantibiotic.ml_scoring",
+            "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
@@ -459,7 +459,7 @@ class TestWaterDisplacementIntegration:
             f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
 
         with patch.multiple(
-            "autoantibiotic.ml_scoring",
+            "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
@@ -499,7 +499,7 @@ class TestEnsembleMMGBSA:
 
         try:
             with patch.multiple(
-                "autoantibiotic.ml_scoring",
+                "autoantibiotic.ml_scoring.scoring",
                 _HAVE_OPENMM=True,
                 _prepare_receptor_for_mmgbsa=MagicMock(
                     return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
@@ -531,7 +531,7 @@ class TestEnsembleMMGBSA:
 
         try:
             with patch.multiple(
-                "autoantibiotic.ml_scoring",
+                "autoantibiotic.ml_scoring.scoring",
                 _HAVE_OPENMM=True,
                 _prepare_receptor_for_mmgbsa=MagicMock(
                     return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
@@ -566,7 +566,7 @@ class TestEnsembleMMGBSA:
 
         try:
             with patch.multiple(
-                "autoantibiotic.ml_scoring",
+                "autoantibiotic.ml_scoring.scoring",
                 _HAVE_OPENMM=True,
                 _prepare_receptor_for_mmgbsa=MagicMock(
                     return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
@@ -592,7 +592,7 @@ class TestEnsembleMMGBSA:
         temp_work_dir: str,
     ) -> None:
         """VDW-overlap-based water correction should work."""
-        from autoantibiotic.ml_scoring import _check_vdw_overlap
+        from autoantibiotic.ml_scoring.scoring import _check_vdw_overlap
         from rdkit.Chem import AllChem, rdDistGeom
 
         mol = Chem.MolFromSmiles("c1ccccc1O")
@@ -615,7 +615,7 @@ class TestEnsembleMMGBSA:
         temp_work_dir: str,
     ) -> None:
         """A water far from the ligand should NOT trigger a clash."""
-        from autoantibiotic.ml_scoring import _check_vdw_overlap
+        from autoantibiotic.ml_scoring.scoring import _check_vdw_overlap
         from rdkit.Chem import AllChem, rdDistGeom
 
         mol = Chem.MolFromSmiles("c1ccccc1O")

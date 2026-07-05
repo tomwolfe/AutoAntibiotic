@@ -267,7 +267,7 @@ def run_redocking_validation(
 
     try:
         run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s, ignore_stderr_warnings=True)
-except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
+    except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
         log.warning(f"  Vina redocking failed: {exc}")
         return False, None
 

@@ -56,6 +56,10 @@ class PipelineConfig:
 
     # MD validation
     md_validation_duration_ns: int = 10
+    md_production_duration_ns: int = 50
+    """Production MD duration (ns) for top hits. Default 50 ns."""
+    md_relaxation_duration_ns: int = 1
+    """Relaxation MD duration (ns) with strong position restraints. Default 1 ns."""
 
     # Benchmark
     benchmark_mode: bool = False

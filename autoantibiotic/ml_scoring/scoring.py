@@ -10,12 +10,12 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
 from rdkit.Chem import rdMolTransforms
 
-from .config import CONFIG
-from .models import CompoundRecord
-from .io_utils import log
+from ..config import CONFIG
+from ..models import CompoundRecord
+from ..io_utils import log
 
 try:
-    from .water_analysis import WaterAnalysisResult
+    from ..water_analysis import WaterAnalysisResult
     _HAVE_WATER = True
 except ImportError:
     WaterAnalysisResult = None  # type: ignore
@@ -100,7 +100,7 @@ def _rescore_with_gnina(
         out_pdbqt = os.path.join(lig_dir, "out.pdbqt")
 
         try:
-            from .docking import prepare_ligand_pdbqt
+            from ..docking import prepare_ligand_pdbqt
             if not prepare_ligand_pdbqt(rec.mol, lig_pdbqt):
                 cnn_scores[rec.compound_id] = None
                 continue
