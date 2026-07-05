@@ -44,3 +44,4 @@ class CompoundRecord:
 
     ml_score: Optional[float] = None
     admet_flags: List[str] = field(default_factory=list)
+    has_undefined_stereo: bool = False

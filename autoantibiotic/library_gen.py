@@ -58,6 +58,23 @@ def _count_atoms(mol: Chem.Mol) -> int:
     return mol.GetNumHeavyAtoms()
 
 
+def _check_undefined_stereo(mol: Chem.Mol) -> bool:
+    """Check if a molecule has undefined stereocenters using
+    ``Chem.FindPotentialStereo``.
+
+    Returns ``True`` if any undefined stereocenters (tetrahedral or
+    geometric) are detected.
+    """
+    try:
+        stereo = Chem.FindPotentialStereo(mol)
+        for s in stereo:
+            if s.specified == Chem.StereoSpecified.Unspecified:
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _validate_mol(smiles: str) -> Optional[Chem.Mol]:
     """Validate a SMILES string by parsing and sanitising."""
     mol = Chem.MolFromSmiles(smiles)
@@ -124,10 +141,14 @@ def _brics_recombination(
             if ring_info.NumRings() == 0:
                 continue
             seen_smiles.add(smi)
+            has_undefined = _check_undefined_stereo(product)
+            if has_undefined:
+                log.debug(f"  Stereochemistry warning: AA-{n_produced:04d} has undefined stereocenters.")
             rec = CompoundRecord(
                 compound_id=f"AA-{n_produced:04d}",
                 smiles=smi,
                 mol=product,
+                has_undefined_stereo=has_undefined,
             )
             n_produced += 1
             yield rec
@@ -1021,12 +1042,16 @@ def generate_grown_library(
                         continue
 
                     seen_smiles.add(smi)
+                    has_undefined = _check_undefined_stereo(product)
+                    if has_undefined:
+                        log.debug(f"  Stereochemistry warning: GROWN-{compound_counter:04d} has undefined stereocenters.")
                     rec = CompoundRecord(
                         compound_id=f"GROWN-{compound_counter:04d}",
                         smiles=smi,
                         mol=product,
                         qed_score=qed,
                         passes_lipinski=lipinski_ok,
+                        has_undefined_stereo=has_undefined,
                     )
                     compound_counter += 1
                     next_gen.append(product)

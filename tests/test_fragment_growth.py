@@ -165,3 +165,75 @@ def test_generate_grown_library_multi_step() -> None:
     # Two-step should not produce fewer compounds than one-step
     # (may produce the same if no further growth is possible)
     pass
+
+
+# ── Stereochemistry flagging tests ────────────────────────────────
+
+class TestStereochemistryFlagging:
+    """Tests for undefined stereochemistry detection in library generation."""
+
+    def test_check_undefined_stereo_achiral_molecule(self) -> None:
+        """Benzene should have no undefined stereocenters."""
+        from autoantibiotic.library_gen import _check_undefined_stereo
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        assert mol is not None
+        assert _check_undefined_stereo(mol) is False
+
+    def test_check_undefined_stereo_chiral_defined(self) -> None:
+        """A molecule with defined tetrahedral stereochemistry."""
+        from autoantibiotic.library_gen import _check_undefined_stereo
+        # (R)-2-butanol with explicit stereochemistry
+        mol = Chem.MolFromSmiles("CC[C@H](C)O")
+        assert mol is not None
+        assert _check_undefined_stereo(mol) is False
+
+    def test_check_undefined_stereo_undefined_chiral(self) -> None:
+        """A molecule with undefined tetrahedral stereochemistry."""
+        from autoantibiotic.library_gen import _check_undefined_stereo
+        # 2-butanol without stereochemistry specified
+        mol = Chem.MolFromSmiles("CCC(C)O")
+        assert mol is not None
+        stereo = Chem.FindPotentialStereo(mol)
+        has_undefined = any(s.specified == Chem.StereoSpecified.Unspecified for s in stereo)
+        assert has_undefined is True
+
+    def test_check_undefined_stereo_undefined_double_bond(self) -> None:
+        """A molecule with undefined geometric (cis/trans) stereochemistry."""
+        from autoantibiotic.library_gen import _check_undefined_stereo
+        # 2-butene without stereochemistry
+        mol = Chem.MolFromSmiles("CC=CC")
+        assert mol is not None
+        assert _check_undefined_stereo(mol) is True
+
+    def test_check_undefined_stereo_defined_double_bond(self) -> None:
+        """A molecule with defined geometric stereochemistry."""
+        from autoantibiotic.library_gen import _check_undefined_stereo
+        # (E)-2-butene
+        mol = Chem.MolFromSmiles("C/C=C/C")
+        assert mol is not None
+        assert _check_undefined_stereo(mol) is False
+
+    def test_compound_record_has_undefined_stereo_field(self) -> None:
+        """CompoundRecord should have the has_undefined_stereo field."""
+        rec = CompoundRecord(
+            compound_id="TEST",
+            smiles="c1ccccc1",
+        )
+        assert hasattr(rec, "has_undefined_stereo")
+        assert rec.has_undefined_stereo is False
+
+    def test_grown_compound_sets_stereo_flag(self) -> None:
+        """Grown compounds with undefined stereocenters should be flagged."""
+        core = _make_core_record("c1ccncc1")
+        # Building block with an undefined chiral center
+        bbs = ["[1*]CC(C)O"]
+        results = list(
+            generate_grown_library(
+                [core],
+                building_blocks=bbs,
+                max_growth_steps=1,
+                target_per_core=10,
+            )
+        )
+        for rec in results:
+            assert isinstance(rec.has_undefined_stereo, bool)

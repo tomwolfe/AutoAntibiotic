@@ -157,6 +157,80 @@ class MLADMETPredictor:
     # ── model fitting ────────────────────────────────────────────────
 
     def _fit_models(self) -> None:
+        # Try the expanded ChEMBL-style dataset first
+        try:
+            from benchmarks.reference_data import load_chembl_admet_subset
+            chembl_data = load_chembl_admet_subset()
+            herg_samples = chembl_data["herg"]
+            cyp_samples = chembl_data["cyp"]
+            _has_expanded_data = True
+        except (ImportError, Exception):
+            _has_expanded_data = False
+            herg_samples = []
+            cyp_samples = []
+
+        if _has_expanded_data and len(herg_samples) > 20:
+            log.info(f"ML-ADMET: Using expanded reference set ({len(herg_samples)} hERG, {len(cyp_samples)} CYP).")
+            X_herg: List[np.ndarray] = []
+            y_herg: List[int] = []
+            X_cyp: List[np.ndarray] = []
+            y_cyp: List[int] = []
+
+            for entry in herg_samples:
+                mol = Chem.MolFromSmiles(entry["smiles"])
+                if mol is None:
+                    continue
+                mol = Chem.MolFromSmiles(entry["smiles"])
+                if mol is None:
+                    continue
+                try:
+                    X_herg.append(self._get_features(mol))
+                    y_herg.append(entry["label"])
+                except Exception:
+                    continue
+            for entry in cyp_samples:
+                mol = Chem.MolFromSmiles(entry["smiles"])
+                if mol is None:
+                    continue
+                try:
+                    X_cyp.append(self._get_features(mol))
+                    y_cyp.append(entry["label"])
+                except Exception:
+                    continue
+
+            n_pos = sum(y_herg)
+            n_neg = len(y_herg) - n_pos
+            if n_pos < 1 or n_neg < 1:
+                log.warning("ML-ADMET: Need at least one positive and one negative "
+                            "hERG reference compound — disabling ML models.")
+                return
+
+            Xh = np.array(X_herg, dtype=np.float32)
+            self._ndim = Xh.shape[1]
+            self.herg_model = _RandomForestClassifier(
+                n_estimators=100, random_state=42, class_weight="balanced",
+            )
+            self.herg_model.fit(Xh, y_herg)
+
+            n_pos = sum(y_cyp)
+            n_neg = len(y_cyp) - n_pos
+            if n_pos < 1 or n_neg < 1:
+                log.warning("ML-ADMET: Need at least one positive and one negative "
+                            "CYP reference compound — disabling CYP model.")
+                self.cyp_model = None
+            else:
+                Xc = np.array(X_cyp, dtype=np.float32)
+                self.cyp_model = _RandomForestClassifier(
+                    n_estimators=100, random_state=42, class_weight="balanced",
+                )
+                self.cyp_model.fit(Xc, y_cyp)
+
+            self._fitted = True
+            log.info(f"ML-ADMET: Models fitted ({len(y_herg)} hERG, {len(y_cyp)} CYP training compounds, "
+                     f"{self._ndim} features).")
+            return
+
+        # Fallback: legacy paired-reference approach
         X_list: List[np.ndarray] = []
         y_herg: List[int] = []
         y_cyp: List[int] = []

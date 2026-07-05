@@ -15,7 +15,16 @@ from rdkit.Chem import AllChem, rdDistGeom
 
 from .config import CONFIG
 from .models import CompoundRecord
-from .io_utils import log, make_cache_key, parse_gnina_energy, parse_vina_energy, run_tool
+from .io_utils import (
+    AutoAntibioticError,
+    VinaError,
+    OpenBabelError,
+    log,
+    make_cache_key,
+    parse_gnina_energy,
+    parse_vina_energy,
+    run_tool,
+)
 
 try:
     from .water_analysis import WaterAnalysisResult
@@ -105,7 +114,7 @@ def _extract_native_ligand_from_holo(
                     smi = f.readline().strip()
                 if smi:
                     return smi
-            except (RuntimeError, OSError):
+            except (RuntimeError, OSError, AutoAntibioticError):
                 pass
             return None
 
@@ -257,7 +266,7 @@ def run_redocking_validation(
 
     try:
         run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s, ignore_stderr_warnings=True)
-    except RuntimeError as exc:
+    except (RuntimeError, VinaError, AutoAntibioticError) as exc:
         log.warning(f"  ⚠  Vina redocking failed: {exc}")
         return False, None
 
@@ -266,7 +275,7 @@ def run_redocking_validation(
             ["obabel", docked_pdbqt, "-O", docked_pdb, "--gen3d"],
             timeout=CONFIG.obabel_timeout_s,
         )
-    except RuntimeError:
+    except (RuntimeError, OpenBabelError, AutoAntibioticError):
         log.warning("  Could not convert docked PDBQT to PDB. Trying RDKit PDBQT reader.")
         mol = Chem.MolFromPDBQT(docked_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
         if mol is None:
@@ -416,7 +425,7 @@ def _run_docking_tool(
             if energy is not None:
                 return energy
             return parse_vina_energy(result.stderr)
-    except RuntimeError as exc:
+    except (RuntimeError, VinaError, AutoAntibioticError) as exc:
         log.warning(f"  {binary} execution failed: {exc}")
         return None
 

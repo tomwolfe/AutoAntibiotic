@@ -18,6 +18,11 @@ from autoantibiotic.ml_scoring import (
     _compute_rdkit_descriptors,
     _HAVE_OPENMM,
 )
+from autoantibiotic.md_validation import (
+    run_short_md,
+    _compute_ligand_rmsd,
+    _check_openmm,
+)
 
 
 # ── Test fixtures ──────────────────────────────────────────────
@@ -489,3 +494,108 @@ class TestConfigIntegration:
         assert hasattr(CONFIG, "use_mm_gbsa")
         assert hasattr(CONFIG, "use_mm_gbsa_rescoring")
         assert hasattr(CONFIG, "mm_gbsa_top_n")
+
+
+# ── MD Validation tests ─────────────────────────────────────────
+
+class TestMDValidation:
+    """Tests for the MD validation module."""
+
+    def test_check_openmm_flag(self) -> None:
+        """_check_openmm should return a bool."""
+        result = _check_openmm()
+        assert isinstance(result, bool)
+
+    def test_run_short_md_no_openmm_returns_none(self) -> None:
+        """When OpenMM is not available, run_short_md returns None."""
+        with patch("autoantibiotic.md_validation._HAVE_OPENMM", False):
+            mol = Chem.MolFromSmiles("c1ccccc1O")
+            assert mol is not None
+            mol = Chem.AddHs(mol)
+            from rdkit.Chem import AllChem, rdDistGeom
+            params = rdDistGeom.ETKDGv3()
+            params.randomSeed = 42
+            rdDistGeom.EmbedMolecule(mol, params)
+            AllChem.MMFFOptimizeMolecule(mol)
+            result = run_short_md(mol, "/nonexistent.pdb", duration_ns=0.1)
+            assert result is None
+
+    def test_run_short_md_no_pdbfixer_returns_none(self) -> None:
+        """When pdbfixer is not available, run_short_md returns None."""
+        with patch.multiple(
+            "autoantibiotic.md_validation",
+            _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=False,
+        ):
+            mol = Chem.MolFromSmiles("c1ccccc1O")
+            assert mol is not None
+            mol = Chem.AddHs(mol)
+            from rdkit.Chem import AllChem, rdDistGeom
+            params = rdDistGeom.ETKDGv3()
+            params.randomSeed = 42
+            rdDistGeom.EmbedMolecule(mol, params)
+            AllChem.MMFFOptimizeMolecule(mol)
+            result = run_short_md(mol, "/nonexistent.pdb", duration_ns=0.1)
+            assert result is None
+
+    def test_run_short_md_missing_receptor_returns_none(self) -> None:
+        """When receptor PDB does not exist, run_short_md returns None."""
+        with patch.multiple(
+            "autoantibiotic.md_validation",
+            _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=True,
+        ):
+            mol = Chem.MolFromSmiles("c1ccccc1O")
+            assert mol is not None
+            mol = Chem.AddHs(mol)
+            from rdkit.Chem import AllChem, rdDistGeom
+            params = rdDistGeom.ETKDGv3()
+            params.randomSeed = 42
+            rdDistGeom.EmbedMolecule(mol, params)
+            AllChem.MMFFOptimizeMolecule(mol)
+            result = run_short_md(mol, "/nonexistent.pdb", duration_ns=0.1)
+            assert result is None
+
+    def test_ligand_rmsd_identical_positions(self) -> None:
+        """RMSD of identical positions should be 0."""
+        pos = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+        rmsd = _compute_ligand_rmsd(pos, pos)
+        assert rmsd == pytest.approx(0.0)
+
+    def test_ligand_rmsd_known_value(self) -> None:
+        """RMSD between two known point sets."""
+        pos1 = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        pos2 = np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        rmsd = _compute_ligand_rmsd(pos1, pos2)
+        # All distances are 1.0, so RMSD = sqrt(mean(1^2)) = 1.0
+        assert rmsd == pytest.approx(1.0)
+
+    def test_ligand_rmsd_mismatched_lengths(self) -> None:
+        """RMSD with mismatched array lengths should return 999.9."""
+        pos1 = np.array([[0.0, 0.0, 0.0]])
+        pos2 = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        rmsd = _compute_ligand_rmsd(pos1, pos2)
+        assert rmsd == pytest.approx(999.9)
+
+    def test_ligand_rmsd_empty_returns_999(self) -> None:
+        """RMSD with empty arrays should return 999.9."""
+        rmsd = _compute_ligand_rmsd(np.array([]), np.array([]))
+        assert rmsd == pytest.approx(999.9)
+
+    def test_ligand_no_conformer_returns_none(self) -> None:
+        """run_short_md with a molecule that has no conformer returns None."""
+        with patch.multiple(
+            "autoantibiotic.md_validation",
+            _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=True,
+        ):
+            mol = Chem.MolFromSmiles("c1ccccc1")
+            assert mol is not None
+            with tempfile.NamedTemporaryFile(suffix=".pdb", mode="w", delete=False) as f:
+                f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+                pdb_path = f.name
+            try:
+                result = run_short_md(mol, pdb_path, duration_ns=0.1)
+                assert result is None
+            finally:
+                os.unlink(pdb_path)

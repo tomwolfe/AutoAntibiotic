@@ -1,5 +1,5 @@
 """
-AutoAntibiotic Discovery Pipeline v4.0
+AutoAntibiotic Discovery Pipeline v4.1
 ========================================
 MRSA PBP2a Inhibitor Screening
 
@@ -9,22 +9,24 @@ Entry point: parses CLI arguments and delegates to PipelineOrchestrator.
 from __future__ import annotations
 
 import argparse
+import copy
 from pathlib import Path
 from typing import Optional, List
 
-from .config import CONFIG
+from .config import CONFIG, PipelineConfig
 from .orchestrator import PipelineOrchestrator
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     """Parse CLI arguments, configure, and run the pipeline.
 
-    Usage::
-
-        python -m autoantibiotic [--use-cache] [--dry-run]
+    Creates a local copy of the module-level CONFIG using
+    ``dataclasses.replace``, applies CLI overrides to the copy, and
+    passes it to the orchestrator — avoiding side effects on the global
+    singleton.
     """
     parser = argparse.ArgumentParser(
-        description="AutoAntibiotic Discovery Pipeline v3.2",
+        description="AutoAntibiotic Discovery Pipeline v4.1",
     )
     parser.add_argument(
         "--use-cache", action="store_true",
@@ -68,34 +70,37 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    # ── Apply CLI overrides to CONFIG ──
+    # ── Create a local copy of CONFIG and apply CLI overrides ──
+    cfg = copy.deepcopy(CONFIG)
+
     if args.dry_run:
-        CONFIG.dry_run = True
-        CONFIG.library_target_count = 10
+        cfg.dry_run = True
+        cfg.library_target_count = 10
 
     if args.use_gnina:
-        CONFIG.use_gnina = True
+        cfg.use_gnina = True
 
     if args.ensemble_dir:
-        CONFIG.ensemble_mode = True
-        CONFIG.ensemble_structures_dir = Path(args.ensemble_dir)
+        cfg.ensemble_mode = True
+        cfg.ensemble_structures_dir = Path(args.ensemble_dir)
 
     if args.flexible_docking:
-        CONFIG.flexible_docking = True
+        cfg.flexible_docking = True
 
     if args.no_water_analysis:
-        CONFIG.use_water_analysis = False
+        cfg.use_water_analysis = False
 
     if args.run_md_validation:
-        CONFIG.md_validation_duration_ns = 10
+        cfg.md_validation_duration_ns = 10
 
     if args.use_mutation_sampling:
-        CONFIG.use_mutation_sampling = True
+        cfg.use_mutation_sampling = True
 
     if args.use_mm_gbsa or args.use_mm_gbsa_rescoring:
-        CONFIG.use_mm_gbsa = True
-        CONFIG.use_mm_gbsa_rescoring = True
-    orchestrator = PipelineOrchestrator(use_cache=args.use_cache)
+        cfg.use_mm_gbsa = True
+        cfg.use_mm_gbsa_rescoring = True
+
+    orchestrator = PipelineOrchestrator(use_cache=args.use_cache, config=cfg)
     orchestrator.run()
 
 

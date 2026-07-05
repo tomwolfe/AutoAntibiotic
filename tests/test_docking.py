@@ -19,7 +19,14 @@ from autoantibiotic.docking import (
     _parallel_dock_ensemble,
     prepare_ligand_pdbqt,
 )
-from autoantibiotic.io_utils import parse_gnina_energy, parse_vina_energy, ToolResult
+from autoantibiotic.io_utils import (
+    parse_gnina_energy,
+    parse_vina_energy,
+    ToolResult,
+    VinaError,
+    OpenBabelError,
+    _classify_tool_error,
+)
 
 
 # ── GNINA output parsing ───────────────────────────────────────────
@@ -390,3 +397,52 @@ class TestDockCompoundEnsemble:
                 tag="ens",
             )
         assert score == pytest.approx(-7.0)
+
+
+# ── Error classification tests ──────────────────────────────────────
+
+class TestErrorClassification:
+    """Tests for _classify_tool_error, VinaError, and OpenBabelError."""
+
+    def test_classify_vina_no_file(self) -> None:
+        msg = _classify_tool_error("vina", "Error: Could not open receptor file")
+        assert msg is not None
+        assert "file not found" in msg.lower()
+
+    def test_classify_vina_bad_alloc(self) -> None:
+        msg = _classify_tool_error("vina", "std::bad_alloc")
+        assert msg is not None
+        assert "memory" in msg.lower()
+
+    def test_classify_vina_no_match(self) -> None:
+        msg = _classify_tool_error("vina", "everything is fine")
+        assert msg is None
+
+    def test_classify_gnina_cuda_error(self) -> None:
+        msg = _classify_tool_error("gnina", "CUDA error: out of memory")
+        assert msg is not None
+        assert "cuda" in msg.lower()
+
+    def test_classify_obabel_cannot_convert(self) -> None:
+        msg = _classify_tool_error("obabel", "Cannot convert from format XYZ")
+        assert msg is not None
+        assert "cannot convert" in msg.lower()
+
+    def test_classify_prepare_receptor_error(self) -> None:
+        msg = _classify_tool_error("prepare_receptor", "Error: missing atoms")
+        assert msg is not None
+        assert "prepare_receptor" in msg.lower()
+
+    def test_classify_unknown_tool(self) -> None:
+        msg = _classify_tool_error("blarg", "anything")
+        assert msg is None
+
+    def test_vina_error_is_exception(self) -> None:
+        err = VinaError("test error")
+        assert isinstance(err, Exception)
+        assert "test error" in str(err)
+
+    def test_openbabel_error_is_exception(self) -> None:
+        err = OpenBabelError("test error")
+        assert isinstance(err, Exception)
+        assert "test error" in str(err)

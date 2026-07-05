@@ -31,6 +31,52 @@ class AutoAntibioticError(Exception):
     """Pipeline-specific error with a clear, actionable message."""
 
 
+class VinaError(AutoAntibioticError):
+    """Error raised when AutoDock Vina or GNINA fails with a recognised
+    pattern in its output, providing an actionable message."""
+
+
+class OpenBabelError(AutoAntibioticError):
+    """Error raised when OpenBabel fails with a recognised pattern."""
+
+
+_TOOL_ERROR_MESSAGES: Dict[str, Dict[str, str]] = {
+    "vina": {
+        "Could not open": "Receptor or ligand file not found — check PDBQT paths.",
+        "Error parsing": "Input file format error — try re-generating PDBQT files.",
+        "dimension": "Search box too small for ligand — increase box size or filter by molecular weight.",
+        "Fatal Error": "Vina encountered a fatal error — check input file validity.",
+        "std::bad_alloc": "Out of memory — reduce exhaustiveness or ligand size.",
+        "Error in Read": "PDBQT file corrupted or malformed — re-run structure preparation.",
+    },
+    "gnina": {
+        "Could not open": "Receptor or ligand file not found — check PDBQT paths.",
+        "Error parsing": "Input file format error — try re-generating PDBQT files.",
+        "CUDA": "CUDA error — check GPU availability or disable GNINA (--use-gnina).",
+        "Fatal Error": "GNINA encountered a fatal error — check input file validity.",
+        "cudaError": "CUDA runtime error — ensure NVIDIA drivers and CUDA toolkit are compatible.",
+    },
+    "obabel": {
+        "could not open": "Input file not found by OpenBabel — check path.",
+        "Cannot convert": "OpenBabel cannot convert this format — check file type.",
+        "error": "OpenBabel conversion error — check ligand/receptor structure.",
+    },
+    "prepare_receptor": {
+        "Error": "prepare_receptor failed — check PDB structure for missing atoms or non-standard residues.",
+    },
+}
+
+
+def _classify_tool_error(binary_name: str, stderr: str) -> Optional[str]:
+    """Check tool *stderr* against known error patterns and return an
+    actionable message, or ``None`` if no pattern matches."""
+    patterns = _TOOL_ERROR_MESSAGES.get(binary_name, {})
+    for pattern, message in patterns.items():
+        if pattern.lower() in stderr.lower():
+            return message
+    return None
+
+
 _INSTALL_GUIDE: Dict[str, str] = {
     "rdkit": "  → Install: conda install -c conda-forge rdkit  |  pip install rdkit-pypi",
     "meeko": "  → Install: pip install meeko",
@@ -138,6 +184,19 @@ def run_tool(
         )
 
         if check and proc.returncode != 0:
+            binary_name = os.path.basename(cmd[0])
+            error_msg = _classify_tool_error(binary_name, proc.stderr)
+            if error_msg:
+                if binary_name in ("vina", "gnina"):
+                    raise VinaError(
+                        f"{binary_name} failed (exit {proc.returncode}): {error_msg}\n"
+                        f"  stderr: {proc.stderr.strip()}"
+                    )
+                elif binary_name in ("obabel", "prepare_receptor"):
+                    raise OpenBabelError(
+                        f"{binary_name} failed (exit {proc.returncode}): {error_msg}\n"
+                        f"  stderr: {proc.stderr.strip()}"
+                    )
             raise AutoAntibioticError(
                 f"Tool {' '.join(cmd)} failed (exit {proc.returncode}):\n"
                 f"  stderr: {proc.stderr.strip()}"

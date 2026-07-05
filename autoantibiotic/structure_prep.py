@@ -9,7 +9,14 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from .config import CONFIG
-from .io_utils import download_with_retry, log, run_tool
+from .io_utils import (
+    AutoAntibioticError,
+    OpenBabelError,
+    VinaError,
+    download_with_retry,
+    log,
+    run_tool,
+)
 from .water_analysis import get_waters_to_remove
 
 
@@ -185,7 +192,8 @@ def clean_pdb_structure(
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
                     converted = True
                     log.info("  PDBQT via prepare_receptor")
-            except RuntimeError:
+            except (RuntimeError, OpenBabelError, AutoAntibioticError) as exc:
+                log.debug(f"  prepare_receptor failed: {exc}")
                 pass
 
         if not converted and deps.get("obabel"):
@@ -197,7 +205,8 @@ def clean_pdb_structure(
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
                     converted = True
                     log.info("  PDBQT via obabel")
-            except RuntimeError:
+            except (RuntimeError, OpenBabelError, AutoAntibioticError) as exc:
+                log.debug(f"  obabel failed: {exc}")
                 pass
 
         if not converted:

@@ -192,10 +192,10 @@ class PipelineOrchestrator:
     def apply_meta_scoring(self) -> None:
         """Phase 4.5 — Meta-learner consensus scoring on top candidates.
 
-        Replaces the fixed weighted-average consensus with a trained
-        stacking regressor when ``CONFIG.use_meta_scoring`` is enabled.
+        Uses a trained stacking regressor when ``self.config.use_meta_scoring``
+        is enabled.
         """
-        if not CONFIG.use_meta_scoring:
+        if not self.config.use_meta_scoring:
             log.info("  Meta-scoring disabled (use_meta_scoring=False).")
             return
         if not self.top_candidates:
@@ -216,10 +216,10 @@ class PipelineOrchestrator:
         """Phase 4.7 — Optional MD validation of top candidates.
 
         Runs a short explicit-solvent MD simulation on the top
-        candidates when ``CONFIG.md_validation_duration_ns > 0``
+        candidates when ``self.config.md_validation_duration_ns > 0``
         and the ``--run-md-validation`` flag is set.
         """
-        md_duration = CONFIG.md_validation_duration_ns
+        md_duration = self.config.md_validation_duration_ns
         if not (md_duration > 0 and _HAVE_MD and self.top_candidates):
             return
         log.info("─── Phase 4.7: MD Validation ───")
