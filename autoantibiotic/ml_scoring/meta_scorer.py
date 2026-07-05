@@ -22,16 +22,21 @@ class MetaScorer:
     """Stacking regressor that learns to predict activity from multiple
     docking and descriptor features.
 
-    Features
-    --------
-    - Vina Energy (allosteric)
-    - Vina Energy (active)
-    - GNINA CNNscore (if available)
-    - Shape Score
-    - IFP Score
+    Features (13-dim)
+    -----------------
+    - Vina Energy (allosteric) [placeholder]
+    - GNINA CNNscore [placeholder]
+    - Shape Score [placeholder]
+    - IFP Score (docking) [placeholder]
     - QED
     - LogP
     - MolWt
+    - NumRotatableBonds
+    - Ligand RMSD mean (MD-derived)
+    - Ligand RMSD std (MD-derived)
+    - Pocket Rg stability (MD-derived)
+    - IFP similarity score (from CompoundRecord)
+    - Water displacement energy (from CompoundRecord)
 
     Training data is sourced from :mod:`benchmarks.reference_data` using
     known actives / inactives.  The trained model is persisted with
@@ -245,8 +250,9 @@ class MetaScorer:
         fails.
 
         If the record contains MD-derived dynamic features
-        (``md_ligand_rmsd``, ``md_pocket_rg_stability``) they are
-        included in the feature vector automatically.
+        (``md_ligand_rmsd``, ``md_pocket_rg_stability``) or IFP/Water
+        features (``ifp_score``, ``water_displacement_energy``) they
+        are included in the feature vector automatically.
 
         When ``uncertainty_threshold`` was set at fit time, the standard
         deviation of predictions across all trees is computed.  If it
@@ -265,6 +271,8 @@ class MetaScorer:
                 record.mol,
                 md_ligand_rmsd=record.md_ligand_rmsd,
                 md_pocket_rg_stability=record.md_pocket_rg_stability,
+                ifp_score=record.ifp_score,
+                water_displacement_energy=record.water_displacement_energy,
             ).reshape(1, -1)
             prob = float(self._model.predict(feats)[0])  # type: ignore[union-attr]
 
@@ -290,7 +298,7 @@ class MetaScorer:
         """Load a previously trained model from disk.
 
         Checks that the stored feature dimension matches the current
-        expected dimension (11).  If mismatched, logs a warning and
+        expected dimension (13).  If mismatched, logs a warning and
         returns ``False`` so the caller retrains with the new feature
         space.
 
@@ -307,7 +315,7 @@ class MetaScorer:
             self._training_inactives = obj.get("training_inactives", [])
 
             # Backward compatibility: retrain if feature dimension has changed
-            expected_dim = 11
+            expected_dim = 13
             if self._model is not None and hasattr(self._model, "n_features_in_"):
                 if self._model.n_features_in_ != expected_dim:
                     log.warning(
@@ -350,6 +358,8 @@ class MetaScorer:
                     mol,
                     md_ligand_rmsd=record.md_ligand_rmsd,
                     md_pocket_rg_stability=record.md_pocket_rg_stability,
+                    ifp_score=record.ifp_score,
+                    water_displacement_energy=record.water_displacement_energy,
                 ).reshape(1, -1)
                 tree_preds = np.array([
                     tree.predict(feats)[0] for tree in self._model.estimators_
@@ -396,8 +406,10 @@ class MetaScorer:
         mol: Chem.Mol,
         md_ligand_rmsd: Optional[float] = None,
         md_pocket_rg_stability: Optional[float] = None,
+        ifp_score: Optional[float] = None,
+        water_displacement_energy: Optional[float] = None,
     ) -> np.ndarray:
-        """11-dim feature vector for a molecule.
+        """13-dim feature vector for a molecule.
 
         Static descriptors (8):
         1-4. Vina/GNINA/Shape/IFP placeholders (0.0)
@@ -410,6 +422,10 @@ class MetaScorer:
         9.  ligand_rmsd_mean
         10. ligand_rmsd_std
         11. pocket_rg_stability
+
+        IFP / Water features (2), default 0.0 when unavailable:
+        12. IFP similarity score (from CompoundRecord.ifp_score)
+        13. Water displacement energy (from CompoundRecord.water_displacement_energy)
         """
         qed = float(QED.qed(mol))
         logp = float(Crippen.MolLogP(mol))
@@ -420,15 +436,19 @@ class MetaScorer:
         rmsd_std = 0.0
         rg_stab = md_pocket_rg_stability if md_pocket_rg_stability is not None else 0.0
 
+        ifp = ifp_score if ifp_score is not None else 0.0
+        water_disp = water_displacement_energy if water_displacement_energy is not None else 0.0
+
         arr = np.array(
-            [0.0, 0.0, 0.0, 0.0, qed, logp, mw, n_rot,
-             rmsd_mean, rmsd_std, rg_stab],
+            [0.0, 0.0, 0.0, ifp, qed, logp, mw, n_rot,
+             rmsd_mean, rmsd_std, rg_stab, ifp, water_disp],
             dtype=np.float32,
         )
         self._feature_names = [
             "vina_energy", "gnina_score", "shape_score", "ifp_score",
             "qed", "logp", "mw", "n_rotatable",
             "ligand_rmsd_mean", "ligand_rmsd_std", "pocket_rg_stability",
+            "ifp_score_complex", "water_displacement_energy",
         ]
         return arr
 

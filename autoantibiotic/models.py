@@ -54,3 +54,6 @@ class CompoundRecord:
     """Ligand heavy-atom RMSD (Å) from MD simulation, mean across frames."""
     md_pocket_rg_stability: Optional[float] = None
     """Fractional pocket Rg change from MD simulation (0=stable)."""
+
+    water_displacement_energy: Optional[float] = None
+    """Water displacement energy score from crystallographic water analysis."""

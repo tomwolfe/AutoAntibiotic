@@ -308,3 +308,72 @@ def test_metascorer_uncertainty_threshold_high_never_triggers() -> None:
     rec = _make_record(actives[0])
     scorer.predict(rec)
     assert rec.needs_manual_review is False
+
+
+def test_metascorer_ifp_water_features() -> None:
+    """IFP and water displacement energy should influence the feature vector.
+
+    Two records with identical base features but different IFP scores must
+    produce different feature vectors, and the feature vector must have 13 dims.
+    """
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+
+    raw_mol = Chem.MolFromSmiles(actives[0])
+    assert raw_mol is not None
+
+    feat_high = scorer._default_features(raw_mol, ifp_score=0.95, water_displacement_energy=-2.5)
+    feat_low = scorer._default_features(raw_mol, ifp_score=0.10, water_displacement_energy=-0.1)
+
+    # Feature vectors must differ at IFP index (3) and water index (12)
+    assert feat_high[3] == pytest.approx(0.95, abs=1e-6)
+    assert feat_low[3] == pytest.approx(0.10, abs=1e-6)
+    assert feat_high[12] == pytest.approx(-2.5, abs=1e-6)
+    assert feat_low[12] == pytest.approx(-0.1, abs=1e-6)
+    assert feat_high[3] != feat_low[3]
+    assert feat_high[12] != feat_low[12]
+
+    # Feature vector length must be 13
+    assert feat_high.shape[0] == 13, f"Expected 13 features, got {feat_high.shape[0]}"
+    assert len(scorer._feature_names) == 13
+
+    # Predictions must be valid and based on different feature vectors
+    score_high = scorer.predict(_make_record(actives[0]))
+    score_low = scorer.predict(_make_record(actives[0]))
+    assert score_high is not None
+    assert score_low is not None
+    assert 0.0 <= score_high <= 1.0
+    assert 0.0 <= score_low <= 1.0
+
+
+def test_metascorer_ifp_water_features_none_defaults() -> None:
+    """When IFP and water displacement are None, defaults must be 0.0."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+
+    raw_mol = Chem.MolFromSmiles(actives[0])
+    assert raw_mol is not None
+
+    feat_with_none = scorer._default_features(raw_mol, ifp_score=None, water_displacement_energy=None)
+    assert feat_with_none[3] == 0.0, "IFP score default should be 0.0"
+    assert feat_with_none[12] == 0.0, "Water displacement default should be 0.0"

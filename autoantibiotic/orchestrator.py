@@ -236,7 +236,17 @@ class PipelineOrchestrator:
         if not self.top_candidates:
             return
         log.info("─── Phase 4.5: Meta-Learner Consensus Scoring ───")
+
+        # Populate IFP/Water dynamic features if available
+        water_disp_energy: Optional[float] = None
+        if self.water_results is not None and self.water_results.all_waters:
+            energies = [w.displacement_energy for w in self.water_results.all_waters]
+            if energies:
+                water_disp_energy = float(np.mean(energies))
+
         for rec in self.top_candidates:
+            if water_disp_energy is not None:
+                rec.water_displacement_energy = water_disp_energy
             meta_score = predict_meta_score(rec)
             if meta_score is not None:
                 log.debug(
