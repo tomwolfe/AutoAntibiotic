@@ -384,6 +384,96 @@ class TestWaterDisplacementCorrection:
         assert final_score == pytest.approx(0.0, abs=1e-4)
 
 
+# ── Water displacement integration tests (new spec) ──────────
+
+class TestWaterDisplacementIntegration:
+    """Integration tests for water displacement correction in MM-GB/SA rescoring."""
+
+    def test_high_energy_water_clash_reduces_dg(self, temp_work_dir: str) -> None:
+        """A high-energy water within 2.5 Å of the ligand should reduce ΔG by its displacement_energy."""
+        candidate = CompoundRecord(
+            compound_id="CMP-INT-001",
+            smiles="c1ccccc1O",
+            mol=Chem.MolFromSmiles("c1ccccc1O"),
+            pb2pa_allosteric_energy=-7.0,
+        )
+
+        high_energy_water = MockWater(
+            position=[0.0, 0.0, 0.0],
+            displacement_energy=2.5,
+            is_high_energy=True,
+        )
+        water_results = MockWaterAnalysisResult(
+            high_energy_waters=[high_energy_water],
+        )
+
+        # ΔG_binding = complex - rec - lig = -1950 - (-2000) - 50 = 0.0
+        dummy_pdb = os.path.join(temp_work_dir, "receptor.pdb")
+        with open(dummy_pdb, "w") as f:
+            f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+
+        with patch.multiple(
+            "autoantibiotic.ml_scoring",
+            _HAVE_OPENMM=True,
+            _prepare_receptor_for_mmgbsa=MagicMock(
+                return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
+            ),
+            _compute_ligand_gb_energy=MagicMock(return_value=50.0),
+            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+        ):
+            result = rescore_with_mmgbsa(
+                [candidate],
+                dummy_pdb,
+                temp_work_dir,
+                water_results=water_results,
+            )
+
+        assert len(result) == 1
+        final_score = result[0].ml_score
+        assert final_score is not None
+        # expected = 0.0 - 2.5 = -2.5
+        assert final_score == pytest.approx(-2.5, abs=1e-4), (
+            f"Expected -2.5, got {final_score}"
+        )
+
+    def test_bridging_water_no_correction(self, temp_work_dir: str) -> None:
+        """A water with is_high_energy=False should NOT trigger any correction."""
+        candidate = CompoundRecord(
+            compound_id="CMP-INT-002",
+            smiles="c1ccccc1O",
+            mol=Chem.MolFromSmiles("c1ccccc1O"),
+            pb2pa_allosteric_energy=-7.0,
+        )
+
+        # Low-energy water: not in high_energy_waters list → no correction applied
+        water_results = MockWaterAnalysisResult(high_energy_waters=[])
+
+        dummy_pdb = os.path.join(temp_work_dir, "receptor.pdb")
+        with open(dummy_pdb, "w") as f:
+            f.write("ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n")
+
+        with patch.multiple(
+            "autoantibiotic.ml_scoring",
+            _HAVE_OPENMM=True,
+            _prepare_receptor_for_mmgbsa=MagicMock(
+                return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
+            ),
+            _compute_ligand_gb_energy=MagicMock(return_value=50.0),
+            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+        ):
+            result = rescore_with_mmgbsa(
+                [candidate],
+                dummy_pdb,
+                temp_work_dir,
+                water_results=water_results,
+            )
+
+        final_score = result[0].ml_score
+        assert final_score is not None
+        # ΔG_binding = 0.0, no correction → expected 0.0
+        assert final_score == pytest.approx(0.0, abs=1e-4)
+
+
 # ── Config integration ────────────────────────────────────────
 
 class TestConfigIntegration:

@@ -533,6 +533,7 @@ def rescore_with_mmgbsa(
             binding_energy = complex_energy - rec_energy - lig_energy
 
             # ── Water displacement correction ─────────────────────
+            total_displacement_penalty = 0.0
             if water_results is not None and water_results.high_energy_waters:
                 mol_3d_lig = Chem.RWMol(mol)
                 mol_3d_lig = Chem.AddHs(mol_3d_lig)
@@ -541,24 +542,25 @@ def rescore_with_mmgbsa(
                 if Chem.rdDistGeom.EmbedMolecule(mol_3d_lig, params) >= 0:
                     AllChem.MMFFOptimizeMolecule(mol_3d_lig, maxIters=500)
                     lig_conf = mol_3d_lig.GetConformer()
+                    # Use only heavy atoms for distance check
                     lig_coords = np.array([
                         [lig_conf.GetAtomPosition(i).x,
                          lig_conf.GetAtomPosition(i).y,
                          lig_conf.GetAtomPosition(i).z]
                         for i in range(mol_3d_lig.GetNumAtoms())
+                        if mol_3d_lig.GetAtomWithIdx(i).GetAtomicNum() > 1
                     ])
-                    clash_penalty = 0.0
                     for w in water_results.high_energy_waters:
                         min_dist = float(np.min(
                             np.linalg.norm(lig_coords - w.position, axis=1)
                         ))
                         if min_dist < 2.5:
-                            clash_penalty += w.displacement_energy
-                    if clash_penalty > 0.0:
-                        binding_energy -= clash_penalty
-                        log.info(f"      Water displacement correction: "
-                                 f"-{clash_penalty:.2f} kcal/mol "
-                                 f"(corrected ΔG = {binding_energy:.2f})")
+                            total_displacement_penalty += w.displacement_energy
+                if total_displacement_penalty > 0.0:
+                    binding_energy -= total_displacement_penalty
+                log.info(f"      Water displacement correction: "
+                         f"-{total_displacement_penalty:.2f} kcal/mol "
+                         f"(corrected ΔG = {binding_energy:.2f})")
 
             mm_gbsa_scores[rec.compound_id] = binding_energy
             log.info(f"    ΔG ≈ {binding_energy:.2f} kcal/mol  "
