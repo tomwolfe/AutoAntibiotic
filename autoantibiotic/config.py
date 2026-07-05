@@ -139,9 +139,10 @@ class PipelineConfig:
     obabel_timeout_s: int = 60
     use_gnina: bool = False
     gnina_binary_path: str = "gnina"
-    ensemble_mode: bool = False
+    ensemble_mode: bool = True
     ensemble_structures_dir: Optional[Path] = None
-    consensus_scoring_method: str = "mean"
+    default_ensemble_pdb_ids: List[str] = field(default_factory=lambda: ["3QPD", "6TKO", "4CJN"])
+    consensus_scoring_method: str = "rank"
     flexible_docking: bool = False
     flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
     flexible_residues_active: List[str] = field(default_factory=lambda: ["SER403"])

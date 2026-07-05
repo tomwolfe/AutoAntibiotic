@@ -268,6 +268,60 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
     return ca_coords.mean(axis=0)
 
 
+def _build_ensemble_targets(
+    pdb_files: List[str],
+    work_dir: str,
+    fallback_allocenter: np.ndarray,
+    fallback_actcenter: np.ndarray,
+    deps: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Prepare a list of PDB files as ensemble docking targets.
+
+    Each PDB is cleaned to PDBQT and its binding-site centroids are
+    computed.  If centroid computation fails for a structure the
+    primary-target centroids are used as fallback.
+
+    Returns a list of dicts with keys ``pdbqt``, ``allosteric_center``,
+    and ``active_center``.
+    """
+    ensemble_targets: List[Dict[str, Any]] = []
+    for idx, pdb_path in enumerate(pdb_files):
+        stem = os.path.splitext(os.path.basename(pdb_path))[0]
+        if pdb_path.endswith(".pdbqt"):
+            out_pdbqt = os.path.join(work_dir, f"ens_{stem}.pdbqt")
+            if pdb_path != out_pdbqt:
+                shutil.copy2(pdb_path, out_pdbqt)
+            cleaned_for_centroids = pdb_path.replace(".pdbqt", ".pdb")
+            if not os.path.exists(cleaned_for_centroids):
+                cleaned_for_centroids = None
+        else:
+            out_pdbqt = clean_pdb_structure(
+                pdb_path,
+                os.path.join(work_dir, f"ens_{stem}.pdb"),
+                deps=deps,
+            )
+            cleaned_for_centroids = out_pdbqt.replace(".pdbqt", ".pdb")
+
+        try:
+            if cleaned_for_centroids and os.path.exists(cleaned_for_centroids):
+                ens_allocenter = compute_residue_centroid(cleaned_for_centroids, CONFIG.allosteric_residues)
+                ens_actcenter = compute_residue_centroid(cleaned_for_centroids, CONFIG.active_site_residues)
+            else:
+                raise ValueError("No cleaned PDB available for centroid computation")
+        except (ValueError, Exception) as exc:
+            log.warning(f"  ⚠  Centroid computation failed for {pdb_path}: {exc}. "
+                        f"Using primary target centers.")
+            ens_allocenter = fallback_allocenter
+            ens_actcenter = fallback_actcenter
+
+        ensemble_targets.append({
+            "pdbqt": out_pdbqt,
+            "allosteric_center": ens_allocenter,
+            "active_center": ens_actcenter,
+        })
+    return ensemble_targets
+
+
 def prepare_targets(
     pdb_dir: str, work_dir: str, deps: Dict[str, Any],
     water_results: Any = None,
@@ -375,53 +429,39 @@ def prepare_targets(
     }
 
     # ── Ensemble mode: load additional receptor structures ──
-    if CONFIG.ensemble_mode and CONFIG.ensemble_structures_dir is not None:
-        ens_dir = CONFIG.ensemble_structures_dir
-        if not os.path.isdir(str(ens_dir)):
-            log.warning(f"  ⚠  Ensemble directory '{ens_dir}' not found. Skipping ensemble mode.")
-        else:
-            pdb_files = sorted(
-                [os.path.join(str(ens_dir), f) for f in os.listdir(str(ens_dir))
-                 if f.endswith((".pdb", ".pdbqt"))]
-            )
-            if not pdb_files:
-                log.warning(f"  ⚠  No PDB/PDBQT files found in '{ens_dir}'. Skipping ensemble.")
+    if CONFIG.ensemble_mode:
+        if CONFIG.ensemble_structures_dir is not None:
+            ens_dir = CONFIG.ensemble_structures_dir
+            if not os.path.isdir(str(ens_dir)):
+                log.warning(f"  ⚠  Ensemble directory '{ens_dir}' not found. Skipping ensemble mode.")
             else:
-                log.info(f"  Ensemble mode: loading {len(pdb_files)} structure(s) from '{ens_dir}'.")
-                ensemble_targets: List[Dict[str, Any]] = []
-                for idx, pdb_path in enumerate(pdb_files):
-                    stem = os.path.splitext(os.path.basename(pdb_path))[0]
-                    if pdb_path.endswith(".pdbqt"):
-                        out_pdbqt = os.path.join(work_dir, f"ens_{stem}.pdbqt")
-                        if pdb_path != out_pdbqt:
-                            shutil.copy2(pdb_path, out_pdbqt)
-                        cleaned_for_centroids = pdb_path.replace(".pdbqt", ".pdb")
-                        if not os.path.exists(cleaned_for_centroids):
-                            cleaned_for_centroids = cleaned_pdb
-                    else:
-                        out_pdbqt = clean_pdb_structure(
-                            pdb_path,
-                            os.path.join(work_dir, f"ens_{stem}.pdb"),
-                            deps=deps,
-                        )
-                        cleaned_for_centroids = out_pdbqt.replace(".pdbqt", ".pdb")
-
-                    try:
-                        ens_allocenter = compute_residue_centroid(cleaned_for_centroids, CONFIG.allosteric_residues)
-                        ens_actcenter = compute_residue_centroid(cleaned_for_centroids, CONFIG.active_site_residues)
-                    except (ValueError, Exception) as exc:
-                        log.warning(f"  ⚠  Centroid computation failed for {pdb_path}: {exc}. "
-                                    f"Using primary target centers.")
-                        ens_allocenter = allosteric_center
-                        ens_actcenter = active_center
-
-                    ensemble_targets.append({
-                        "pdbqt": out_pdbqt,
-                        "allosteric_center": ens_allocenter,
-                        "active_center": ens_actcenter,
-                    })
+                pdb_files = sorted(
+                    [os.path.join(str(ens_dir), f) for f in os.listdir(str(ens_dir))
+                     if f.endswith((".pdb", ".pdbqt"))]
+                )
+                if not pdb_files:
+                    log.warning(f"  ⚠  No PDB/PDBQT files found in '{ens_dir}'. Skipping ensemble.")
+                else:
+                    log.info(f"  Ensemble mode: loading {len(pdb_files)} structure(s) from '{ens_dir}'.")
+                    ensemble_targets = _build_ensemble_targets(pdb_files, work_dir, allosteric_center, active_center, deps)
+                    result["PBP2a_ensemble"] = ensemble_targets
+                    log.info(f"  Ensemble loaded: {len(ensemble_targets)} structures.")
+        else:
+            pdb_ids = CONFIG.default_ensemble_pdb_ids
+            log.info(f"  Ensemble mode: fetching {len(pdb_ids)} default PDB structures {pdb_ids}…")
+            pdb_files: List[str] = []
+            for pdb_id in pdb_ids:
+                try:
+                    pdb_path = fetch_structure(pdb_id, pdb_dir)
+                    pdb_files.append(pdb_path)
+                except Exception as exc:
+                    log.warning(f"  ⚠  Failed to fetch PDB {pdb_id}: {exc}. Skipping.")
+            if pdb_files:
+                ensemble_targets = _build_ensemble_targets(pdb_files, work_dir, allosteric_center, active_center, deps)
                 result["PBP2a_ensemble"] = ensemble_targets
-                log.info(f"  Ensemble loaded: {len(ensemble_targets)} structures.")
+                log.info(f"  Ensemble loaded: {len(ensemble_targets)} structures from fetched PDBs.")
+            else:
+                log.warning("  ⚠  No ensemble structures could be fetched. Running without ensemble.")
 
     log.info("  Cleaning Human Trypsin (1UTN)…")
     tryp_pdbqt = clean_pdb_structure(

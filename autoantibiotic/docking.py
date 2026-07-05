@@ -467,6 +467,37 @@ def dock_compound(
     return energy
 
 
+def _compute_rank_consensus(energies_list: List[List[float]]) -> List[float]:
+    """Rank-based consensus scoring across multiple receptors.
+
+    For each receptor, compounds are ranked by binding energy (lower =
+    better, rank 1 = best).  The ranks are then averaged across all
+    receptors.
+
+    Args:
+        energies_list: ``[receptor_idx][compound_idx]`` matrix of
+            docking energies.  All inner lists must have the same length
+            and contain no ``None`` values.
+
+    Returns:
+        Average rank for each compound (lower is better).
+    """
+    if not energies_list or not energies_list[0]:
+        return []
+
+    n_compounds = len(energies_list[0])
+    rank_sums = [0.0] * n_compounds
+
+    for receptor_energies in energies_list:
+        indexed = list(enumerate(receptor_energies))
+        indexed.sort(key=lambda x: x[1])
+        for rank, (orig_idx, _) in enumerate(indexed, 1):
+            rank_sums[orig_idx] += rank
+
+    n_receptors = len(energies_list)
+    return [s / n_receptors for s in rank_sums]
+
+
 def dock_compound_ensemble(
     record: CompoundRecord,
     receptor_pdbqt_list: List[str],
@@ -479,7 +510,14 @@ def dock_compound_ensemble(
 
     Each receptor structure is docked independently.  The final score
     is aggregated via ``CONFIG.consensus_scoring_method`` ("mean",
-    "median", or "min").
+    "median", "min", or "rank").
+
+    .. note::
+       The ``"rank"`` method requires energies across *all* compounds
+       to compute per-receptor rankings.  When called for a single
+       compound, rank consensus cannot be computed and ``mean`` is
+       returned as a fallback.  Use :func:`_compute_rank_consensus`
+       in batch mode for proper rank-based consensus.
 
     Args:
         record: Compound record to dock.
@@ -509,6 +547,8 @@ def dock_compound_ensemble(
         return min(energies)
     elif method == "median":
         return statistics.median(energies)
+    elif method == "rank":
+        return statistics.mean(energies)
     else:
         return statistics.mean(energies)
 
@@ -981,6 +1021,62 @@ def _build_flexible_ensemble(
     return flex_list, [np.zeros(3)] * len(flex_list)
 
 
+def _apply_consensus_scoring(
+    records: List[CompoundRecord],
+    receptor_energies: List[List[Optional[float]]],
+    attr_name: str = "pb2pa_allosteric_energy",
+) -> None:
+    """Compute consensus score per compound from per-receptor energies.
+
+    Supports methods ``"mean"``, ``"median"``, ``"min"``, and ``"rank"``.
+
+    *receptor_energies* is ``[receptor_idx][compound_idx]``, matching
+    the order of *records*.
+    """
+    n_rec = len(receptor_energies)
+    if n_rec == 0:
+        return
+
+    method = CONFIG.consensus_scoring_method
+    n_compounds = len(records)
+
+    if method == "rank":
+        valid_indices: List[int] = []
+        valid_by_receptor: List[List[float]] = [[] for _ in range(n_rec)]
+        for j in range(n_compounds):
+            energies = [receptor_energies[i][j] for i in range(n_rec)]
+            if all(e is not None for e in energies):
+                valid_indices.append(j)
+                for i, e in enumerate(energies):
+                    valid_by_receptor[i].append(e)
+
+        if valid_by_receptor and valid_by_receptor[0]:
+            avg_ranks = _compute_rank_consensus(valid_by_receptor)
+            for orig_idx, avg_rank in zip(valid_indices, avg_ranks):
+                setattr(records[orig_idx], attr_name, avg_rank)
+            for j in range(n_compounds):
+                if j not in valid_indices:
+                    setattr(records[j], attr_name, None)
+        else:
+            for record in records:
+                setattr(record, attr_name, None)
+        return
+
+    # mean / median / min
+    for j, record in enumerate(records):
+        energies = [receptor_energies[i][j] for i in range(n_rec)]
+        valid = [e for e in energies if e is not None]
+        if not valid:
+            setattr(record, attr_name, None)
+            continue
+        if method == "min":
+            setattr(record, attr_name, min(valid))
+        elif method == "median":
+            setattr(record, attr_name, statistics.median(valid))
+        else:
+            setattr(record, attr_name, statistics.mean(valid))
+
+
 def _screen_ensemble(
     records: List[CompoundRecord],
     targets: Dict[str, Any],
@@ -988,23 +1084,34 @@ def _screen_ensemble(
     cache: _CacheLike = None,
     use_cache: bool = False,
 ) -> List[CompoundRecord]:
-    """Ensemble docking against multiple receptor structures with consensus scoring."""
+    """Ensemble docking against multiple receptor structures with consensus scoring.
+
+    Docks all compounds against each receptor independently, then
+    computes a consensus score across receptors using the configured
+    ``CONFIG.consensus_scoring_method`` ("mean", "min", "median", or
+    "rank").
+    """
     ensemble_targets = targets["PBP2a_ensemble"]
     receptor_pdbqt_list = [t["pdbqt"] for t in ensemble_targets]
     allosteric_center_list = [t["allosteric_center"] for t in ensemble_targets]
     active_center_list = [t["active_center"] for t in ensemble_targets]
+    n_rec = len(receptor_pdbqt_list)
 
-    allosteric_results = _parallel_dock_ensemble(
-        [(r.compound_id, r.smiles) for r in records],
-        receptor_pdbqt_list, allosteric_center_list,
-        CONFIG.allosteric_box_size, work_dir, "allosteric",
-        cache=cache, use_cache=use_cache,
-    )
+    log.info(f"  Ensemble docking all compounds against {n_rec} structures (allosteric site)…")
+    items = [(r.compound_id, r.smiles) for r in records]
 
-    cid_to_record = {r.compound_id: r for r in records}
-    for cid, energy in allosteric_results:
-        if cid in cid_to_record:
-            cid_to_record[cid].pb2pa_allosteric_energy = energy
+    # Phase 1: dock all compounds against each receptor separately
+    receptor_energies: List[List[Optional[float]]] = []
+    for i, (rec_pdbqt, center) in enumerate(zip(receptor_pdbqt_list, allosteric_center_list)):
+        results = _parallel_dock(
+            items, rec_pdbqt, center, CONFIG.allosteric_box_size,
+            work_dir, f"ens_alloc_{i}",
+            cache=cache, use_cache=use_cache,
+        )
+        receptor_energies.append([e for _, e in results])
+
+    # Phase 2: consensus scoring across receptors
+    _apply_consensus_scoring(records, receptor_energies)
 
     n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
     log.info(f"  Ensemble allosteric docking complete: {n_scored}/{len(records)} scored.")
@@ -1014,16 +1121,17 @@ def _screen_ensemble(
     top50 = scored[:CONFIG.top_n_for_active]
 
     if top50:
-        log.info(f"  Ensemble docking top {len(top50)} against active site…")
-        active_results = _parallel_dock_ensemble(
-            [(r.compound_id, r.smiles) for r in top50],
-            receptor_pdbqt_list, active_center_list,
-            CONFIG.active_box_size, work_dir, "active",
-            cache=cache, use_cache=use_cache,
-        )
-        for cid, energy in active_results:
-            if cid in cid_to_record:
-                cid_to_record[cid].pb2pa_active_energy = energy
+        log.info(f"  Ensemble docking top {len(top50)} against active site ({n_rec} structures)…")
+        active_items = [(r.compound_id, r.smiles) for r in top50]
+        active_receptor_energies: List[List[Optional[float]]] = []
+        for i, (rec_pdbqt, center) in enumerate(zip(receptor_pdbqt_list, active_center_list)):
+            results = _parallel_dock(
+                active_items, rec_pdbqt, center, CONFIG.active_box_size,
+                work_dir, f"ens_act_{i}",
+                cache=cache, use_cache=use_cache,
+            )
+            active_receptor_energies.append([e for _, e in results])
+        _apply_consensus_scoring(top50, active_receptor_energies, "pb2pa_active_energy")
 
     return scored[:CONFIG.top_n]
 
@@ -1284,6 +1392,8 @@ def screen_library(
         ensemble_active = ensemble_targets is not None and len(ensemble_targets) > 0
 
         if ensemble_active:
+            if CONFIG.flexible_docking:
+                log.info("  Both ensemble and flexible-docking enabled; ensemble takes priority.")
             log.info(f"  Ensemble docking (method={CONFIG.consensus_scoring_method}) against {len(ensemble_targets)} structures…")
             top_candidates = _screen_ensemble(
                 records, targets, work_dir, cache=cache, use_cache=use_cache,
