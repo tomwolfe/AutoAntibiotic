@@ -6,7 +6,13 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from autoantibiotic.analysis import compute_pharmacophore_score, compute_selectivity_index
-from autoantibiotic.library_gen import _validate_mol, generate_candidate_library, apply_filters
+from autoantibiotic.library_gen import (
+    _compute_strain_energy,
+    _setup_reactive_catalog,
+    _validate_mol,
+    apply_filters,
+    generate_candidate_library,
+)
 from autoantibiotic.io_utils import parse_vina_energy
 from tests.conftest import BETA_LACTAM_SMARTS
 
@@ -211,3 +217,85 @@ class TestPharmacophoreScore:
         score = compute_pharmacophore_score(ethanol, acetic_acid)
         assert score is not None
         assert 0.0 <= score <= 1.0
+
+
+class TestReactiveGroupFilter:
+    """BRENK-based reactive / unstable group filter flags known alerts."""
+
+    @pytest.fixture(scope="class")
+    def reactive_catalog(self):
+        cat = _setup_reactive_catalog()
+        if cat is None:
+            pytest.skip("BRENK catalog not available in this RDKit build")
+        return cat
+
+    def test_michael_acceptor_flagged(self, reactive_catalog) -> None:
+        """Acrylamide (Michael acceptor) should trigger BRENK alerts."""
+        mol = Chem.MolFromSmiles("C=CC(=O)N")
+        assert mol is not None
+        matches = reactive_catalog.GetMatches(mol)
+        assert len(matches) > 0, (
+            "Acrylamide should be flagged by BRENK as a reactive Michael acceptor"
+        )
+
+    def test_benzene_not_flagged(self, reactive_catalog) -> None:
+        """Simple benzene is not a reactive group."""
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        assert mol is not None
+        matches = reactive_catalog.GetMatches(mol)
+        assert len(matches) == 0
+
+    def test_alkyl_halide_flagged(self, reactive_catalog) -> None:
+        """Methyl chloride should be flagged as an alkylating agent."""
+        mol = Chem.MolFromSmiles("CCl")
+        assert mol is not None
+        matches = reactive_catalog.GetMatches(mol)
+        assert len(matches) > 0, (
+            "Methyl chloride should be flagged by BRENK as reactive"
+        )
+
+
+class TestStrainEnergy:
+    """``_compute_strain_energy`` correctly measures conformational strain."""
+
+    def test_low_strain_linear_alkane(self) -> None:
+        """Linear alkanes have negligible strain."""
+        mol = Chem.MolFromSmiles("CCCCCCCCCC")
+        assert mol is not None
+        strain = _compute_strain_energy(mol)
+        assert strain is not None
+        assert strain < 5.0, f"Decane strain {strain:.2f} should be low"
+
+    def test_low_strain_benzene(self) -> None:
+        """Benzene is planar and aromatic — low strain."""
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        assert mol is not None
+        strain = _compute_strain_energy(mol)
+        assert strain is not None
+        assert strain < 10.0, f"Benzene strain {strain:.2f} should be under 10"
+
+    def test_high_strain_cubane(self) -> None:
+        """Cubane is a classic highly strained molecule."""
+        mol = Chem.MolFromSmiles("C12C3C4C1C5C2C3C45")
+        assert mol is not None
+        strain = _compute_strain_energy(mol)
+        assert strain is not None
+        # Cubane strain energy is known to be ~7 kcal/mol per CH,
+        # well above 10 kcal/mol total.
+        assert strain > 10.0, f"Cubane strain {strain:.2f} should exceed 10 kcal/mol"
+
+    def test_strain_above_threshold_filtered(self) -> None:
+        """Strained molecules should be filtered by apply_filters."""
+        cubane = Chem.MolFromSmiles("C12C3C4C1C5C2C3C45")
+        assert cubane is not None
+
+        from autoantibiotic.config import CONFIG, CompoundRecord
+        original_threshold = CONFIG.strain_energy_threshold
+        CONFIG.strain_energy_threshold = 5.0  # lower threshold to ensure failure
+        try:
+            strain = _compute_strain_energy(cubane)
+            assert strain is not None and strain > 5.0, (
+                f"Cubane strain {strain:.2f} should exceed lowered threshold 5.0"
+            )
+        finally:
+            CONFIG.strain_energy_threshold = original_threshold

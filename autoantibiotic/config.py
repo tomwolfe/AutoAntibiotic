@@ -213,6 +213,14 @@ class PipelineConfig:
     """Enable MM-GBSA rescoring of top docking poses (requires OpenMM + AmberTools)."""
 
     # High-Impact Scientific Upgrades (Phase 8)
+    # Interaction Fingerprint (IFP) filtering
+    key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["TYR159", "ALA237", "MET241"])
+    key_interaction_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
+    min_key_interactions: int = 1
+
+    # Strain energy filtering
+    strain_energy_threshold: float = 10.0
+
     flexible_docking: bool = False
     """If True, side-chain flexibility is modelled for key binding-site residues."""
     flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])

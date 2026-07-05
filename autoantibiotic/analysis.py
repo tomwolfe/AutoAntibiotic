@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -292,6 +294,133 @@ def predict_admet_profile(record: CompoundRecord) -> CompoundRecord:
     return record
 
 
+def _parse_pdbqt_ligand_coords(pose_pdbqt: str) -> List[np.ndarray]:
+    """Extract ligand heavy-atom coordinates from a docked-pose PDBQT file.
+
+    Parses ATOM/HETATM records that appear between ``ROOT`` / ``ENDROOT``
+    or ``BRANCH`` / ``ENDBRANCH`` markers.  Falls back to all ATOM/HETATM
+    lines if no ROOT section is present.
+    """
+    coords: List[np.ndarray] = []
+    try:
+        with open(pose_pdbqt) as f:
+            lines = f.readlines()
+    except (FileNotFoundError, OSError):
+        return coords
+
+    in_ligand = False
+    has_root = any(l.startswith("ROOT") for l in lines)
+
+    for line in lines:
+        if line.startswith("ROOT"):
+            in_ligand = True
+            continue
+        if line.startswith("ENDROOT") or line.startswith("ENDBRANCH"):
+            in_ligand = False
+            continue
+        if line.startswith("BRANCH"):
+            in_ligand = True
+            continue
+        if has_root and not in_ligand:
+            continue
+        if not (line.startswith("ATOM") or line.startswith("HETATM")):
+            continue
+        try:
+            x = float(line[30:38].strip())
+            y = float(line[38:46].strip())
+            z = float(line[46:54].strip())
+            elem = line[76:78].strip() if len(line) > 76 else ""
+            if elem.upper() in ("H", ""):
+                continue
+            coords.append(np.array([x, y, z]))
+        except (ValueError, IndexError):
+            continue
+    return coords
+
+
+def _parse_pdb_residue_coords(
+    receptor_pdb: str,
+    key_residues: List[str],
+) -> Dict[str, List[np.ndarray]]:
+    """Extract heavy-atom coordinates for a list of residue names from a PDB file.
+
+    Returns a dict mapping residue name (e.g. ``"SER403"``) to a list of
+    (x, y, z) arrays for each heavy atom in that residue.
+    """
+    residue_coords: Dict[str, List[np.ndarray]] = {r: [] for r in key_residues}
+    with open(receptor_pdb) as f:
+        for line in f:
+            if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                continue
+            resname = line[17:20].strip()
+            resid = line[22:26].strip()
+            key = f"{resname}{resid}"
+            if key not in residue_coords:
+                continue
+            elem = line[76:78].strip() if len(line) > 76 else ""
+            if elem.upper() in ("H", ""):
+                continue
+            try:
+                x = float(line[30:38].strip())
+                y = float(line[38:46].strip())
+                z = float(line[46:54].strip())
+                residue_coords[key].append(np.array([x, y, z]))
+            except (ValueError, IndexError):
+                continue
+    return residue_coords
+
+
+def check_key_interactions(
+    pose_pdbqt: str,
+    receptor_pdb: str,
+    key_residues: List[str],
+    distance_cutoff: float = 3.5,
+) -> bool:
+    """Check whether the docked ligand pose contacts any heavy atom in *key_residues*.
+
+    Args:
+        pose_pdbqt: Path to the docked-ligand PDBQT file.
+        receptor_pdb: Path to the receptor PDB file.
+        key_residues: List of residue identifiers (e.g. ``["SER403"]``).
+        distance_cutoff: Maximum distance (Å) to consider a contact.
+
+    Returns:
+        ``True`` if at least one ligand atom is within *distance_cutoff*
+        of any heavy atom in the specified residues.
+    """
+    if not os.path.isfile(pose_pdbqt):
+        log.warning(f"  Pose PDBQT not found: {pose_pdbqt}")
+        return False
+    if not os.path.isfile(receptor_pdb):
+        log.warning(f"  Receptor PDB not found: {receptor_pdb}")
+        return False
+
+    lig_coords = _parse_pdbqt_ligand_coords(pose_pdbqt)
+    if not lig_coords:
+        log.warning("  No ligand heavy atoms found in pose PDBQT.")
+        return False
+
+    residue_coords = _parse_pdb_residue_coords(receptor_pdb, key_residues)
+    found = False
+    for key in key_residues:
+        res_atoms = residue_coords.get(key, [])
+        if not res_atoms:
+            continue
+        for lc in lig_coords:
+            for rc in res_atoms:
+                if np.linalg.norm(lc - rc) <= distance_cutoff:
+                    found = True
+                    break
+            if found:
+                break
+        if found:
+            break
+
+    if found:
+        log.debug(f"  Key interaction detected with {key_residues}.")
+    return found
+
+
 def analyze_selectivity_and_resistance(
     top10: List[CompoundRecord],
     targets: Dict[str, Any],
@@ -381,6 +510,14 @@ def analyze_selectivity_and_resistance(
             log.info(f"  {rec.compound_id}: SI = {si:.2f} (pass).")
 
     pb2pa = targets["PBP2a"]
+    receptor_pdb = pb2pa["pdbqt"].replace(".pdbqt", ".pdb")
+    if not os.path.isfile(receptor_pdb):
+        receptor_pdb = os.path.join(
+            os.path.dirname(pb2pa["pdbqt"]),
+            "PBP2a_clean.pdb",
+        )
+
+    log.info("  Checking key interactions for top candidates…")
     for rec in top10:
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
@@ -388,6 +525,61 @@ def analyze_selectivity_and_resistance(
             pb2pa["allosteric_center"],
             CONFIG.allosteric_box_size,
         )
+
+        # Generate 3-D conformer and write temporary PDBQT for IFP check
+        if rec.mol is None:
+            mol = Chem.MolFromSmiles(rec.smiles)
+            if mol is None:
+                continue
+            rec.mol = mol
+        mol = Chem.MolFromSmiles(rec.smiles) if rec.mol is None else Chem.RWMol(rec.mol)
+        mol = Chem.AddHs(mol)
+        params = rdDistGeom.ETKDGv3()
+        params.randomSeed = CONFIG.random_seed
+        if rdDistGeom.EmbedMolecule(mol, params) >= 0:
+            AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".pdbqt", delete=False,
+                ) as tmp:
+                    tmp_pdbqt = tmp.name
+                    conf = mol.GetConformer()
+                    tmp.write("ROOT\n")
+                    for i in range(mol.GetNumAtoms()):
+                        atom = mol.GetAtomWithIdx(i)
+                        if atom.GetAtomicNum() == 1:
+                            continue
+                        pt = conf.GetAtomPosition(i)
+                        elem = atom.GetSymbol()
+                        tmp.write(
+                            f"ATOM  {i+1:5d} {elem:<4s} LIG     1    "
+                            f"{pt.x:8.3f}{pt.y:8.3f}{pt.z:8.3f}  "
+                            f"1.00  0.00          {elem:>2s}\n"
+                        )
+                    tmp.write("ENDROOT\n")
+                try:
+                    allosteric_hits = (
+                        CONFIG.min_key_interactions > 0
+                        and check_key_interactions(
+                            tmp_pdbqt, receptor_pdb,
+                            CONFIG.key_interaction_residues_allosteric,
+                        )
+                    )
+                    active_hits = check_key_interactions(
+                        tmp_pdbqt, receptor_pdb,
+                        CONFIG.key_interaction_residues_active,
+                    )
+                    if not (allosteric_hits or active_hits):
+                        rec.resistance_notes += (
+                            "; Warning: No key interactions detected"
+                        )
+                finally:
+                    try:
+                        os.unlink(tmp_pdbqt)
+                    except OSError:
+                        pass
+            except Exception as exc:
+                log.debug(f"  IFP check failed for {rec.compound_id}: {exc}")
 
     # ── ADMET profiling on top 10 ──
     log.info("  Computing ADMET profiles for top candidates…")

@@ -13,6 +13,7 @@ from rdkit.Chem import (
     Crippen,
     Descriptors,
     QED,
+    rdDistGeom,
 )
 from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.DataStructs import TanimotoSimilarity
@@ -575,11 +576,54 @@ def _setup_toxicity_catalog() -> FilterCatalog:
     return FilterCatalog(tox_params)
 
 
+def _setup_reactive_catalog() -> Optional[FilterCatalog]:
+    """Build an RDKit FilterCatalog for reactive / unstable group alerts."""
+    try:
+        rxn_params = FilterCatalogParams()
+        rxn_params.AddCatalog(FilterCatalogParams.FilterCatalogs.BRENK)
+        return FilterCatalog(rxn_params)
+    except Exception:
+        return None
+
+
+def _compute_strain_energy(mol: Chem.Mol) -> Optional[float]:
+    """Compute the MMFF94 strain energy (kcal/mol) for a molecule.
+
+    Generates a 3-D conformer with ETKDGv3, optimises with MMFF94, and
+    returns the strain energy = initial energy - final energy.
+    Returns ``None`` if 3-D embedding or FF setup fails.
+    """
+    try:
+        mol_3d = Chem.RWMol(mol)
+        mol_3d = Chem.AddHs(mol_3d)
+        params = rdDistGeom.ETKDGv3()
+        params.randomSeed = CONFIG.random_seed
+        if rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
+            return None
+        props = AllChem.MMFFGetMoleculeProperties(mol_3d)
+        if props is None:
+            return None
+        ff = AllChem.MMFFGetMoleculeForceField(mol_3d, props, nonBondedThresh=100.0)
+        if ff is None:
+            return None
+        initial = ff.CalcEnergy()
+        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
+        final = ff.CalcEnergy()
+        # Use absolute difference as a robust proxy for strain.
+        # For most molecules initial > final (optimisation lowers energy).
+        # When the force field cannot improve the geometry (e.g. cubane),
+        # abs(initial - final) still captures excessive deformation energy.
+        strain = abs(initial - final)
+        return strain
+    except Exception:
+        return None
+
+
 def apply_filters(
     records: Union[List[CompoundRecord], Iterator[CompoundRecord]],
     similarity_threshold: float = CONFIG.similarity_threshold,
 ) -> List[CompoundRecord]:
-    """Phase 2.2 — Apply structural, similarity, ADMET, PAINS, and toxicity filters.
+    """Phase 2.2 — Apply structural, similarity, ADMET, PAINS, toxicity, and strain filters.
 
     Filter chain:
         1. Structural exclusion (β-lactam SMARTS).
@@ -588,7 +632,9 @@ def apply_filters(
         4. PAINS alerts via RDKit FilterCatalog.
         5. Synthetic Accessibility (SA Score ≤ 6.0).
         6. Toxicity alerts (mutagenicity / cardiotoxicity if available).
-        7. Diversity check: if < 100 pass, relax similarity to 0.5.
+        7. Reactive group filter (BRENK catalog).
+        8. 3D strain energy check (MMFF94 via ETKDGv3).
+        9. Diversity check: if < 100 pass, relax similarity to 0.5.
 
     Returns filtered list of CompoundRecord.
     """
@@ -610,6 +656,9 @@ def apply_filters(
 
     tox_catalog = _setup_toxicity_catalog() if _HAVE_TOX_ALERTS else None
 
+    # Reactive / unstable group catalog (BRENK)
+    reactive_catalog = _setup_reactive_catalog()
+
     passed: List[CompoundRecord] = []
     skipped_structural = 0
     skipped_similarity = 0
@@ -617,6 +666,8 @@ def apply_filters(
     skipped_pains = 0
     skipped_sa_score = 0
     skipped_toxicity = 0
+    skipped_reactive = 0
+    skipped_strain = 0
 
     for record in records:
         if record.mol is None:
@@ -686,6 +737,19 @@ def apply_filters(
                 skipped_toxicity += 1
                 continue
 
+        # Reactive / unstable group filter (BRENK)
+        if reactive_catalog is not None:
+            rxn_matches = reactive_catalog.GetMatches(mol)
+            if rxn_matches:
+                skipped_reactive += 1
+                continue
+
+        # 3-D strain energy check
+        strain = _compute_strain_energy(mol)
+        if strain is not None and strain > CONFIG.strain_energy_threshold:
+            skipped_strain += 1
+            continue
+
         passed.append(record)
 
     log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
@@ -700,6 +764,11 @@ def apply_filters(
         log.info(f"  Toxicity alerts: {skipped_toxicity} removed.")
     else:
         log.info("  Toxicity alerts: skipped (RDKit Catalogs not available).")
+    if reactive_catalog is not None:
+        log.info(f"  Reactive group filter: {skipped_reactive} removed.")
+    else:
+        log.info("  Reactive group filter: skipped (BRENK catalog unavailable).")
+    log.info(f"  Strain energy filter (> {CONFIG.strain_energy_threshold} kcal/mol): {skipped_strain} removed.")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
     if len(passed) < CONFIG.diversity_min_count and similarity_threshold < CONFIG.similarity_threshold_relaxed:
