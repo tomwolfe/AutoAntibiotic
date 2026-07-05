@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
 import os
 import random
 import re
-import sqlite3
 import subprocess
 import time
 import warnings
@@ -106,132 +104,40 @@ def ensure_output_dir() -> None:
     CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
 
 
-# ── SQLite CacheManager (Phase 2.1) ────────────────────────────────
+# ── Simple JSON cache ──────────────────────────────────────────────
 
 
-class CacheManager:
-    """Lightweight SQLite-backed cache for docking results.
+def make_cache_key(smiles: str, tag: str) -> str:
+    """Generate a deterministic cache key from a SMILES string and a tag.
 
-    Dict-like interface for backward compatibility:
-        ``key in cache``, ``cache[key]``, ``cache[key] = value``.
-
-    Automatically migrates existing ``cache.json`` on first use.
+    Uses MD5 hash of the SMILES (fast, not security-sensitive) combined
+    with a human-readable tag for debugging.
     """
-
-    def __init__(self, db_path: str) -> None:
-        ensure_output_dir()
-        self._db_path = db_path
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS docking_cache (
-                cache_key TEXT PRIMARY KEY,
-                energy REAL,
-                smiles TEXT,
-                tag TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        self._conn.commit()
-        self._migrate_from_json_if_present()
-
-    def _migrate_from_json_if_present(self) -> None:
-        json_path = CONFIG.output_dir / "cache.json"
-        if not json_path.exists():
-            return
-        try:
-            with open(json_path) as f:
-                old_cache = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            log.warning("  ⚠  cache.json corrupt; skipping migration.")
-            return
-
-        count = 0
-        for key, value in old_cache.items():
-            smiles, tag = CacheManager._parse_cache_key(key)
-            try:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO docking_cache (cache_key, energy, smiles, tag) VALUES (?, ?, ?, ?)",
-                    (key, value, smiles, tag),
-                )
-                count += 1
-            except sqlite3.Error:
-                pass
-        self._conn.commit()
-        json_path.rename(json_path.with_suffix(".json.migrated"))
-        log.info(f"  Migrated {count} entries from cache.json → {self._db_path}")
-
-    @staticmethod
-    def _parse_cache_key(key: str) -> tuple:
-        parts = key.rsplit("_", 1)
-        tag = parts[-1] if len(parts) > 1 else "unknown"
-        return parts[0] if len(parts) > 1 else key, tag
-
-    def make_key(self, smiles: str, tag: str) -> str:
-        md5 = hashlib.md5(smiles.encode("utf-8")).hexdigest()
-        return f"{md5}_{tag}"
-
-    def __contains__(self, key: str) -> bool:
-        cur = self._conn.execute(
-            "SELECT 1 FROM docking_cache WHERE cache_key = ?", (key,)
-        )
-        return cur.fetchone() is not None
-
-    def __getitem__(self, key: str) -> Optional[float]:
-        cur = self._conn.execute(
-            "SELECT energy FROM docking_cache WHERE cache_key = ?", (key,)
-        )
-        row = cur.fetchone()
-        return row[0] if row else None
-
-    def __setitem__(self, key: str, value: Optional[float]) -> None:
-        if value is None:
-            return
-        smiles, tag = CacheManager._parse_cache_key(key)
-        self._conn.execute(
-            "INSERT OR REPLACE INTO docking_cache (cache_key, energy, smiles, tag) VALUES (?, ?, ?, ?)",
-            (key, value, smiles, tag),
-        )
-        self._conn.commit()
-
-    def __len__(self) -> int:
-        cur = self._conn.execute("SELECT COUNT(*) FROM docking_cache")
-        return cur.fetchone()[0]
-
-    def items(self) -> List[tuple]:
-        cur = self._conn.execute("SELECT cache_key, energy FROM docking_cache")
-        return cur.fetchall()
-
-    def close(self) -> None:
-        self._conn.close()
-
-    def get(self, key: str, default: Optional[float] = None) -> Optional[float]:
-        val = self[key]
-        return val if val is not None else default
+    md5 = hashlib.md5(smiles.encode("utf-8")).hexdigest()
+    return f"{md5}_{tag}"
 
 
-# ── Legacy JSON cache functions (kept for backward compat) ─────────
+def load_json_cache(cache_path: Path) -> Dict[str, float]:
+    """Load a JSON-formatted cache file from disk.
 
-
-def load_cache() -> Dict[str, float]:
-    """Legacy JSON cache loader — prefer :class:`CacheManager`."""
-    json_path = CONFIG.output_dir / "cache.json"
-    if json_path.exists():
-        try:
-            with open(json_path) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            log.warning("  ⚠  Cache file corrupt; starting fresh.")
-    return {}
-
-
-def save_cache(cache: Dict[str, float]) -> None:
-    """Legacy JSON cache writer — prefer :class:`CacheManager`."""
-    ensure_output_dir()
+    Returns an empty dict if the file does not exist or is corrupted.
+    """
+    if not cache_path.exists():
+        return {}
     try:
-        with open(CONFIG.output_dir / "cache.json", "w") as f:
-            json.dump(cache, f, indent=2, sort_keys=True)
+        with open(cache_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        log.warning("  ⚠  Cache file corrupt; starting fresh.")
+        return {}
+
+
+def save_json_cache(cache_path: Path, data: Dict[str, float]) -> None:
+    """Persist a cache dict to disk as JSON."""
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(cache_path, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
     except (OSError, IOError):
         log.warning("  ⚠  Failed to save cache file — pipeline will continue without persistence.")
 
@@ -479,7 +385,7 @@ def verify_dependencies() -> Dict[str, Any]:
             )
             status[bin_name] = True
             log.info(f"  ✓  {bin_name} binary found on PATH.")
-        except (RuntimeError, OSError):
+        except (RuntimeError, OSError, AutoAntibioticError):
             status[bin_name] = False
             log.warning(f"  ⚠  '{bin_name}' not found.")
             log.warning(_INSTALL_GUIDE.get(bin_name, ""))

@@ -10,9 +10,9 @@ from rdkit.Chem import AllChem, Crippen, Descriptors, rdDistGeom, rdMolAlign
 
 from .config import CONFIG, CompoundRecord
 from .docking import _parallel_dock
-from .io_utils import CacheManager, log
+from .io_utils import log
 
-_CacheLike = Optional[Union[CacheManager, Dict[str, float]]]
+_CacheLike = Optional[Dict[str, float]]
 
 
 def compute_consensus_score(

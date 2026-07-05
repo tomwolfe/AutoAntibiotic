@@ -4,12 +4,14 @@ MRSA PBP2a Inhibitor Screening
 """
 
 from .config import CONFIG, PipelineConfig, CompoundRecord, ToolResult
-from .io_utils import CacheManager
+from .io_utils import load_json_cache, save_json_cache, make_cache_key
 
 __all__ = [
     "CONFIG",
     "PipelineConfig",
     "CompoundRecord",
     "ToolResult",
-    "CacheManager",
+    "load_json_cache",
+    "save_json_cache",
+    "make_cache_key",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 import random
 from dataclasses import dataclass, field
@@ -19,10 +20,145 @@ class ToolResult:
     timed_out: bool = False
 
 
+# ── Sub-configurations ────────────────────────────────────────────
+
+
+@dataclass
+class DockingConfig:
+    """Docking-specific parameters."""
+    vina_exhaustiveness: int = 8
+    vina_num_modes: int = 3
+    vina_timeout_s: int = 120
+    job_timeout_s: int = 180
+    allosteric_box_size: Tuple[float, float, float] = (15.0, 15.0, 15.0)
+    active_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
+    offtarget_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
+    redocking_box_size: Tuple[float, float, float] = (25.0, 25.0, 25.0)
+    batch_size_docking: int = 75
+    prepare_receptor_timeout: int = 60
+    obabel_timeout_s: int = 60
+
+    use_gnina: bool = False
+    gnina_binary_path: str = "gnina"
+
+    ensemble_mode: bool = False
+    ensemble_structures_dir: Optional[Path] = None
+    consensus_scoring_method: str = "mean"
+
+    flexible_docking: bool = False
+    flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
+    flexible_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
+    max_flexible_conformers: int = 9
+
+    use_ml_rescoring: bool = True
+    use_mm_gbsa: bool = False
+    use_mm_gbsa_rescoring: bool = False
+    mm_gbsa_top_n: int = 50
+
+    key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["TYR159", "ALA237", "MET241"])
+    key_interaction_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
+    min_key_interactions: int = 1
+
+
+@dataclass
+class FilterConfig:
+    """Compound filtering parameters."""
+    similarity_threshold: float = 0.4
+    similarity_threshold_relaxed: float = 0.5
+    diversity_min_count: int = 100
+    diversity_pool_multiplier: int = 5
+    qed_threshold: float = 0.6
+    lipinski_mw_max: float = 500.0
+    lipinski_logp_max: float = 5.0
+    lipinski_hbd_max: int = 5
+    lipinski_hba_max: int = 10
+    sa_score_threshold: float = 6.0
+    strain_energy_threshold: float = 10.0
+    ifp_similarity_threshold: float = 0.6
+
+    pharmacophore_min_matches: int = 2
+    pharmacophore_tolerance: float = 2.0
+    pharmacophore_rmsd_threshold: float = 1.5
+    pharmacophore_ref_ligand_smi: str = ""
+
+
+@dataclass
+class WaterAnalysisConfig:
+    """Crystallographic water analysis parameters."""
+    use_water_analysis: bool = True
+    water_distance_cutoff: float = 5.0
+    water_displacement_energy_threshold: float = 2.5
+
+
+@dataclass
+class ReportingConfig:
+    """Reporting and output parameters."""
+    csv_report_name: str = "top_candidates.csv"
+    html_report_name: str = "report.html"
+    pipeline_log_name: str = "pipeline.log"
+    scatter_plot_name: str = "energy_vs_selectivity.png"
+    qed_histogram_name: str = "qed_histogram.png"
+    cache_name: str = "cache.json"
+    top_n: int = 10
+    top_n_for_active: int = 50
+    top_n_for_images: int = 3
+    top_n_for_html_report: int = 50
+
+
+# ── PipelineConfig ────────────────────────────────────────────────
+
+_SUB_CONFIGS = ["docking", "filtering", "water", "reporting"]
+
+
 @dataclass
 class PipelineConfig:
-    """Configuration for the AutoAntibiotic discovery pipeline."""
+    """Top-level configuration container holding sub-configs + shared fields."""
+
+    # Shared pipeline-level fields
     random_seed: int = 42
+    output_dir: Path = Path("output")
+    dry_run: bool = False
+    library_target_count: int = 500
+    library_generator_threshold: int = 1000
+    brics_min_fragment_size: int = 8
+    morgan_radius: int = 2
+    morgan_nbits: int = 2048
+    pdb_retry_max_attempts: int = 3
+    pdb_retry_base_delay: float = 2.0
+    n_jobs: int = field(default_factory=lambda: max(1, mp.cpu_count() - 1))
+
+    selectivity_index_threshold: float = 2.0
+    shape_score_norm_factor: float = 0.05
+    diversity_pool_multiplier: int = 5
+    redocking_rmsd_cutoff: float = 2.0
+
+    # Resistance / analysis thresholds
+    resistance_energy_active_threshold: float = -6.0
+    resistance_energy_allosteric_threshold: float = -7.0
+    resistance_mw_threshold: float = 400.0
+    resistance_rot_threshold: int = 5
+    resistance_qed_threshold: float = 0.8
+
+    # Consensus scoring weights
+    consensus_vina_weight: float = 0.7
+    consensus_shape_weight: float = 0.3
+
+    # Benchmark
+    benchmark_mode: bool = False
+    reference_actives_path: Optional[Path] = None
+    reference_inactives_path: Optional[Path] = None
+    benchmark_n_decoys: int = 100
+
+    # Library data
+    beta_lactam_smarts: str = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
+    allosteric_residues: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
+    active_site_residues: List[str] = field(default_factory=lambda: ["SER403"])
+    trypsin_active_site_residues: List[str] = field(default_factory=lambda: ["HIS57", "ASP102", "SER195"])
+    ces1_active_site_residues: List[str] = field(default_factory=lambda: ["SER221", "HIS468", "GLU354"])
+    conserved_residues: set = field(default_factory=lambda: {"SER403", "KYS406", "TYR446"})
+    mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
+    use_pharmacophore_filter: bool = True
+
     pdb_ids: Dict[str, str] = field(default_factory=lambda: {
         "PBP2a_apo": "3QPD",
         "PBP2a_holo": "6TKO",
@@ -36,48 +172,10 @@ class PipelineConfig:
         "Meropenem":    "CC1C2C(C(=O)N2C(=C1SC3CC(NCC3)C(=O)O)C(=O)O)(C)O",
         "Oxacillin":    "CC1=C(C(=NO1)C2=CC=CC=C2)C(=O)NC3C4C(C(=O)N4C3=O)SC5(C)C",
     })
-    beta_lactam_smarts: str = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
-    allosteric_residues: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
-    active_site_residues: List[str] = field(default_factory=lambda: ["SER403"])
-    trypsin_active_site_residues: List[str] = field(default_factory=lambda: ["HIS57", "ASP102", "SER195"])
-    ces1_active_site_residues: List[str] = field(default_factory=lambda: ["SER221", "HIS468", "GLU354"])
-    allosteric_box_size: Tuple[float, float, float] = (15.0, 15.0, 15.0)
-    active_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
-    offtarget_box_size: Tuple[float, float, float] = (20.0, 20.0, 20.0)
-    redocking_box_size: Tuple[float, float, float] = (25.0, 25.0, 25.0)
-    vina_exhaustiveness: int = 8
-    vina_num_modes: int = 3
-    vina_timeout_s: int = 120
-    job_timeout_s: int = 180
-    prepare_receptor_timeout: int = 60
-    n_jobs: int = field(default_factory=lambda: max(1, mp.cpu_count() - 1))
-    similarity_threshold: float = 0.4
-    similarity_threshold_relaxed: float = 0.5
-    diversity_min_count: int = 100
-    selectivity_index_threshold: float = 2.0
-    library_target_count: int = 500
-    brics_min_fragment_size: int = 8
-    output_dir: Path = Path("output")
-    top_n: int = 10
-    qed_threshold: float = 0.6
-    lipinski_mw_max: float = 500.0
-    lipinski_logp_max: float = 5.0
-    lipinski_hbd_max: int = 5
-    lipinski_hba_max: int = 10
-    redocking_rmsd_cutoff: float = 2.0
-    sa_score_threshold: float = 6.0
-    shape_score_norm_factor: float = 0.05
-    diversity_pool_multiplier: int = 5
-    top_n_for_active: int = 50
-    top_n_for_images: int = 3
-    top_n_for_html_report: int = 50
-    batch_size_docking: int = 75
-    library_generator_threshold: int = 1000
-    morgan_radius: int = 2
-    morgan_nbits: int = 2048
-    pdb_retry_max_attempts: int = 3
-    pdb_retry_base_delay: float = 2.0
-    obabel_timeout_s: int = 60
+    control_smiles: Dict[str, str] = field(default_factory=lambda: {
+        "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NCC3)C(=O)O)C(=O)O)(C)O",
+    })
     natural_product_scaffolds: List[str] = field(default_factory=lambda: [
         "O=c1c(-c2ccc(O)c(O)c2)coc2cc(O)cc(O)c12",
         "Oc1ccc(C=Cc2ccc(O)cc2)cc1",
@@ -106,165 +204,35 @@ class PipelineConfig:
         "O=C(Nc1ccc(O)cc1)c1ccc(O)cc1",
     ])
     brics_building_blocks: List[str] = field(default_factory=lambda: [
-        "[1*]c1ccccc1",
-        "[1*]c1ccc(O)cc1",
-        "[1*]c1ccc(Cl)cc1",
-        "[1*]c1ccc(F)cc1",
-        "[1*]c1ccc(Br)cc1",
-        "[1*]c1ccc(OC)cc1",
-        "[1*]c1ccc(C(=O)O)cc1",
-        "[1*]c1ccc(N)cc1",
-        "[1*]c1ccc(C)cc1",
-        "[1*]c1ccc(C(C)C)cc1",
-        "[1*]c1ccc(CF)cc1",
-        "[1*]c1ccc(CN)cc1",
-        "[1*]c1ccc(S(=O)(=O)N)cc1",
-        "[1*]c1ccc(C(=O)N)cc1",
-        "[1*]c1ccc(NC(=O)C)cc1",
-        "[1*]CC(=O)O",
-        "[1*]CCO",
-        "[1*]CCN",
-        "[1*]CC(=O)N",
-        "[1*]CCC(=O)O",
-        "[3*]C=Cc1ccccc1",
-        "[3*]C=Cc1ccc(O)cc1",
-        "[3*]C=Cc1ccc(Cl)cc1",
-        "[3*]CCN(C)C",
-        "[5*]Nc1ccccc1",
-        "[5*]Nc1ccc(O)cc1",
-        "[5*]Nc1ccc(C(=O)O)cc1",
-        "[5*]Nc1ccc(Cl)cc1",
-        "[5*]Nc1ccc(F)cc1",
-        "[5*]Nc1ccc(OC)cc1",
-        "[5*]Nc1ccc(C)cc1",
-        "[5*]Nc1ccc(Br)cc1",
-        "[5*]Nc1ccc(CN)cc1",
-        "[5*]NCC",
-        "[5*]NCCO",
-        "[5*]NCCC(=O)O",
-        "[6*]C(=O)O",
-        "[6*]C(=O)c1ccccc1",
-        "[6*]C(=O)c1ccc(O)cc1",
-        "[6*]C(=O)c1ccc(Cl)cc1",
-        "[6*]C(=O)c1ccc(OC)cc1",
-        "[6*]C(=O)c1ccc(C)cc1",
-        "[6*]C(=O)c1ccc(N)cc1",
-        "[6*]C(=O)CC",
-        "[7*]Cc1ccccc1",
-        "[7*]Cc1ccc(O)cc1",
-        "[7*]Cc1ccc(O)c(OC)c1",
-        "[7*]Cc1ccc(OC)cc1",
-        "[7*]Cc1ccc(Cl)cc1",
-        "[7*]Cc1ccc(F)cc1",
-        "[7*]CC",
-        "[7*]C(C)C",
-        "[16*]c1ccccc1OC",
-        "[16*]c1ccc(C)cc1",
-        "[16*]c1ccc(N)cc1",
-        "[16*]c1ccc(O)cc1",
+        "[1*]c1ccccc1", "[1*]c1ccc(O)cc1", "[1*]c1ccc(Cl)cc1",
+        "[1*]c1ccc(F)cc1", "[1*]c1ccc(Br)cc1", "[1*]c1ccc(OC)cc1",
+        "[1*]c1ccc(C(=O)O)cc1", "[1*]c1ccc(N)cc1", "[1*]c1ccc(C)cc1",
+        "[1*]c1ccc(C(C)C)cc1", "[1*]c1ccc(CF)cc1", "[1*]c1ccc(CN)cc1",
+        "[1*]c1ccc(S(=O)(=O)N)cc1", "[1*]c1ccc(C(=O)N)cc1",
+        "[1*]c1ccc(NC(=O)C)cc1", "[1*]CC(=O)O", "[1*]CCO", "[1*]CCN",
+        "[1*]CC(=O)N", "[1*]CCC(=O)O", "[3*]C=Cc1ccccc1",
+        "[3*]C=Cc1ccc(O)cc1", "[3*]C=Cc1ccc(Cl)cc1", "[3*]CCN(C)C",
+        "[5*]Nc1ccccc1", "[5*]Nc1ccc(O)cc1", "[5*]Nc1ccc(C(=O)O)cc1",
+        "[5*]Nc1ccc(Cl)cc1", "[5*]Nc1ccc(F)cc1", "[5*]Nc1ccc(OC)cc1",
+        "[5*]Nc1ccc(C)cc1", "[5*]Nc1ccc(Br)cc1", "[5*]Nc1ccc(CN)cc1",
+        "[5*]NCC", "[5*]NCCO", "[5*]NCCC(=O)O", "[6*]C(=O)O",
+        "[6*]C(=O)c1ccccc1", "[6*]C(=O)c1ccc(O)cc1",
+        "[6*]C(=O)c1ccc(Cl)cc1", "[6*]C(=O)c1ccc(OC)cc1",
+        "[6*]C(=O)c1ccc(C)cc1", "[6*]C(=O)c1ccc(N)cc1",
+        "[6*]C(=O)CC", "[7*]Cc1ccccc1", "[7*]Cc1ccc(O)cc1",
+        "[7*]Cc1ccc(O)c(OC)c1", "[7*]Cc1ccc(OC)cc1",
+        "[7*]Cc1ccc(Cl)cc1", "[7*]Cc1ccc(F)cc1", "[7*]CC",
+        "[7*]C(C)C", "[16*]c1ccccc1OC", "[16*]c1ccc(C)cc1",
+        "[16*]c1ccc(N)cc1", "[16*]c1ccc(O)cc1",
     ])
-    control_smiles: Dict[str, str] = field(default_factory=lambda: {
-        "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
-        "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NCC3)C(=O)O)C(=O)O)(C)O",
-    })
-    conserved_residues: set = field(default_factory=lambda: {"SER403", "KYS406", "TYR446"})
-    mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
-    dry_run: bool = False
 
-    # IFP similarity threshold
-    ifp_similarity_threshold: float = 0.6
+    # Sub-config instances
+    docking: DockingConfig = field(default_factory=DockingConfig)
+    filtering: FilterConfig = field(default_factory=FilterConfig)
+    water: WaterAnalysisConfig = field(default_factory=WaterAnalysisConfig)
+    reporting: ReportingConfig = field(default_factory=ReportingConfig)
 
-    # Phase 6 – AI-enhanced features
-    use_pharmacophore_filter: bool = True
-    use_ml_rescoring: bool = True
-    pharmacophore_min_matches: int = 2
-    pharmacophore_tolerance: float = 2.0
-
-    # 3D Pharmacophore Filtering (Phase 8+)
-    pharmacophore_rmsd_threshold: float = 1.5
-    """Maximum RMSD (Å) for 3D pharmacophore feature matching.
-    Molecules with feature RMSD below this threshold pass the filter
-    when a reference ligand SMILES is provided."""
-    pharmacophore_ref_ligand_smi: str = ""
-    """SMILES of the reference ligand used to build the 3D pharmacophore
-    query.  Typically the co-crystallized ligand from PDB 6TKO
-    (e.g. ceftaroline).  If left empty the module falls back to the
-    original 2D feature-counting pharmacophore check."""
-
-    # GNINA deep-learning docking (Phase 6)
-    use_gnina: bool = False
-    gnina_binary_path: str = "gnina"
-
-    # Ensemble docking (Phase 6)
-    ensemble_mode: bool = False
-    ensemble_structures_dir: Optional[Path] = None
-    consensus_scoring_method: str = "mean"  # "mean", "min", or "median"
-
-    # Analysis thresholds (Phase 4)
-    resistance_energy_active_threshold: float = -6.0
-    resistance_energy_allosteric_threshold: float = -7.0
-    resistance_mw_threshold: float = 400.0
-    resistance_rot_threshold: int = 5
-    resistance_qed_threshold: float = 0.8
-
-    # Consensus scoring (Phase 3)
-    consensus_vina_weight: float = 0.7
-    consensus_shape_weight: float = 0.3
-
-    # Benchmark & Validation (Phase 7)
-    use_mm_gbsa: bool = False
-    """Enable MM-GBSA rescoring of top docking poses (requires OpenMM + AmberTools)."""
-
-    # High-Impact Scientific Upgrades (Phase 8)
-    # Interaction Fingerprint (IFP) filtering
-    key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["TYR159", "ALA237", "MET241"])
-    key_interaction_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
-    min_key_interactions: int = 1
-
-    # Strain energy filtering
-    strain_energy_threshold: float = 10.0
-
-    flexible_docking: bool = False
-    """If True, side-chain flexibility is modelled for key binding-site residues."""
-    flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
-    """Residues whose side chains are treated flexibly during allosteric-site docking."""
-    flexible_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
-    """Residues whose side chains are treated flexibly during active-site docking."""
-    max_flexible_conformers: int = 9
-    """Maximum number of receptor conformers to generate for flexible docking."""
-
-    use_water_analysis: bool = True
-    """If True, analyse crystallographic waters in the holo structure and flag
-    displaceable / bridging waters."""
-    water_distance_cutoff: float = 5.0
-    """Distance cutoff (Å) from binding-site residues to include a water."""
-    water_displacement_energy_threshold: float = 2.5
-    """Waters with displacement energy above this threshold are flagged as high-energy."""
-
-    use_mm_gbsa_rescoring: bool = False
-    """Enable MM-GB/SA rescoring of the top N docking candidates (requires OpenMM)."""
-    mm_gbsa_top_n: int = 50
-    """Number of top Vina candidates to rescore with MM-GB/SA."""
-
-    benchmark_mode: bool = False
-    """Run enrichment benchmark instead of full library screening."""
-    reference_actives_path: Optional[Path] = None
-    """Path to a file with known active SMILES for benchmark validation."""
-    reference_inactives_path: Optional[Path] = None
-    """Path to a file with known inactive SMILES for benchmark validation."""
-    benchmark_n_decoys: int = 100
-    """Number of property-matched decoys per active in enrichment test."""
-
-    # Report filenames
-    csv_report_name: str = "top_candidates.csv"
-    html_report_name: str = "report.html"
-    pipeline_log_name: str = "pipeline.log"
-    scatter_plot_name: str = "energy_vs_selectivity.png"
-    qed_histogram_name: str = "qed_histogram.png"
-
-    # Cache
-    cache_db_name: str = "cache.db"
-
+    # ── Derived properties ──
     @property
     def work_dir(self) -> Path:
         return self.output_dir / "workdir"
@@ -273,17 +241,32 @@ class PipelineConfig:
     def pdb_dir(self) -> Path:
         return self.output_dir / "pdb"
 
+    # ── Backward-compatible attribute access ──
+
+    def __getattr__(self, name: str) -> Any:
+        for sub_name in _SUB_CONFIGS:
+            sub = object.__getattribute__(self, sub_name)
+            if hasattr(sub, name):
+                return getattr(sub, name)
+        raise AttributeError(f"'PipelineConfig' has no attribute '{name}'")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in self.__dataclass_fields__:
+            object.__setattr__(self, name, value)
+            return
+        for sub_name in _SUB_CONFIGS:
+            sub = object.__getattribute__(self, sub_name)
+            if hasattr(sub, name):
+                setattr(sub, name, value)
+                return
+        object.__setattr__(self, name, value)
+
 
 CONFIG = PipelineConfig()
 
 
 def _merge_yaml_overrides() -> None:
-    """Load overrides from ``config.yaml`` in the output directory root.
-
-    If a ``config.yaml`` file exists alongside the ``output/`` directory,
-    its values are merged into the global ``CONFIG`` instance.  Only
-    top-level dataclass fields are supported.
-    """
+    """Load overrides from config.yaml in the output directory root."""
     yaml_path = Path("config.yaml")
     if not yaml_path.exists():
         yaml_path = CONFIG.output_dir.parent / "config.yaml"

@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import math
 import os
 import shutil
 import statistics
 from concurrent.futures import ProcessPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
 from .config import CONFIG, CompoundRecord
-from .io_utils import CacheManager, log, parse_gnina_energy, parse_vina_energy, run_tool
+from .io_utils import log, make_cache_key, parse_gnina_energy, parse_vina_energy, run_tool
 
 try:
     from .water_analysis import WaterAnalysisResult
@@ -40,7 +41,7 @@ except ImportError:
     _HAVE_ML_SCORING = False
     _rescore_with_ml = None
 
-_CacheLike = Optional[Union[CacheManager, Dict[str, float]]]
+_CacheLike = Optional[Dict[str, float]]
 
 try:
     from tqdm import tqdm as _tqdm
@@ -479,8 +480,7 @@ def dock_compound(
     if CONFIG.dry_run:
         return float(np.random.uniform(-10.0, -5.0))
 
-    smiles_md5 = hashlib.md5(record.smiles.encode("utf-8")).hexdigest()
-    cache_key = f"{smiles_md5}_{tag}"
+    cache_key = make_cache_key(record.smiles, tag)
     if use_cache and cache is not None and cache_key in cache:
         return cache[cache_key]
 
@@ -870,8 +870,7 @@ def _parallel_dock(
     to_dock: List[Tuple[str, str, str]] = []
 
     for cid, smiles in items:
-        smiles_md5 = hashlib.md5(smiles.encode("utf-8")).hexdigest()
-        cache_key = f"{smiles_md5}_{tag}"
+        cache_key = make_cache_key(smiles, tag)
         if use_cache and cache is not None and cache_key in cache:
             cached_val = cache[cache_key]
             results.append((cid, cached_val))
@@ -1040,6 +1039,274 @@ def _build_flexible_ensemble(
     return flex_list, [np.zeros(3)] * len(flex_list)
 
 
+def _screen_ensemble(
+    records: List[CompoundRecord],
+    targets: Dict[str, Any],
+    work_dir: str,
+    cache: _CacheLike = None,
+    use_cache: bool = False,
+) -> List[CompoundRecord]:
+    """Ensemble docking against multiple receptor structures with consensus scoring."""
+    ensemble_targets = targets["PBP2a_ensemble"]
+    receptor_pdbqt_list = [t["pdbqt"] for t in ensemble_targets]
+    allosteric_center_list = [t["allosteric_center"] for t in ensemble_targets]
+    active_center_list = [t["active_center"] for t in ensemble_targets]
+
+    allosteric_results = _parallel_dock_ensemble(
+        [(r.compound_id, r.smiles) for r in records],
+        receptor_pdbqt_list, allosteric_center_list,
+        CONFIG.allosteric_box_size, work_dir, "allosteric",
+        cache=cache, use_cache=use_cache,
+    )
+
+    cid_to_record = {r.compound_id: r for r in records}
+    for cid, energy in allosteric_results:
+        if cid in cid_to_record:
+            cid_to_record[cid].pb2pa_allosteric_energy = energy
+
+    n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
+    log.info(f"  Ensemble allosteric docking complete: {n_scored}/{len(records)} scored.")
+
+    scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
+    scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+    top50 = scored[:CONFIG.top_n_for_active]
+
+    if top50:
+        log.info(f"  Ensemble docking top {len(top50)} against active site…")
+        active_results = _parallel_dock_ensemble(
+            [(r.compound_id, r.smiles) for r in top50],
+            receptor_pdbqt_list, active_center_list,
+            CONFIG.active_box_size, work_dir, "active",
+            cache=cache, use_cache=use_cache,
+        )
+        for cid, energy in active_results:
+            if cid in cid_to_record:
+                cid_to_record[cid].pb2pa_active_energy = energy
+
+    return scored[:CONFIG.top_n]
+
+
+def _screen_flexible(
+    records: List[CompoundRecord],
+    targets: Dict[str, Any],
+    work_dir: str,
+    deps: Dict[str, Any],
+    cache: _CacheLike = None,
+    use_cache: bool = False,
+) -> List[CompoundRecord]:
+    """Flexible docking with side-chain rotamer conformers (min-score consensus)."""
+    pb2pa = targets["PBP2a"]
+    allosteric_center = pb2pa["allosteric_center"]
+    active_center = pb2pa["active_center"]
+
+    receptor_pdb = pb2pa["pdbqt"].replace(".pdbqt", ".pdb")
+    if not os.path.exists(receptor_pdb):
+        receptor_pdb = targets.get("holo_pdb", "")
+
+    if not os.path.exists(receptor_pdb):
+        log.warning("  Receptor PDB not found for flexible docking; falling back to standard.")
+        return _screen_standard(records, targets, work_dir, cache=cache, use_cache=use_cache)
+
+    log.info("  Flexible-docking mode enabled — generating side-chain conformers…")
+    flex_alloc_pdbqt_list, flex_alloc_center_list = _build_flexible_ensemble(
+        receptor_pdb, pb2pa["pdbqt"],
+        CONFIG.flexible_residues_allosteric,
+        CONFIG.max_flexible_conformers, deps,
+    )
+    flex_alloc_center_list = [allosteric_center] * len(flex_alloc_pdbqt_list)
+    log.info(f"  Flexible allosteric docking using {len(flex_alloc_pdbqt_list)} conformers (min-score consensus)…")
+
+    saved_method = CONFIG.consensus_scoring_method
+    CONFIG.consensus_scoring_method = "min"
+
+    allosteric_results = _parallel_dock_ensemble(
+        [(r.compound_id, r.smiles) for r in records],
+        flex_alloc_pdbqt_list, flex_alloc_center_list,
+        CONFIG.allosteric_box_size, work_dir, "flex_alloc",
+        cache=cache, use_cache=use_cache,
+    )
+    CONFIG.consensus_scoring_method = saved_method
+
+    cid_to_record = {r.compound_id: r for r in records}
+    for cid, energy in allosteric_results:
+        if cid in cid_to_record:
+            cid_to_record[cid].pb2pa_allosteric_energy = energy
+
+    n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
+    log.info(f"  Flexible allosteric docking complete: {n_scored}/{len(records)} scored.")
+
+    scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
+    scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+    top50 = scored[:CONFIG.top_n_for_active]
+
+    flex_act_pdbqt_list, flex_act_center_list = _build_flexible_ensemble(
+        receptor_pdb, pb2pa["pdbqt"],
+        CONFIG.flexible_residues_active,
+        max(3, CONFIG.max_flexible_conformers // 2), deps,
+    )
+    flex_act_center_list = [active_center] * len(flex_act_pdbqt_list)
+    log.info(f"  Flexible active-site docking top {len(top50)} using {len(flex_act_pdbqt_list)} conformers…")
+
+    saved_method = CONFIG.consensus_scoring_method
+    CONFIG.consensus_scoring_method = "min"
+
+    active_results = _parallel_dock_ensemble(
+        [(r.compound_id, r.smiles) for r in top50],
+        flex_act_pdbqt_list, flex_act_center_list,
+        CONFIG.active_box_size, work_dir, "flex_act",
+        cache=cache, use_cache=use_cache,
+    )
+    CONFIG.consensus_scoring_method = saved_method
+
+    for cid, energy in active_results:
+        if cid in cid_to_record:
+            cid_to_record[cid].pb2pa_active_energy = energy
+
+    return scored[:CONFIG.top_n]
+
+
+def _screen_standard(
+    records: List[CompoundRecord],
+    targets: Dict[str, Any],
+    work_dir: str,
+    cache: _CacheLike = None,
+    use_cache: bool = False,
+) -> List[CompoundRecord]:
+    """Standard Vina/GNINA docking: allosteric site → top 50 to active site."""
+    pb2pa = targets["PBP2a"]
+    allosteric_center = pb2pa["allosteric_center"]
+    active_center = pb2pa["active_center"]
+
+    log.info("  Docking all compounds against allosteric site…")
+    items = [(r.compound_id, r.smiles) for r in records]
+    allosteric_results = _parallel_dock(
+        items, pb2pa["pdbqt"],
+        allosteric_center, CONFIG.allosteric_box_size,
+        work_dir, "allosteric",
+        cache=cache, use_cache=use_cache,
+    )
+
+    cid_to_record = {r.compound_id: r for r in records}
+    for cid, energy in allosteric_results:
+        if cid in cid_to_record:
+            cid_to_record[cid].pb2pa_allosteric_energy = energy
+
+    n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
+    log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
+
+    scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
+    scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+
+    top50 = scored[:CONFIG.top_n_for_active]
+    log.info(f"  Docking top {len(top50)} compounds against active site…")
+
+    active_items = [(r.compound_id, r.smiles) for r in top50]
+    active_results = _parallel_dock(
+        active_items, pb2pa["pdbqt"],
+        active_center, CONFIG.active_box_size,
+        work_dir, "active",
+        cache=cache, use_cache=use_cache,
+    )
+
+    for cid, energy in active_results:
+        if cid in cid_to_record:
+            cid_to_record[cid].pb2pa_active_energy = energy
+
+    return scored[:CONFIG.top_n]
+
+
+def _screen_shape_fallback(
+    records: List[CompoundRecord],
+    targets: Dict[str, Any],
+    work_dir: str,
+) -> List[CompoundRecord]:
+    """Fallback scoring using RDKit Shape Protrude Distance + Pharmacophore."""
+    log.info("  Vina unavailable. Using RDKit Shape Fallback.")
+
+    ref_mol = None
+    holo_pdb = targets.get("holo_pdb")
+    if holo_pdb and os.path.exists(holo_pdb):
+        lig_pdb = os.path.join(work_dir, "native_ref.pdb")
+        try:
+            from Bio.PDB import PDBIO, PDBParser, Select
+
+            parser = PDBParser(QUIET=True)
+            struct = parser.get_structure("ref", holo_pdb)
+            for model in struct:
+                for chain in model:
+                    for residue in chain:
+                        if residue.get_id()[0] != " " and residue.get_resname().strip() not in ("HOH", "WAT"):
+                            pdbio = PDBIO()
+
+                            class _Sel(Select):
+                                def accept_residue(self, r):
+                                    return r is residue
+
+                            pdbio.set_structure(struct)
+                            pdbio.save(lig_pdb, _Sel())
+                            break
+                    else:
+                        continue
+                    break
+                else:
+                    continue
+                break
+            ref_mol = Chem.MolFromPDBFile(lig_pdb)
+        except Exception:
+            pass
+
+    if ref_mol is None:
+        ref_smi = list(CONFIG.control_smiles.values())[0]
+        ref_mol = Chem.MolFromSmiles(ref_smi)
+
+    if ref_mol is None:
+        log.error("  Cannot obtain reference molecule for shape scoring.")
+        return records[:CONFIG.top_n]
+
+    total = len(records)
+    shape_iter = _tqdm(
+        enumerate(records), total=total,
+        desc="  Shape scoring", disable=not _HAVE_TQDM,
+    )
+    for i, rec in shape_iter:
+        if rec.mol is None:
+            mol = Chem.MolFromSmiles(rec.smiles)
+            if mol is None:
+                continue
+            rec.mol = mol
+        score = _compute_shape_fallback_score(rec.mol, ref_mol)
+        rec.shape_score = score
+        if (i + 1) % 100 == 0 and not _HAVE_TQDM:
+            log.info(f"  Shape scored {i + 1} / {total}")
+
+    scored_shape = [r for r in records if r.shape_score is not None]
+    scored_shape.sort(key=lambda r: r.shape_score)
+    if scored_shape:
+        log.info(f"  Shape scoring complete. Best score: {scored_shape[0].shape_score:.3f}")
+    else:
+        log.warning("  No shape scores computed.")
+
+    return scored_shape[:CONFIG.top_n]
+
+
+def _apply_ml_rescoring(
+    scored: List[CompoundRecord],
+    pb2pa_pdbqt: str,
+    work_dir: str,
+    water_results: Optional[WaterAnalysisResult] = None,
+) -> None:
+    """Apply ML rescoring to top N Vina hits (in-place)."""
+    if not (CONFIG.use_ml_rescoring and _HAVE_ML_SCORING and scored):
+        return
+    n_rescore = min(len(scored), CONFIG.mm_gbsa_top_n) if (CONFIG.use_mm_gbsa or CONFIG.use_mm_gbsa_rescoring) else 50
+    log.info(f"  Applying ML rescoring to top {n_rescore} Vina hits…")
+    try:
+        top_to_rescore = scored[:n_rescore]
+        _rescore_with_ml(top_to_rescore, pb2pa_pdbqt, work_dir, water_results=water_results)
+    except Exception as exc:
+        log.warning(f"  ML rescoring failed: {exc}")
+
+
 def screen_library(
     records: List[CompoundRecord],
     targets: Dict[str, Any],
@@ -1051,11 +1318,14 @@ def screen_library(
 ) -> List[CompoundRecord]:
     """Phase 3 — Virtual screening.
 
-    Primary (Vina/GNINA): dock against allosteric site, select top 50 for active site.
-    Ensemble mode: dock against multiple receptor structures and compute consensus.
-    Flexible docking: generate side-chain rotamer conformers and use ensemble
-        docking (``consensus_scoring_method = "min"``) to account for induced fit.
-    Fallback (RDKit Shape): shape scoring vs native ligand.
+    Dispatches to the appropriate docking strategy based on config flags:
+
+    * **Ensemble mode** → :func:`_screen_ensemble`
+    * **Flexible docking** → :func:`_screen_flexible`
+    * **Standard Vina/GNINA** → :func:`_screen_standard`
+    * **No Vina available** → :func:`_screen_shape_fallback`
+
+    After docking, ML rescoring is applied to the top hits when enabled.
 
     When *water_results* is provided, it is forwarded to the ML rescoring
     stage for water displacement correction in MM-GB/SA.
@@ -1065,273 +1335,39 @@ def screen_library(
     log.info("─── Phase 3: Virtual Screening ───")
 
     pb2pa = targets["PBP2a"]
-    allosteric_center = pb2pa["allosteric_center"]
-    active_center = pb2pa["active_center"]
-
-    # Check for ensemble mode
-    ensemble_targets = targets.get("PBP2a_ensemble")
-    ensemble_active = ensemble_targets is not None and len(ensemble_targets) > 0
-
     use_vina = deps.get("USE_VINA", False)
+
     if use_vina:
+        ensemble_targets = targets.get("PBP2a_ensemble")
+        ensemble_active = ensemble_targets is not None and len(ensemble_targets) > 0
+
         if ensemble_active:
             log.info(f"  Ensemble docking (method={CONFIG.consensus_scoring_method}) against {len(ensemble_targets)} structures…")
-            receptor_pdbqt_list = [t["pdbqt"] for t in ensemble_targets]
-            allosteric_center_list = [t["allosteric_center"] for t in ensemble_targets]
-            active_center_list = [t["active_center"] for t in ensemble_targets]
-
-            allosteric_results = _parallel_dock_ensemble(
-                [(r.compound_id, r.smiles) for r in records],
-                receptor_pdbqt_list,
-                allosteric_center_list,
-                CONFIG.allosteric_box_size,
-                work_dir, "allosteric",
-                cache=cache, use_cache=use_cache,
+            top_candidates = _screen_ensemble(
+                records, targets, work_dir, cache=cache, use_cache=use_cache,
             )
-
-            cid_to_record = {r.compound_id: r for r in records}
-            for cid, energy in allosteric_results:
-                if cid in cid_to_record:
-                    cid_to_record[cid].pb2pa_allosteric_energy = energy
-
-            n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
-            log.info(f"  Ensemble allosteric docking complete: {n_scored}/{len(records)} scored.")
-
-            scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
-            scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-
-            top50 = scored[:CONFIG.top_n_for_active]
-            if top50 and ensemble_targets:
-                log.info(f"  Ensemble docking top {len(top50)} against active site…")
-                active_results = _parallel_dock_ensemble(
-                    [(r.compound_id, r.smiles) for r in top50],
-                    receptor_pdbqt_list,
-                    active_center_list,
-                    CONFIG.active_box_size,
-                    work_dir, "active",
-                    cache=cache, use_cache=use_cache,
-                )
-                for cid, energy in active_results:
-                    if cid in cid_to_record:
-                        cid_to_record[cid].pb2pa_active_energy = energy
-
-            scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
-            scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-            top10 = scored[:CONFIG.top_n]
-
-            log.info(f"  Top {len(top10)} candidates (ensemble) selected.")
-            for i, r in enumerate(top10):
-                log.info(f"    {i + 1}. {r.compound_id}: {r.pb2pa_allosteric_energy:.4f} kcal/mol")
-
-            log.info("─── Phase 3 complete ───")
-            return top10
-
-        # Determine the receptor PDB path (for flexible conformer generation)
-        receptor_pdb = pb2pa["pdbqt"].replace(".pdbqt", ".pdb")
-        if not os.path.exists(receptor_pdb):
-            receptor_pdb = targets.get("holo_pdb", "")
-
-        # ── Flexible docking support ──
-        if CONFIG.flexible_docking and _HAVE_BIOPDB and os.path.exists(receptor_pdb):
-            log.info("  Flexible-docking mode enabled — generating side-chain conformers…")
-            flex_allosteric_residues = CONFIG.flexible_residues_allosteric
-            flex_active_residues = CONFIG.flexible_residues_active
-
-            # Build flexible conformers for allosteric site
-            flex_alloc_pdbqt_list, flex_alloc_center_list = _build_flexible_ensemble(
-                receptor_pdb, pb2pa["pdbqt"],
-                flex_allosteric_residues,
-                CONFIG.max_flexible_conformers,
-                deps,
+        elif CONFIG.flexible_docking and _HAVE_BIOPDB:
+            top_candidates = _screen_flexible(
+                records, targets, work_dir, deps, cache=cache, use_cache=use_cache,
             )
-            flex_alloc_center_list = [allosteric_center] * len(flex_alloc_pdbqt_list)
-            log.info(f"  Flexible allosteric docking using {len(flex_alloc_pdbqt_list)} conformers (min-score consensus)…")
-
-            saved_method = CONFIG.consensus_scoring_method
-            CONFIG.consensus_scoring_method = "min"
-
-            allosteric_results = _parallel_dock_ensemble(
-                [(r.compound_id, r.smiles) for r in records],
-                flex_alloc_pdbqt_list,
-                flex_alloc_center_list,
-                CONFIG.allosteric_box_size,
-                work_dir, "flex_alloc",
-                cache=cache, use_cache=use_cache,
-            )
-
-            CONFIG.consensus_scoring_method = saved_method
-
-            cid_to_record = {r.compound_id: r for r in records}
-            for cid, energy in allosteric_results:
-                if cid in cid_to_record:
-                    cid_to_record[cid].pb2pa_allosteric_energy = energy
-
-            n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
-            log.info(f"  Flexible allosteric docking complete: {n_scored}/{len(records)} scored.")
-
-            scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
-            scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-            top50 = scored[:CONFIG.top_n_for_active]
-
-            # Flexibile active-site docking on top 50
-            flex_act_pdbqt_list, flex_act_center_list = _build_flexible_ensemble(
-                receptor_pdb, pb2pa["pdbqt"],
-                flex_active_residues,
-                max(3, CONFIG.max_flexible_conformers // 2),
-                deps,
-            )
-            flex_act_center_list = [active_center] * len(flex_act_pdbqt_list)
-
-            log.info(f"  Flexible active-site docking top {len(top50)} using {len(flex_act_pdbqt_list)} conformers…")
-            saved_method = CONFIG.consensus_scoring_method
-            CONFIG.consensus_scoring_method = "min"
-
-            active_results = _parallel_dock_ensemble(
-                [(r.compound_id, r.smiles) for r in top50],
-                flex_act_pdbqt_list,
-                flex_act_center_list,
-                CONFIG.active_box_size,
-                work_dir, "flex_act",
-                cache=cache, use_cache=use_cache,
-            )
-
-            CONFIG.consensus_scoring_method = saved_method
-
-            for cid, energy in active_results:
-                if cid in cid_to_record:
-                    cid_to_record[cid].pb2pa_active_energy = energy
-
         else:
-            log.info("  Docking all compounds against allosteric site…")
-            items = [(r.compound_id, r.smiles) for r in records]
-            allosteric_results = _parallel_dock(
-                items, pb2pa["pdbqt"],
-                allosteric_center, CONFIG.allosteric_box_size,
-                work_dir, "allosteric",
-                cache=cache, use_cache=use_cache,
+            top_candidates = _screen_standard(
+                records, targets, work_dir, cache=cache, use_cache=use_cache,
             )
 
-            cid_to_record = {r.compound_id: r for r in records}
-            for cid, energy in allosteric_results:
-                if cid in cid_to_record:
-                    cid_to_record[cid].pb2pa_allosteric_energy = energy
+        # ML rescoring on top N Vina hits
+        scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
+        scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+        _apply_ml_rescoring(scored, pb2pa["pdbqt"], work_dir, water_results)
 
-            n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
-            log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
-
-            scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
-            scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-
-            top50 = scored[:CONFIG.top_n_for_active]
-            log.info(f"  Docking top {len(top50)} compounds against active site…")
-
-            active_items = [(r.compound_id, r.smiles) for r in top50]
-            active_results = _parallel_dock(
-                active_items, pb2pa["pdbqt"],
-                active_center, CONFIG.active_box_size,
-                work_dir, "active",
-                cache=cache, use_cache=use_cache,
-            )
-
-            for cid, energy in active_results:
-                if cid in cid_to_record:
-                    cid_to_record[cid].pb2pa_active_energy = energy
-
+        ranked = scored
     else:
-        log.info("  Vina unavailable. Using RDKit Shape Fallback.")
+        rank = _screen_shape_fallback(records, targets, work_dir)
+        ranked = rank
 
-        ref_mol = None
-        holo_pdb = targets.get("holo_pdb")
-        if holo_pdb and os.path.exists(holo_pdb):
-            lig_pdb = os.path.join(work_dir, "native_ref.pdb")
-            try:
-                from Bio.PDB import PDBIO, PDBParser, Select
-
-                parser = PDBParser(QUIET=True)
-                struct = parser.get_structure("ref", holo_pdb)
-                for model in struct:
-                    for chain in model:
-                        for residue in chain:
-                            if residue.get_id()[0] != " " and residue.get_resname().strip() not in ("HOH", "WAT"):
-                                pdbio = PDBIO()
-
-                                class _Sel(Select):
-                                    def accept_residue(self, r):
-                                        return r is residue
-
-                                pdbio.set_structure(struct)
-                                pdbio.save(lig_pdb, _Sel())
-                                break
-                        else:
-                            continue
-                        break
-                    else:
-                        continue
-                    break
-                ref_mol = Chem.MolFromPDBFile(lig_pdb)
-            except Exception:
-                pass
-
-        if ref_mol is None:
-            ref_smi = list(CONFIG.control_smiles.values())[0]
-            ref_mol = Chem.MolFromSmiles(ref_smi)
-
-        if ref_mol is None:
-            log.error("  Cannot obtain reference molecule for shape scoring.")
-            return records[:CONFIG.top_n]
-
-        total = len(records)
-        shape_iter = _tqdm(
-            enumerate(records), total=total,
-            desc="  Shape scoring", disable=not _HAVE_TQDM,
-        )
-        for i, rec in shape_iter:
-            if rec.mol is None:
-                mol = Chem.MolFromSmiles(rec.smiles)
-                if mol is None:
-                    continue
-                rec.mol = mol
-            score = _compute_shape_fallback_score(rec.mol, ref_mol)
-            rec.shape_score = score
-            if (i + 1) % 100 == 0 and not _HAVE_TQDM:
-                log.info(f"  Shape scored {i + 1} / {total}")
-
-        scored_shape = [r for r in records if r.shape_score is not None]
-        scored_shape.sort(key=lambda r: r.shape_score)
-        if scored_shape:
-            log.info(f"  Shape scoring complete. Best score: {scored_shape[0].shape_score:.3f}")
-        else:
-            log.warning("  No shape scores computed.")
-
-    # ── ML rescoring on top N Vina hits ──
-    if (
-        use_vina
-        and CONFIG.use_ml_rescoring
-        and _HAVE_ML_SCORING
-        and scored
-    ):
-        n_rescore = min(len(scored), CONFIG.mm_gbsa_top_n) if (CONFIG.use_mm_gbsa or CONFIG.use_mm_gbsa_rescoring) else 50
-        log.info(f"  Applying ML rescoring to top {n_rescore} Vina hits…")
-        try:
-            top_to_rescore = scored[:n_rescore]
-            top_to_rescore = _rescore_with_ml(
-                top_to_rescore,
-                pb2pa["pdbqt"],
-                work_dir,
-                water_results=water_results,
-            )
-        except Exception as exc:
-            log.warning(f"  ML rescoring failed: {exc}")
-
-    use_vina_final = deps.get("USE_VINA", False)
-    if use_vina_final:
-        ranked = [r for r in records if r.pb2pa_allosteric_energy is not None]
-        ranked.sort(key=lambda r: r.pb2pa_allosteric_energy)
-    else:
-        ranked = [r for r in records if r.shape_score is not None]
-        ranked.sort(key=lambda r: r.shape_score)
-
+    ranked.sort(key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else float("inf"))
     top10 = ranked[:CONFIG.top_n]
+
     log.info(f"  Top {len(top10)} candidates selected.")
     for i, r in enumerate(top10):
         energy_str = (

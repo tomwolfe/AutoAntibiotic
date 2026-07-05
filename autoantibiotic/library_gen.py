@@ -619,6 +619,143 @@ def _compute_strain_energy(mol: Chem.Mol) -> Optional[float]:
         return None
 
 
+# ── Filter helpers ─────────────────────────────────────────────────
+
+
+def _setup_filter_catalogs() -> tuple:
+    """Build and return (pains_catalog, tox_catalog, reactive_catalog)."""
+    pains_params = FilterCatalogParams()
+    pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
+    pains_catalog = FilterCatalog(pains_params)
+    tox_catalog = _setup_toxicity_catalog() if _HAVE_TOX_ALERTS else None
+    reactive_catalog = _setup_reactive_catalog()
+    return pains_catalog, tox_catalog, reactive_catalog
+
+
+def _build_ref_fingerprints() -> Dict[str, Any]:
+    """Build Morgan fingerprints for all reference antibiotics."""
+    ref_mols: Dict[str, Any] = {}
+    for name, smi in CONFIG.reference_antibiotics.items():
+        mol = Chem.MolFromSmiles(smi)
+        if mol is not None:
+            ref_mols[name] = AllChem.GetMorganFingerprintAsBitVect(
+                mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+            )
+    return ref_mols
+
+
+def _filter_beta_lactam(
+    record: CompoundRecord, mol: Chem.Mol, lactam_pattern: Chem.Mol,
+) -> tuple[bool, str]:
+    """Skip compounds with β-lactam substructure (unless control)."""
+    if not record.compound_id.startswith("CTRL_") and mol.HasSubstructMatch(lactam_pattern):
+        return False, "structural"
+    return True, ""
+
+
+def _filter_similarity(
+    record: CompoundRecord, mol: Chem.Mol, ref_fps: Dict[str, Any],
+    threshold: float,
+) -> tuple[bool, str]:
+    """Skip compounds too similar to known antibiotics."""
+    fp = AllChem.GetMorganFingerprintAsBitVect(
+        mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+    )
+    max_sim = 0.0
+    for ref_fp in ref_fps.values():
+        sim = TanimotoSimilarity(fp, ref_fp)
+        max_sim = max(max_sim, sim)
+    record.max_similarity = max_sim
+
+    if max_sim >= threshold:
+        return False, "similarity"
+    return True, ""
+
+
+def _filter_lipinski(
+    record: CompoundRecord, mol: Chem.Mol,
+) -> tuple[bool, str]:
+    """Enforce Lipinski Rule-of-5 and QED threshold."""
+    try:
+        mw = Descriptors.MolWt(mol)
+        logp = Crippen.MolLogP(mol)
+        hbd = Descriptors.NumHDonors(mol)
+        hba = Descriptors.NumHAcceptors(mol)
+        lipinski_ok = (
+            mw <= CONFIG.lipinski_mw_max
+            and logp <= CONFIG.lipinski_logp_max
+            and hbd <= CONFIG.lipinski_hbd_max
+            and hba <= CONFIG.lipinski_hba_max
+        )
+        qed = QED.qed(mol)
+    except Exception:
+        return False, "admet"
+
+    record.passes_lipinski = lipinski_ok
+    record.qed_score = qed
+
+    if not lipinski_ok or qed <= CONFIG.qed_threshold:
+        return False, "admet"
+    return True, ""
+
+
+def _filter_pains(
+    record: CompoundRecord, mol: Chem.Mol, pains_catalog: FilterCatalog,
+) -> tuple[bool, str]:
+    """Remove PAINS-alert compounds."""
+    pains_match = pains_catalog.HasMatch(mol)
+    record.passes_pains = not pains_match
+    if pains_match:
+        return False, "pains"
+    return True, ""
+
+
+def _filter_sa_score(
+    record: CompoundRecord, mol: Chem.Mol,
+) -> tuple[bool, str]:
+    """Filter by synthetic accessibility score."""
+    if _HAVE_SA_SCORE:
+        try:
+            sa_score = _compute_sa_score(mol)
+            if sa_score > CONFIG.sa_score_threshold:
+                return False, "sa_score"
+        except Exception:
+            pass
+    return True, ""
+
+
+def _filter_toxicity(
+    record: CompoundRecord, mol: Chem.Mol, tox_catalog: Optional[FilterCatalog],
+) -> tuple[bool, str]:
+    """Remove compounds flagged by toxicity alerts."""
+    if tox_catalog is not None:
+        tox_matches = tox_catalog.GetMatches(mol)
+        if tox_matches:
+            return False, "toxicity"
+    return True, ""
+
+
+def _filter_reactive(
+    record: CompoundRecord, mol: Chem.Mol, reactive_catalog: Optional[FilterCatalog],
+) -> tuple[bool, str]:
+    """Remove compounds with reactive / unstable groups (BRENK)."""
+    if reactive_catalog is not None:
+        rxn_matches = reactive_catalog.GetMatches(mol)
+        if rxn_matches:
+            return False, "reactive"
+    return True, ""
+
+
+def _filter_strain(
+    record: CompoundRecord, mol: Chem.Mol,
+) -> tuple[bool, str]:
+    """Remove conformationally strained compounds."""
+    strain = _compute_strain_energy(mol)
+    if strain is not None and strain > CONFIG.strain_energy_threshold:
+        return False, "strain"
+    return True, ""
+
+
 def apply_filters(
     records: Union[List[CompoundRecord], Iterator[CompoundRecord]],
     similarity_threshold: float = CONFIG.similarity_threshold,
@@ -640,34 +777,27 @@ def apply_filters(
     """
     log.info("─── Phase 2: Filtering ───")
 
-    ref_mols: Dict[str, Any] = {}
-    for name, smi in CONFIG.reference_antibiotics.items():
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            ref_mols[name] = AllChem.GetMorganFingerprintAsBitVect(
-                mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
-            )
-
     lactam_pattern = Chem.MolFromSmarts(CONFIG.beta_lactam_smarts)
+    ref_fps = _build_ref_fingerprints()
+    pains_catalog, tox_catalog, reactive_catalog = _setup_filter_catalogs()
 
-    pains_params = FilterCatalogParams()
-    pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
-    pains_catalog = FilterCatalog(pains_params)
+    # Build filter pipeline as a list of (name, function) tuples
+    filter_pipeline: List[tuple] = [
+        ("structural", lambda r, m: _filter_beta_lactam(r, m, lactam_pattern)),
+        ("similarity", lambda r, m: _filter_similarity(r, m, ref_fps, similarity_threshold)),
+        ("admet", _filter_lipinski),
+        ("pains", lambda r, m: _filter_pains(r, m, pains_catalog)),
+        ("sa_score", _filter_sa_score),
+        ("toxicity", lambda r, m: _filter_toxicity(r, m, tox_catalog)),
+        ("reactive", lambda r, m: _filter_reactive(r, m, reactive_catalog)),
+        ("strain", _filter_strain),
+    ]
 
-    tox_catalog = _setup_toxicity_catalog() if _HAVE_TOX_ALERTS else None
-
-    # Reactive / unstable group catalog (BRENK)
-    reactive_catalog = _setup_reactive_catalog()
-
+    skipped: Dict[str, int] = {
+        "structural": 0, "similarity": 0, "admet": 0, "pains": 0,
+        "sa_score": 0, "toxicity": 0, "reactive": 0, "strain": 0,
+    }
     passed: List[CompoundRecord] = []
-    skipped_structural = 0
-    skipped_similarity = 0
-    skipped_admet = 0
-    skipped_pains = 0
-    skipped_sa_score = 0
-    skipped_toxicity = 0
-    skipped_reactive = 0
-    skipped_strain = 0
 
     for record in records:
         if record.mol is None:
@@ -677,98 +807,31 @@ def apply_filters(
             record.mol = mol
         mol = record.mol
 
-        is_control = record.compound_id.startswith("CTRL_")
-        if not is_control and mol.HasSubstructMatch(lactam_pattern):
-            skipped_structural += 1
-            continue
+        for name, filter_fn in filter_pipeline:
+            ok, _ = filter_fn(record, mol)
+            if not ok:
+                skipped[name] += 1
+                break
+        else:
+            passed.append(record)
 
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits)
-        max_sim = 0.0
-        for ref_fp in ref_mols.values():
-            sim = TanimotoSimilarity(fp, ref_fp)
-            max_sim = max(max_sim, sim)
-        record.max_similarity = max_sim
-
-        if max_sim >= similarity_threshold:
-            skipped_similarity += 1
-            continue
-
-        try:
-            mw = Descriptors.MolWt(mol)
-            logp = Crippen.MolLogP(mol)
-            hbd = Descriptors.NumHDonors(mol)
-            hba = Descriptors.NumHAcceptors(mol)
-            lipinski_ok = (
-                mw <= CONFIG.lipinski_mw_max
-                and logp <= CONFIG.lipinski_logp_max
-                and hbd <= CONFIG.lipinski_hbd_max
-                and hba <= CONFIG.lipinski_hba_max
-            )
-            qed = QED.qed(mol)
-        except Exception:
-            continue
-
-        record.passes_lipinski = lipinski_ok
-        record.qed_score = qed
-
-        if not lipinski_ok or qed <= CONFIG.qed_threshold:
-            skipped_admet += 1
-            continue
-
-        pains_match = pains_catalog.HasMatch(mol)
-        record.passes_pains = not pains_match
-        if pains_match:
-            skipped_pains += 1
-            continue
-
-        if _HAVE_SA_SCORE:
-            try:
-                sa_score = _compute_sa_score(mol)
-                if sa_score > CONFIG.sa_score_threshold:
-                    skipped_sa_score += 1
-                    continue
-            except Exception:
-                pass
-
-        # Toxicity alerts
-        if tox_catalog is not None:
-            tox_matches = tox_catalog.GetMatches(mol)
-            if tox_matches:
-                skipped_toxicity += 1
-                continue
-
-        # Reactive / unstable group filter (BRENK)
-        if reactive_catalog is not None:
-            rxn_matches = reactive_catalog.GetMatches(mol)
-            if rxn_matches:
-                skipped_reactive += 1
-                continue
-
-        # 3-D strain energy check
-        strain = _compute_strain_energy(mol)
-        if strain is not None and strain > CONFIG.strain_energy_threshold:
-            skipped_strain += 1
-            continue
-
-        passed.append(record)
-
-    log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
-    log.info(f"  Similarity filter (Tc < {similarity_threshold}): {skipped_similarity} removed.")
-    log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped_admet} removed.")
-    log.info(f"  PAINS filter: {skipped_pains} removed.")
+    log.info(f"  Structural exclusion (β-lactam): {skipped['structural']} removed.")
+    log.info(f"  Similarity filter (Tc < {similarity_threshold}): {skipped['similarity']} removed.")
+    log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped['admet']} removed.")
+    log.info(f"  PAINS filter: {skipped['pains']} removed.")
     if _HAVE_SA_SCORE:
-        log.info(f"  SA Score filter (> {CONFIG.sa_score_threshold}): {skipped_sa_score} removed.")
+        log.info(f"  SA Score filter (> {CONFIG.sa_score_threshold}): {skipped['sa_score']} removed.")
     else:
         log.info("  SA Score filter: skipped (sascore not installed).")
     if tox_catalog is not None:
-        log.info(f"  Toxicity alerts: {skipped_toxicity} removed.")
+        log.info(f"  Toxicity alerts: {skipped['toxicity']} removed.")
     else:
         log.info("  Toxicity alerts: skipped (RDKit Catalogs not available).")
     if reactive_catalog is not None:
-        log.info(f"  Reactive group filter: {skipped_reactive} removed.")
+        log.info(f"  Reactive group filter: {skipped['reactive']} removed.")
     else:
         log.info("  Reactive group filter: skipped (BRENK catalog unavailable).")
-    log.info(f"  Strain energy filter (> {CONFIG.strain_energy_threshold} kcal/mol): {skipped_strain} removed.")
+    log.info(f"  Strain energy filter (> {CONFIG.strain_energy_threshold} kcal/mol): {skipped['strain']} removed.")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
     if len(passed) < CONFIG.diversity_min_count and similarity_threshold < CONFIG.similarity_threshold_relaxed:

@@ -87,11 +87,11 @@ def mock_deps_and_targets():
         "vina": True, "obabel": True, "prepare_receptor": True,
         "USE_VINA": True, "USE_OBABEL": True,
     }
-    with patch("autoantibiotic.main.verify_dependencies", return_value=deps):
-        with patch("autoantibiotic.main.prepare_targets", side_effect=_mock_prepare_targets):
-            with patch("autoantibiotic.main.run_redocking_validation", return_value=(False, None)):
-                with patch("autoantibiotic.main.generate_candidate_library", return_value=_DUMMY_RECORDS):
-                    with patch("autoantibiotic.main.apply_filters", return_value=_DUMMY_RECORDS):
+    with patch("autoantibiotic.orchestrator.verify_dependencies", return_value=deps):
+        with patch("autoantibiotic.orchestrator.prepare_targets", side_effect=_mock_prepare_targets):
+            with patch("autoantibiotic.orchestrator.run_redocking_validation", return_value=(False, None)):
+                with patch("autoantibiotic.orchestrator.generate_candidate_library", return_value=_DUMMY_RECORDS):
+                    with patch("autoantibiotic.orchestrator.apply_filters", return_value=_DUMMY_RECORDS):
                         yield
 
 
