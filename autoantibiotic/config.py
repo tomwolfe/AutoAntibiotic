@@ -171,6 +171,9 @@ class PipelineConfig:
     mutable_residues: set = field(default_factory=lambda: {"G246", "N146"})
     dry_run: bool = False
 
+    # IFP similarity threshold
+    ifp_similarity_threshold: float = 0.6
+
     # Phase 6 – AI-enhanced features
     use_pharmacophore_filter: bool = True
     use_ml_rescoring: bool = True
@@ -346,6 +349,8 @@ class CompoundRecord:
     passes_pains: bool = False
 
     resistance_notes: str = ""
+
+    ifp_score: Optional[float] = None
 
     shape_score: Optional[float] = None
 

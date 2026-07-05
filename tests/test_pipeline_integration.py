@@ -106,6 +106,7 @@ EXPECTED_CSV_COLUMNS = [
     "ML_Score",
     "Selectivity_Index",
     "Max_Similarity",
+    "IFP_Score",
     "Passes_Lipinski",
     "QED_Score",
     "ADMET_Flags",

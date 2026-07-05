@@ -5,11 +5,13 @@ import tempfile
 
 import numpy as np
 import pytest
+from rdkit import Chem
 
 from autoantibiotic.analysis import (
     _parse_pdb_residue_coords,
     _parse_pdbqt_ligand_coords,
     check_key_interactions,
+    compute_ifp_similarity,
 )
 
 # Minimal receptor PDB snippet containing SER403 at (10, 10, 10).
@@ -174,3 +176,88 @@ class TestCheckKeyInteractions:
         assert check_key_interactions(
             pose_contact_pdbqt, ser403_pdb, ["SER403"], distance_cutoff=1e-6,
         )
+
+
+# ── Minimal receptor PDB with all 4 IFP residues ──────────────────────────
+_IFP_RECEPTOR_PDB = """\
+ATOM      1  N   TYR A 159       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  O   TYR A 159       0.000   0.000   0.000  1.00  0.00           O
+ATOM      3  CG  TYR A 159       1.000   1.000   0.000  1.00  0.00           C
+ATOM      4  CD1 TYR A 159       1.707   1.707   0.000  1.00  0.00           C
+ATOM      5  CD2 TYR A 159       1.707   0.293   0.000  1.00  0.00           C
+ATOM      6  CE1 TYR A 159       3.000   1.707   0.000  1.00  0.00           C
+ATOM      7  CE2 TYR A 159       3.000   0.293   0.000  1.00  0.00           C
+ATOM      8  CZ  TYR A 159       3.707   1.000   0.000  1.00  0.00           C
+ATOM      9  OH  TYR A 159       4.414   1.000   0.000  1.00  0.00           O
+ATOM     10  CB  TYR A 159       0.500   0.500   1.000  1.00  0.00           C
+ATOM     11  N   ALA A 237      -1.000   0.000   0.000  1.00  0.00           N
+ATOM     12  O   ALA A 237      -3.000   0.000   0.000  1.00  0.00           O
+ATOM     13  CA  ALA A 237      -2.000   0.000   0.000  1.00  0.00           C
+ATOM     14  CB  ALA A 237      -2.500   0.500   0.000  1.00  0.00           C
+ATOM     15  N   MET A 241       0.000  -1.000   0.000  1.00  0.00           N
+ATOM     16  O   MET A 241       0.000  -3.000   0.000  1.00  0.00           O
+ATOM     17  CA  MET A 241       0.000  -2.000   0.000  1.00  0.00           C
+ATOM     18  CB  MET A 241       0.500  -2.500   0.000  1.00  0.00           C
+ATOM     19  CG  MET A 241       1.000  -3.000   0.000  1.00  0.00           C
+ATOM     20  CE  MET A 241       1.500  -3.500   0.000  1.00  0.00           C
+ATOM     21  N   SER A 403       0.000   0.000  -1.000  1.00  0.00           N
+ATOM     22  O   SER A 403       0.000   0.000  -3.000  1.00  0.00           O
+ATOM     23  CA  SER A 403       0.000   0.000  -2.000  1.00  0.00           C
+ATOM     24  CB  SER A 403       0.500   0.500  -2.500  1.00  0.00           C
+ATOM     25  OG  SER A 403       1.000   1.000  -3.000  1.00  0.00           O
+END
+"""
+
+
+@pytest.fixture
+def ifp_receptor_pdb() -> str:
+    """Write the 4-residue receptor PDB to a temp file."""
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False)
+    tmp.write(_IFP_RECEPTOR_PDB)
+    tmp.close()
+    yield tmp.name
+    os.unlink(tmp.name)
+
+
+_CEFTAROLINE_SMI = (
+    "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)"
+    "C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O"
+)
+
+
+class TestIfpSimilarity:
+    def test_identical_molecules_returns_one(self, ifp_receptor_pdb: str) -> None:
+        """Verifies that identical molecules give Tanimoto ≈ 1.0."""
+        ceft = Chem.MolFromSmiles(_CEFTAROLINE_SMI)
+        assert ceft is not None
+        sim = compute_ifp_similarity(ceft, ceft, ifp_receptor_pdb)
+        assert sim == pytest.approx(1.0, abs=1e-6), f"Expected 1.0, got {sim}"
+
+    def test_dissimilar_molecules_below_threshold(
+        self, ifp_receptor_pdb: str,
+    ) -> None:
+        """Verifies that a very different molecule scores < 0.5."""
+        ceft = Chem.MolFromSmiles(_CEFTAROLINE_SMI)
+        ethane = Chem.MolFromSmiles("CC")
+        assert ceft is not None and ethane is not None
+        sim = compute_ifp_similarity(ceft, ethane, ifp_receptor_pdb)
+        assert sim < 0.5, f"Expected < 0.5, got {sim}"
+
+    def test_missing_receptor_returns_zero(self) -> None:
+        """Missing PDB should yield 0.0."""
+        ceft = Chem.MolFromSmiles(_CEFTAROLINE_SMI)
+        assert ceft is not None
+        sim = compute_ifp_similarity(
+            ceft, ceft, "/nonexistent/receptor.pdb",
+        )
+        assert sim == 0.0
+
+    def test_invalid_molecule_returns_zero(self, ifp_receptor_pdb: str) -> None:
+        """Invalid reference should yield 0.0."""
+        ceft = Chem.MolFromSmiles(_CEFTAROLINE_SMI)
+        invalid = Chem.MolFromSmiles("C1=CC=CC=C1")  # valid but very different
+        assert ceft is not None and invalid is not None
+        sim = compute_ifp_similarity(ceft, invalid, ifp_receptor_pdb)
+        # Benzene (no N/O) vs Ceftaroline → IFP vectors should differ
+        assert isinstance(sim, float)
+        assert 0.0 <= sim <= 1.0

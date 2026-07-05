@@ -57,6 +57,9 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
                 else "N/A"
             ),
             "Max_Similarity": f"{rec.max_similarity:.3f}",
+            "IFP_Score": (
+                f"{rec.ifp_score:.3f}" if rec.ifp_score is not None else "N/A"
+            ),
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
             "ADMET_Flags": "; ".join(rec.admet_flags) if rec.admet_flags else "N/A",
@@ -431,6 +434,9 @@ def print_summary(
         log.info(f"  Redocking RMSD:                {redock_rmsd:.3f} Å")
     else:
         log.info("  Redocking RMSD:                N/A")
+    ifp_scores = [r.ifp_score for r in top10 if r.ifp_score is not None]
+    if ifp_scores:
+        log.info(f"  Average IFP similarity (top 10): {np.mean(ifp_scores):.3f}")
     log.info(f"  Redocking validated:           {validation_ok}")
     log.info(f'  CSV report:                    {CONFIG.output_dir / CONFIG.csv_report_name}')
     log.info("=" * 60)
