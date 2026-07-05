@@ -794,10 +794,7 @@ def apply_filters(
         ("strain", _filter_strain),
     ]
 
-    skipped: Dict[str, int] = {
-        "structural": 0, "similarity": 0, "admet": 0, "pains": 0,
-        "sa_score": 0, "toxicity": 0, "reactive": 0, "strain": 0,
-    }
+    skipped: Dict[str, int] = {name: 0 for name, _ in filter_pipeline}
     passed: List[CompoundRecord] = []
 
     for record in records:

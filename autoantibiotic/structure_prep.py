@@ -10,6 +10,7 @@ from rdkit.Chem import AllChem
 
 from .config import CONFIG
 from .io_utils import download_with_retry, log, run_tool
+from .water_analysis import get_waters_to_remove
 
 
 def calculate_adaptive_box_size(
@@ -311,23 +312,16 @@ def prepare_targets(
 
     if water_results is not None:
         result["water_results"] = water_results
-        waters_to_remove = [
-            w.identifier for w in water_results.high_energy_waters
-            if not w.is_bridging
-        ]
+        waters_to_remove = [w.identifier for w in get_waters_to_remove(water_results)]
         if waters_to_remove:
             log.info(f"  Removing {len(waters_to_remove)} high-energy waters from holo structure.")
 
-        # Prepare a water-aware holo receptor (keep bridging waters)
-        holo_waters = [w for w in water_results.all_waters if w.is_bridging or not w.is_high_energy]
-        holo_waters_to_remove = [w.identifier for w in water_results.high_energy_waters if not w.is_bridging]
-        holo_removal = holo_waters_to_remove if holo_waters_to_remove else None
         log.info("  Cleaning PBP2a (holo, with selected waters)…")
         holo_water_pdbqt = clean_pdb_structure(
             holo_path,
             os.path.join(work_dir, "PBP2a_holo_water.pdb"),
             deps=deps,
-            waters_to_remove=holo_removal,
+            waters_to_remove=waters_to_remove,
         )
         result["PBP2a_holo_water"] = {
             "pdbqt": holo_water_pdbqt,
