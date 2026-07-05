@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import joblib
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import Crippen, Descriptors, QED
+from rdkit.Chem import Crippen, Descriptors, QED, AllChem
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score
+from sklearn.model_selection import train_test_split
 
 from ..config import CONFIG
 from ..io_utils import log
@@ -50,6 +54,27 @@ class MetaScorer:
     def available(self) -> bool:
         return self._fitted and self._model is not None
 
+    @staticmethod
+    def _scaffold_groups(smiles_list: List[str]) -> Dict[str, List[int]]:
+        """Group molecule indices by Murcko scaffold.
+
+        Returns a dict mapping scaffold SMILES to list of indices
+        in *smiles_list* that share that scaffold.
+        """
+        groups: Dict[str, List[int]] = defaultdict(list)
+        for i, smi in enumerate(smiles_list):
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            try:
+                scaffold = MurckoScaffold.MurckoScaffoldSmiles(
+                    mol=mol, includeChirality=False,
+                )
+                groups[scaffold].append(i)
+            except Exception:
+                continue
+        return groups
+
     def fit(
         self,
         actives_smiles: List[str],
@@ -76,6 +101,7 @@ class MetaScorer:
         """
         X_list: List[np.ndarray] = []
         y_list: List[float] = []
+        smiles_for_scaffold: List[str] = []
 
         self._training_actives = list(actives_smiles)
         self._training_inactives = list(inactives_smiles)
@@ -89,6 +115,7 @@ class MetaScorer:
             try:
                 X_list.append(feature_extractor(mol))
                 y_list.append(1.0)
+                smiles_for_scaffold.append(smi)
             except Exception:
                 continue
 
@@ -99,6 +126,7 @@ class MetaScorer:
             try:
                 X_list.append(feature_extractor(mol))
                 y_list.append(0.0)
+                smiles_for_scaffold.append(smi)
             except Exception:
                 continue
 
@@ -112,6 +140,45 @@ class MetaScorer:
         X = np.array(X_list, dtype=np.float32)
         y = np.array(y_list, dtype=np.float32)
 
+        # ── Scaffold-split cross-validation ───────────────────────
+        scaffold_r2 = float("nan")
+        try:
+            groups = self._scaffold_groups(smiles_for_scaffold)
+            scaffold_ids = list(groups.keys())
+            if len(scaffold_ids) >= 2:
+                # Split scaffolds into train/test
+                train_scaffolds, test_scaffolds = train_test_split(
+                    scaffold_ids, test_size=0.3, random_state=CONFIG.random_seed,
+                )
+                train_idx = []
+                test_idx = []
+                for scaf in train_scaffolds:
+                    train_idx.extend(groups[scaf])
+                for scaf in test_scaffolds:
+                    test_idx.extend(groups[scaf])
+
+                if len(train_idx) >= 4 and len(test_idx) >= 2:
+                    X_train_scaf = X[train_idx]
+                    y_train_scaf = y[train_idx]
+                    X_test_scaf = X[test_idx]
+                    y_test_scaf = y[test_idx]
+
+                    cv_model = RandomForestRegressor(
+                        n_estimators=200,
+                        max_depth=8,
+                        random_state=CONFIG.random_seed,
+                    )
+                    cv_model.fit(X_train_scaf, y_train_scaf)
+                    y_pred_scaf = cv_model.predict(X_test_scaf)
+                    scaffold_r2 = float(r2_score(y_test_scaf, y_pred_scaf))
+                    log.info(
+                        f"MetaScorer: scaffold-split R² = {scaffold_r2:.4f} "
+                        f"(train={len(train_idx)}, test={len(test_idx)})"
+                    )
+        except Exception as exc:
+            log.warning(f"MetaScorer: scaffold split failed ({exc}); skipping.")
+
+        # ── Train final model on all data ──────────────────────────
         self._model = RandomForestRegressor(
             n_estimators=200,
             max_depth=8,
@@ -122,11 +189,50 @@ class MetaScorer:
         self._fitted = True
         self._uncertainty_threshold = uncertainty_threshold
         oob = getattr(self._model, "oob_score_", float("nan"))
+
+        # ── Random-split validation ────────────────────────────────
+        random_r2 = float("nan")
+        try:
+            X_train_rand, X_test_rand, y_train_rand, y_test_rand = train_test_split(
+                X, y, test_size=0.3, random_state=CONFIG.random_seed,
+            )
+            rand_model = RandomForestRegressor(
+                n_estimators=200,
+                max_depth=8,
+                random_state=CONFIG.random_seed,
+            )
+            rand_model.fit(X_train_rand, y_train_rand)
+            y_pred_rand = rand_model.predict(X_test_rand)
+            random_r2 = float(r2_score(y_test_rand, y_pred_rand))
+        except Exception:
+            pass
+
         log.info(
             f"MetaScorer: trained on {len(X)} compounds "
             f"({len(actives_smiles)} actives / {len(inactives_smiles)} inactives), "
-            f"OOB R² = {oob:.4f}"
+            f"OOB R² = {oob:.4f}, "
+            f"Random-Split R² = {random_r2:.4f}, "
+            f"Scaffold-Split R² = {scaffold_r2:.4f}"
         )
+
+        # ── Optional SHAP analysis ─────────────────────────────────
+        try:
+            import shap
+            explainer = shap.TreeExplainer(self._model)
+            shap_values = explainer.shap_values(X[:min(50, len(X))])
+            mean_shap = np.abs(shap_values).mean(axis=0)
+            top_n = min(5, len(mean_shap))
+            top_feature_indices = np.argsort(mean_shap)[-top_n:][::-1]
+            feat_names = self._feature_names or [
+                f"feat_{i}" for i in range(X.shape[1])
+            ]
+            shap_info = ", ".join(
+                f"{feat_names[i]}: {mean_shap[i]:.4f}"
+                for i in top_feature_indices
+            )
+            log.info(f"MetaScorer: top {top_n} SHAP features: {shap_info}")
+        except ImportError:
+            pass
 
         self._save()
         return self

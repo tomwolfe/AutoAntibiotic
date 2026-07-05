@@ -283,6 +283,73 @@ _VDW_RADII: Dict[int, float] = {
 """Van der Waals radii (Å) by atomic number."""
 
 
+def _is_bridging_water(
+    water_pos: np.ndarray,
+    ligand_positions: np.ndarray,
+    protein_positions: np.ndarray,
+    hbond_distance_cutoff: float = 3.5,
+    angle_cutoff: float = 120.0,
+) -> bool:
+    """Determine whether a water molecule bridges the ligand and protein
+    via hydrogen bonds.
+
+    A bridging water must be within *hbond_distance_cutoff* of at least
+    one ligand heavy atom AND one protein heavy atom.  Additionally,
+    the angle formed at the water oxygen (ligand_atom — water_O —
+    protein_atom) should be > *angle_cutoff* degrees, indicating a
+    near-linear H-bond geometry.
+
+    Parameters
+    ----------
+    water_pos : np.ndarray, shape (3,)
+        3-D coordinates of the water oxygen.
+    ligand_positions : np.ndarray, shape (N, 3)
+        Coordinates of ligand heavy atoms.
+    protein_positions : np.ndarray, shape (M, 3)
+        Coordinates of protein heavy atoms (N, CA, C, O, etc.).
+    hbond_distance_cutoff : float
+        Maximum distance (Å) for a potential H-bond (default 3.5).
+    angle_cutoff : float
+        Minimum angle (degrees) at the water oxygen (default 120°).
+
+    Returns
+    -------
+    bool
+        ``True`` if the water is likely a bridging water.
+    """
+    if len(ligand_positions) == 0 or len(protein_positions) == 0:
+        return False
+
+    # Find ligand atoms within cutoff
+    lig_dists = np.linalg.norm(ligand_positions - water_pos, axis=1)
+    lig_close = np.where(lig_dists < hbond_distance_cutoff)[0]
+    if len(lig_close) == 0:
+        return False
+
+    # Find protein atoms within cutoff
+    prot_dists = np.linalg.norm(protein_positions - water_pos, axis=1)
+    prot_close = np.where(prot_dists < hbond_distance_cutoff)[0]
+    if len(prot_close) == 0:
+        return False
+
+    # Check angle for all pairs of close ligand/protein atoms
+    for li in lig_close:
+        for pi in prot_close:
+            v_lig = ligand_positions[li] - water_pos
+            v_prot = protein_positions[pi] - water_pos
+            norm_lig = np.linalg.norm(v_lig)
+            norm_prot = np.linalg.norm(v_prot)
+            if norm_lig < 1e-8 or norm_prot < 1e-8:
+                continue
+            cos_angle = np.dot(v_lig, v_prot) / (norm_lig * norm_prot)
+            cos_angle = np.clip(cos_angle, -1.0, 1.0)
+            angle = float(np.degrees(np.arccos(cos_angle)))
+            if angle > angle_cutoff:
+                return True
+
+    return False
+
+
 def _check_vdw_overlap(
     ligand_mol: Chem.Mol,
     water_position: np.ndarray,
@@ -583,6 +650,7 @@ def rescore_with_mmgbsa(
                 if water_results is not None and water_results.high_energy_waters:
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
+                        receptor_pdb=receptor_pdb,
                     )
                     if penalty > 0.0:
                         binding_energy -= penalty
@@ -785,6 +853,7 @@ def rescore_with_explicit_mmgbsa(
                 if water_results is not None and water_results.high_energy_waters:
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
+                        receptor_pdb=receptor_pdb,
                     )
                     if penalty > 0.0:
                         binding_energy -= penalty
@@ -818,10 +887,42 @@ def rescore_with_explicit_mmgbsa(
     return top_candidates
 
 
+def _load_protein_heavy_atoms(
+    receptor_pdb: str,
+) -> np.ndarray:
+    """Load protein heavy atom positions from a PDB file.
+
+    Returns an (M, 3) array of coordinates for protein heavy atoms
+    (N, CA, C, O, CB, etc.).  Ignores HETATM records (waters, ligands).
+    Returns an empty array on failure.
+    """
+    positions: List[np.ndarray] = []
+    try:
+        with open(receptor_pdb) as f:
+            for line in f:
+                if line.startswith("ATOM"):
+                    atom_name = line[12:16].strip()
+                    if atom_name.startswith("H"):
+                        continue
+                    try:
+                        x = float(line[30:38])
+                        y = float(line[38:46])
+                        z = float(line[46:54])
+                        positions.append(np.array([x, y, z]))
+                    except (ValueError, IndexError):
+                        continue
+    except (OSError, IOError):
+        pass
+    if not positions:
+        return np.empty((0, 3), dtype=np.float64)
+    return np.array(positions, dtype=np.float64)
+
+
 def _compute_water_displacement_penalty(
     mol: Chem.Mol,
     high_energy_waters: List[Any],
     seed: int,
+    receptor_pdb: Optional[str] = None,
 ) -> float:
     """Compute the total water displacement penalty for a ligand.
 
@@ -829,6 +930,11 @@ def _compute_water_displacement_penalty(
     (ETKDG + MMFF) and checks for VDW overlap using
     :func:`_check_vdw_overlap`.  Only waters that sterically clash
     with the ligand contribute their displacement energy.
+
+    If *receptor_pdb* is provided, waters that form bridging H-bonds
+    between the ligand and the protein (checked via
+    :func:`_is_bridging_water`) are excluded from the penalty, as
+    these waters are structurally critical.
 
     Returns the sum of displacement energies of clashing waters (kcal/mol).
     """
@@ -843,8 +949,31 @@ def _compute_water_displacement_penalty(
     except Exception:
         return 0.0
 
+    # Pre-load protein heavy atoms if receptor PDB is provided
+    protein_positions: Optional[np.ndarray] = None
+    if receptor_pdb is not None:
+        protein_positions = _load_protein_heavy_atoms(receptor_pdb)
+
+    # Extract ligand heavy-atom positions from the 3D conformer
+    conf = mol_3d.GetConformer()
+    lig_heavy_positions = np.array([
+        [conf.GetAtomPosition(i).x,
+         conf.GetAtomPosition(i).y,
+         conf.GetAtomPosition(i).z]
+        for i in range(mol_3d.GetNumAtoms())
+        if mol_3d.GetAtomWithIdx(i).GetAtomicNum() > 1
+    ], dtype=np.float64)
+
     total = 0.0
     for w in high_energy_waters:
+        # Skip bridging waters — they are structurally critical
+        if protein_positions is not None and len(protein_positions) > 0:
+            if _is_bridging_water(w.position, lig_heavy_positions, protein_positions):
+                log.info(
+                    f"      Water at {w.position} is a bridging water; "
+                    "skipping displacement penalty."
+                )
+                continue
         if _check_vdw_overlap(mol_3d, w.position):
             total += w.displacement_energy
     return total

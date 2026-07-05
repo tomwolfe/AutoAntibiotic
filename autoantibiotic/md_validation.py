@@ -85,6 +85,35 @@ def _compute_ligand_rmsd(
 # ── Radius of Gyration ──────────────────────────────────────────────
 
 
+def _check_rmsd_convergence(
+    rmsd_trajectory: List[float],
+    window_size: int = 5,
+) -> bool:
+    """Check whether the RMSD has converged based on the last *window_size*
+    frames.
+
+    Convergence is defined as the standard deviation of the RMSD values
+    over the window being below 0.1 Å.
+
+    Parameters
+    ----------
+    rmsd_trajectory : list of float
+        RMSD values collected at each check interval.
+    window_size : int
+        Number of most recent frames to consider (default 5).
+
+    Returns
+    -------
+    bool
+        ``True`` if converged (std < 0.1 Å over the window),
+        ``False`` otherwise.
+    """
+    if len(rmsd_trajectory) < window_size:
+        return False
+    recent = rmsd_trajectory[-window_size:]
+    return float(np.std(recent, ddof=1)) < 0.1
+
+
 def _compute_radius_of_gyration(positions: np.ndarray) -> float:
     """Compute the radius of gyration of a set of atoms.
 
@@ -150,6 +179,7 @@ def run_short_md(
     relaxation_ns: Optional[float] = None,
     production_ns: Optional[float] = None,
     pocket_resnames: Optional[List[str]] = None,
+    convergence_check_interval_ns: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run a two-stage explicit-solvent MD simulation of a ligand-receptor
     complex and return stability metrics.
@@ -199,6 +229,11 @@ def run_short_md(
     pocket_resnames : list of str, optional
         Residue names defining the binding pocket for Rg tracking.
         Defaults to allosteric + active site residues from CONFIG.
+    convergence_check_interval_ns : float, optional
+        Check for RMSD convergence every *N* ns.  If the standard
+        deviation of the last 5 RMSD measurements is < 0.1 Å, the
+        simulation stops early.  Defaults to
+        ``CONFIG.md_convergence_check_interval_ns``.
 
     Returns
     -------
@@ -210,6 +245,8 @@ def run_short_md(
         - ``"temperature_k"``: float
         - ``"success"``: bool
         - ``"message"``: str
+        - ``"converged"``: bool — whether RMSD convergence was detected
+          (always ``False`` if the simulation ran to completion).
         - ``"pocket_rg_stability"``: float — fractional change in pocket
           Rg (0.0 = unchanged, >0.1 = significant expansion/collapse).
 
@@ -425,8 +462,52 @@ def run_short_md(
         # Re-add with weak spring constant
         _add_restraints(0.1)  # 0.1 kcal/mol/A^2 – very weak
 
-        prod_steps = int(prod_ns * 1000 / 0.002)
-        simulation.step(prod_steps)
+        # ── Chunked production with convergence checking ─────────
+        check_interval_ns = (
+            convergence_check_interval_ns
+            if convergence_check_interval_ns is not None
+            else float(CONFIG.md_convergence_check_interval_ns)
+        )
+        chunk_steps = max(1, int(check_interval_ns * 1000 / 0.002))
+        total_prod_steps = int(prod_ns * 1000 / 0.002)
+        steps_remaining = total_prod_steps
+        rmsd_trajectory: List[float] = []
+        converged: bool = False
+        actual_ns = 0.0
+
+        while steps_remaining > 0:
+            steps_this_chunk = min(chunk_steps, steps_remaining)
+            simulation.step(steps_this_chunk)
+            steps_remaining -= steps_this_chunk
+            chunk_ns = steps_this_chunk * 0.002 / 1000.0
+            actual_ns += chunk_ns
+
+            # Compute RMSD for this chunk
+            state_chunk = simulation.context.getState(getPositions=True)
+            chunk_positions = state_chunk.getPositions(asNumpy=True).value
+            chunk_lig_positions = np.array([
+                chunk_positions[idx] for idx in lig_heavy_top_indices
+            ], dtype=np.float64)
+            chunk_rmsd = _compute_ligand_rmsd(
+                init_lig_heavy_positions, chunk_lig_positions,
+            )
+            rmsd_trajectory.append(chunk_rmsd)
+
+            # Check convergence
+            if _check_rmsd_convergence(rmsd_trajectory, window_size=5):
+                converged = True
+                log.info(
+                    f"  MD: Convergence reached at {actual_ns:.1f} ns "
+                    f"(RMSD std < 0.1 Å over last 5 checks). "
+                    "Stopping early to save compute."
+                )
+                break
+
+        if not converged:
+            log.info(
+                f"  MD: Production completed ({actual_ns:.1f} ns) "
+                "without early convergence."
+            )
 
         # 10. Get final positions and compute metrics
         state_final = simulation.context.getState(getPositions=True)
@@ -452,18 +533,20 @@ def run_short_md(
         else:
             pocket_rg_stability = 0.0
 
-        total_ns = rel_ns + prod_ns
+        total_ns = rel_ns + actual_ns
 
         result = {
             "ligand_rmsd_angstrom": ligand_rmsd,
             "duration_ns": total_ns,
             "temperature_k": temperature,
             "success": True,
+            "converged": converged,
             "pocket_rg_stability": pocket_rg_stability,
             "message": (
                 f"MD simulation completed. Ligand RMSD = {ligand_rmsd:.2f} A, "
                 f"pocket Rg change = {pocket_rg_stability:.3f} "
                 f"({'UNSTABLE' if pocket_rg_stability > 0.1 else 'stable'})"
+                + (f" Converged at {actual_ns:.1f} ns." if converged else "")
             ),
         }
         log.info(
@@ -479,6 +562,7 @@ def run_short_md(
             "duration_ns": rel_ns + prod_ns,
             "temperature_k": temperature,
             "success": False,
+            "converged": False,
             "pocket_rg_stability": 999.9,
             "message": str(exc),
         }

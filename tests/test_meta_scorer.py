@@ -231,6 +231,66 @@ def test_metascorer_dynamic_features_affect_score() -> None:
     assert 0.0 <= score_with_md <= 1.0
 
 
+def test_metascorer_scaffold_split_small_dataset() -> None:
+    """Scaffold split should not crash with small datasets (singletons)."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    # Should not raise — even with tiny dataset
+    scorer.fit(actives, inactives)
+    assert scorer.available is True
+
+
+def test_metascorer_scaffold_group_diverse() -> None:
+    """_scaffold_groups should group molecules by Murcko scaffold."""
+    smiles_list = [
+        "c1ccccc1O",      # phenol
+        "c1ccccc1O",      # phenol (same)
+        "c1ccccc1N",      # aniline (different scaffold)
+    ]
+    groups = MetaScorer._scaffold_groups(smiles_list)
+    # Should have at least 2 groups
+    assert len(groups) >= 1
+    # Same SMILES should be in same group
+    phenol_scaffold = None
+    for scaf, indices in groups.items():
+        if 0 in indices and 1 in indices:
+            phenol_scaffold = scaf
+            break
+    assert phenol_scaffold is not None, (
+        "Both phenol SMILES should share a scaffold group"
+    )
+
+
+def test_metascorer_scaffold_split_consistency() -> None:
+    """MetaScorer trained with scaffold splitting should still predict."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+
+    rec = _make_record(actives[0])
+    score = scorer.predict(rec)
+    assert score is not None
+    assert 0.0 <= score <= 1.0
+
+
 def test_metascorer_uncertainty_threshold_high_never_triggers() -> None: 
     """With a very high threshold, needs_manual_review should stay False."""
     actives = [

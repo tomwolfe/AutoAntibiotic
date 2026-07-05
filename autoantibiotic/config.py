@@ -58,9 +58,13 @@ class PipelineConfig:
     md_validation_duration_ns: int = 10
     md_production_duration_ns: int = 50
     md_relaxation_duration_ns: int = 1
+    md_convergence_check_interval_ns: float = 5.0
+    """Interval (ns) for convergence checking during MD production.
+    After each chunk, RMSD is evaluated; if stable (std < 0.1 Å over
+    last *window_size* frames), the simulation stops early."""
 
     # Explicit-solvent MM-GB/SA rescoring
-    use_explicit_solvent_mmgbsa: bool = False
+    use_explicit_solvent_mmgbsa: bool = True
     """When True, use explicit-solvent (TIP3P) MM-GB/SA for rescoring top
     candidates instead of the implicit-solvent (OBC2) heuristic."""
     explicit_solvent_frames: int = 10

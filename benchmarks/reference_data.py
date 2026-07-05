@@ -14,7 +14,7 @@ Contains:
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 # ── Known PBP2a active inhibitors ────────────────────────────────────
 # These are well-characterised from published inhibition / SPR assays.
@@ -110,6 +110,214 @@ PBP2A_INACTIVES: List[Dict[str, str]] = [
 
 DECOY_COUNT: int = 100
 """Number of property-matched decoys to generate per active compound."""
+
+# ── Expanded PBP2a active/inactive sets ──────────────────────────────
+
+PBP2A_ACTIVES_EXTRA: List[Dict[str, str]] = [
+    {
+        "id": "ALLOSTERIC_04",
+        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccccc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ALLOSTERIC_05",
+        "smiles": "COc1ccc(NC(=O)c2cc(-c3ccc(F)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ALLOSTERIC_06",
+        "smiles": "CC(C)(C)c1ccc(NC(=O)c2cc(-c3ccc(Cl)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ALLOSTERIC_07",
+        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccccc3F)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ALLOSTERIC_08",
+        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccc(C#N)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ALLOSTERIC_09",
+        "smiles": "Cc1ccc(NC(=O)c2cc(-c3cccs3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ALLOSTERIC_10",
+        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccc4c(c3)OCO4)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ALLOSTERIC_11",
+        "smiles": "COc1cc2c(cc1OC)C(=O)C=C(C(=O)Nc1cccc(C(F)(F)F)c1)O2",
+        "reference": "Allosteric PBP2a inhibitor, PMID 30367749",
+    },
+    {
+        "id": "ALLOSTERIC_12",
+        "smiles": "O=C1C=C(C(=O)Nc2cccc(C(F)(F)F)c2)Oc2cc3c(cc21)OCO3",
+        "reference": "Allosteric PBP2a inhibitor, PMID 30367749",
+    },
+    {
+        "id": "ALLOSTERIC_13",
+        "smiles": "COc1ccc2c(c1)C(=O)C=C(C(=O)Nc1cccc(C(F)(F)F)c1)O2",
+        "reference": "Allosteric PBP2a inhibitor, PMID 30367749",
+    },
+    {
+        "id": "ALLOSTERIC_14",
+        "smiles": "Cc1cc2c(cc1C)C(=O)C=C(C(=O)Nc1cccc(C(F)(F)F)c1)O2",
+        "reference": "Allosteric PBP2a inhibitor, PMID 30367749",
+    },
+    {
+        "id": "ALLOSTERIC_15",
+        "smiles": "Clc1ccc(NC(=O)c2c(-c3ccc(F)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "reference": "Pyrazole PBP2a binder, PMID 30946582",
+    },
+    {
+        "id": "ACTIVE_09",
+        "smiles": "CC1=C(C(=O)O)SC(C(=O)N2C(C(=O)O)=C(C)CS/C2=C/1)=C(C)C",
+        "reference": "Cephalosporin analogue, ChEMBL",
+    },
+    {
+        "id": "ACTIVE_10",
+        "smiles": "CC12C(N3C(=O)C(C(=O)O)=C(C)S/C3=C/1C(=O)O)C2(C)C",
+        "reference": "Penicillin analogue, ChEMBL",
+    },
+    {
+        "id": "ACTIVE_11",
+        "smiles": "Cc1c(C(=O)N2C(C(=O)O)=C(C)CS/C2=C/1)SC3C(=O)N4C(C(=O)O)=C(C)SC34",
+        "reference": "Cephalosporin dimer, ChEMBL",
+    },
+    {
+        "id": "ACTIVE_12",
+        "smiles": "CC1=C(C(=O)N2C(C(=O)O)=C(C)SC2C1)SC3C(=O)N4C(C(=O)O)=C(C)SC34",
+        "reference": "Cephalosporin analogue, ChEMBL",
+    },
+    {
+        "id": "ACTIVE_13",
+        "smiles": "CCOC(=O)C1=C(C)N2C(C(=O)O)=C(C)SC2C1=O",
+        "reference": "Cephalosporin ester, ChEMBL",
+    },
+    {
+        "id": "ACTIVE_14",
+        "smiles": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C)C)C(=O)O",
+        "reference": "Ceftaroline analogue, ChEMBL",
+    },
+    {
+        "id": "ACTIVE_15",
+        "smiles": "CC1=C(C(=O)N2C(C(=O)O)=C(C)SC2C1=O)SC3C(=O)N4C(C(=O)O)=C(C)SC34",
+        "reference": "Cephalosporin analogue, ChEMBL",
+    },
+    {
+        "id": "ACTIVE_16",
+        "smiles": "Cc1nc2c(c(=O)n1C)C(=O)N(C)C(=O)N2C",
+        "reference": "Xanthine PBP2a binder, PMID 23978242",
+    },
+]
+
+PBP2A_INACTIVES_EXTRA: List[Dict[str, str]] = [
+    {
+        "id": "INACTIVE_09",
+        "smiles": "CC(C)C1=CC=C(C=C1)C(C)C(=O)O",
+        "reference": "Ibuprofen — PubChem negative",
+    },
+    {
+        "id": "INACTIVE_10",
+        "smiles": "CC1=CC=C(C=C1)S(=O)(=O)N",
+        "reference": "Toluene-4-sulfonamide — negative",
+    },
+    {
+        "id": "INACTIVE_11",
+        "smiles": "OC(=O)C1=CC=CC=C1C2=CC=CC=C2",
+        "reference": "Biphenyl carboxylic acid — negative",
+    },
+    {
+        "id": "INACTIVE_12",
+        "smiles": "CC1=CC=C(C=C1)C(=O)NC2=CC=C(C=C2)C(=O)O",
+        "reference": "Benzanilide derivative — negative",
+    },
+    {
+        "id": "INACTIVE_13",
+        "smiles": "CCOC(=O)C1=CC=C(C=C1)NC(=O)C2=CC=CC=C2",
+        "reference": "Ethyl benzanilate — negative",
+    },
+    {
+        "id": "INACTIVE_14",
+        "smiles": "CC1=CC(=O)OC1",
+        "reference": "Butyrolactone — negative",
+    },
+    {
+        "id": "INACTIVE_15",
+        "smiles": "CC(C)(C)C1=CC=C(C=C1)C(=O)O",
+        "reference": "4-tert-Butylbenzoic acid — negative",
+    },
+    {
+        "id": "INACTIVE_16",
+        "smiles": "CC1=CC=C(C=C1)NC(=O)C2=CC=CC=C2",
+        "reference": "p-Methylbenzanilide — negative",
+    },
+    {
+        "id": "INACTIVE_17",
+        "smiles": "CC1=CC=C(C=C1)S(=O)(=O)NC2=CC=CC=C2",
+        "reference": "Tosyl anilide — negative",
+    },
+    {
+        "id": "INACTIVE_18",
+        "smiles": "CCCCC1=CC=C(C=C1)C(=O)O",
+        "reference": "4-Pentylbenzoic acid — negative",
+    },
+    {
+        "id": "INACTIVE_19",
+        "smiles": "CCCCCC1=CC=CC=C1",
+        "reference": "Hexylbenzene — negative",
+    },
+    {
+        "id": "INACTIVE_20",
+        "smiles": "CC1=CC=C(C=C1)OC2=CC=CC=C2",
+        "reference": "p-Cresyl phenyl ether — negative",
+    },
+    {
+        "id": "INACTIVE_21",
+        "smiles": "CC1=CC=CC(C)=C1NC(=O)C2=CC=C(C=C2)Cl",
+        "reference": "Chlorobenzanilide — negative",
+    },
+    {
+        "id": "INACTIVE_22",
+        "smiles": "CC1=CC=C(C=C1)N(C)C(=O)C2=CC=CC=C2",
+        "reference": "N-Methylbenzanilide — negative",
+    },
+    {
+        "id": "INACTIVE_23",
+        "smiles": "CC1=CC=C(C=C1)NC(=O)C2=CC=C(C=C2)C#N",
+        "reference": "Cyano benzanilide — negative",
+    },
+    {
+        "id": "INACTIVE_24",
+        "smiles": "CC1=CC=C(C=C1)S(=O)(=O)NCCCCCCCC",
+        "reference": "Tosyl octylamide — negative",
+    },
+    {
+        "id": "INACTIVE_25",
+        "smiles": "CC1=CC=C(C=C1)C2=CC=C(C=C2)C(=O)O",
+        "reference": "Biphenyl carboxylic ester — negative",
+    },
+    {
+        "id": "INACTIVE_26",
+        "smiles": "CCCCCCCCCCCCCC(=O)O",
+        "reference": "Palmitic acid — negative",
+    },
+    {
+        "id": "INACTIVE_27",
+        "smiles": "CCCCCCCCCCCCCCCC(=O)O",
+        "reference": "Stearic acid — PubChem negative",
+    },
+    {
+        "id": "INACTIVE_28",
+        "smiles": "CCCCCCCCCCCCCCCCCC(=O)OCC",
+        "reference": "Ethyl stearate — negative",
+    },
+]
 
 
 # ── ADMET Reference Data ─────────────────────────────────────────────
@@ -751,24 +959,163 @@ def load_chembl_admet_subset() -> Dict[str, List[Dict[str, Any]]]:
     return result
 
 
-def get_actives_smiles() -> List[str]:
+def fetch_additional_chEMBL_data(
+    target_id: str = "CHEMBL396",
+    limit: int = 200,
+) -> Dict[str, List[Dict[str, str]]]:
+    """Fetch additional PBP2a actives/inactives from the ChEMBL API.
+
+    Uses the ``chembl_webresource_client`` to query target CHEMBL396
+    (PBP2a).  Compounds with pChEMBL >= 6.0 are labelled active,
+    those with pChEMBL < 4.0 (or reported inactive) are labelled inactive.
+
+    Parameters
+    ----------
+    target_id : str
+        ChEMBL target ID for PBP2a (default CHEMBL396).
+    limit : int
+        Maximum number of compounds to fetch (default 200).
+
+    Returns
+    -------
+    dict
+        A dict with keys ``"actives"`` and ``"inactives"``, each
+        containing a list of ``{"smiles": str, "id": str, "reference": str}``.
+    """
+    result: Dict[str, List[Dict[str, str]]] = {"actives": [], "inactives": []}
+
     try:
-        from autoantibiotic.data_loaders import fetch_chembl_pbp2a_actives
+        from chembl_webresource_client.new_client import new_client
+    except ImportError:
+        import logging
+        logging.getLogger("AutoAntibiotic").warning(
+            "chembl_webresource_client not installed; returning empty."
+        )
+        return result
+
+    try:
+        activities = new_client.activity
+        chembl_mols = new_client.molecule
+
+        acts = activities.filter(
+            target_chembl_id=target_id,
+            pchembl_value__isnull=False,
+        ).only(
+            "molecule_chembl_id", "pchembl_value",
+            "standard_type", "standard_value", "standard_units",
+        )
+
+        seen_actives: set = set()
+        seen_inactives: set = set()
+
+        for act in acts:
+            mol_id = act.get("molecule_chembl_id")
+            if mol_id is None:
+                continue
+
+            pchembl = act.get("pchembl_value")
+            if pchembl is None:
+                continue
+
+            try:
+                pchembl_val = float(pchembl)
+            except (ValueError, TypeError):
+                continue
+
+            try:
+                mol_record = chembl_mols.get(mol_id)
+                smiles = _extract_smiles_simple(mol_record)
+                if smiles is None:
+                    continue
+            except Exception:
+                continue
+
+            if pchembl_val >= 6.0:
+                if mol_id not in seen_actives and len(result["actives"]) < limit // 2:
+                    seen_actives.add(mol_id)
+                    result["actives"].append({
+                        "id": mol_id,
+                        "smiles": smiles,
+                        "reference": f"ChEMBL pChEMBL={pchembl_val}",
+                    })
+            elif pchembl_val < 4.0:
+                if mol_id not in seen_inactives and len(result["inactives"]) < limit // 2:
+                    seen_inactives.add(mol_id)
+                    result["inactives"].append({
+                        "id": mol_id,
+                        "smiles": smiles,
+                        "reference": f"ChEMBL pChEMBL={pchembl_val}",
+                    })
+
+            if len(result["actives"]) >= limit // 2 and len(result["inactives"]) >= limit // 2:
+                break
+
+    except Exception:
+        pass
+
+    return result
+
+
+def _extract_smiles_simple(mol_record: Any) -> Optional[str]:
+    """Extract canonical SMILES from a ChEMBL molecule record."""
+    try:
+        if hasattr(mol_record, "_data") and "molecule_structures" in mol_record._data:
+            struct = mol_record._data["molecule_structures"]
+            if struct:
+                return struct.get("canonical_smiles")
+    except Exception:
+        pass
+    try:
+        if mol_record.get("molecule_structures"):
+            return mol_record["molecule_structures"].get("canonical_smiles")
+    except Exception:
+        pass
+    return None
+
+
+def get_actives_smiles() -> List[str]:
+    """Return SMILES for known PBP2a actives.
+
+    Tries the ChEMBL API first for expanded data, then falls back to
+    the combined hardcoded set (PBP2A_ACTIVES + PBP2A_ACTIVES_EXTRA).
+    """
+    try:
+        chembl_data = fetch_additional_chEMBL_data(limit=200)
+        if len(chembl_data["actives"]) > 10:
+            import logging
+            logging.getLogger("AutoAntibiotic").info(
+                f"Using {len(chembl_data['actives'])} actives from ChEMBL API."
+            )
+            return [d["smiles"] for d in chembl_data["actives"]]
+    except (ImportError, Exception):
+        pass
+
+    from autoantibiotic.data_loaders import fetch_chembl_pbp2a_actives
+    try:
         chembl = fetch_chembl_pbp2a_actives()
         if len(chembl) > len(PBP2A_ACTIVES):
             return [d["smiles"] for d in chembl]
     except (ImportError, Exception):
         pass
-    return [d["smiles"] for d in PBP2A_ACTIVES]
+
+    all_actives = PBP2A_ACTIVES + PBP2A_ACTIVES_EXTRA
+    return [d["smiles"] for d in all_actives]
 
 
 def get_inactives_smiles() -> List[str]:
-    return [d["smiles"] for d in PBP2A_INACTIVES]
+    """Return SMILES for known PBP2a inactives.
+
+    Uses the combined hardcoded set (PBP2A_INACTIVES + PBP2A_INACTIVES_EXTRA).
+    """
+    all_inactives = PBP2A_INACTIVES + PBP2A_INACTIVES_EXTRA
+    return [d["smiles"] for d in all_inactives]
 
 
 def get_active_labels() -> List[str]:
-    return [d["id"] for d in PBP2A_ACTIVES]
+    all_actives = PBP2A_ACTIVES + PBP2A_ACTIVES_EXTRA
+    return [d["id"] for d in all_actives]
 
 
 def get_inactive_labels() -> List[str]:
-    return [d["id"] for d in PBP2A_INACTIVES]
+    all_inactives = PBP2A_INACTIVES + PBP2A_INACTIVES_EXTRA
+    return [d["id"] for d in all_inactives]
