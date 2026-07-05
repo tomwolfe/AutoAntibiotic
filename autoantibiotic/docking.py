@@ -13,7 +13,8 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
-from .config import CONFIG, CompoundRecord
+from .config import CONFIG
+from .models import CompoundRecord
 from .io_utils import log, make_cache_key, parse_gnina_energy, parse_vina_energy, run_tool
 
 try:

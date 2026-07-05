@@ -50,7 +50,8 @@ from benchmarks.reference_data import (
     get_inactive_labels,
     get_inactives_smiles,
 )
-from autoantibiotic.config import CONFIG, CompoundRecord
+from autoantibiotic.config import CONFIG
+from autoantibiotic.models import CompoundRecord
 from autoantibiotic.io_utils import log
 
 # Optional dependencies for real docking

@@ -289,7 +289,8 @@ class TestStrainEnergy:
         cubane = Chem.MolFromSmiles("C12C3C4C1C5C2C3C45")
         assert cubane is not None
 
-        from autoantibiotic.config import CONFIG, CompoundRecord
+        from autoantibiotic.config import CONFIG
+        from autoantibiotic.models import CompoundRecord
         original_threshold = CONFIG.strain_energy_threshold
         CONFIG.strain_energy_threshold = 5.0  # lower threshold to ensure failure
         try:

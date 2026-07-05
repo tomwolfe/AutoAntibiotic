@@ -13,7 +13,8 @@ from rdkit.Chem import AllChem, Descriptors
 from rdkit.Chem.Draw import rdMolDraw2D
 from sklearn.decomposition import PCA
 
-from .config import CONFIG, CompoundRecord
+from .config import CONFIG
+from .models import CompoundRecord
 from .io_utils import ensure_output_dir, log
 
 

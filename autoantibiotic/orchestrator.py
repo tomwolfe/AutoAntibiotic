@@ -11,7 +11,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import CONFIG, CompoundRecord
+from .config import CONFIG
+from .models import CompoundRecord
 from .docking import run_redocking_validation, screen_library
 from .analysis import analyze_selectivity_and_resistance
 from .io_utils import (

@@ -15,7 +15,8 @@ import pandas as pd
 import pytest
 from rdkit import Chem
 
-from autoantibiotic.config import CONFIG, CompoundRecord
+from autoantibiotic.config import CONFIG
+from autoantibiotic.models import CompoundRecord
 from autoantibiotic.main import main
 from autoantibiotic.library_gen import generate_candidate_library, apply_filters
 

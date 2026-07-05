@@ -15,7 +15,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from rdkit import Chem, RDLogger as rdklog
 
-from .config import CONFIG, ToolResult
+from .config import CONFIG
+from .models import ToolResult
 
 rdklog.DisableLog("rdApp.*")
 warnings.filterwarnings("ignore", category=DeprecationWarning)

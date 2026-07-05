@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 from rdkit import Chem
 
-from autoantibiotic.config import CONFIG, CompoundRecord
+from autoantibiotic.config import CONFIG
+from autoantibiotic.models import CompoundRecord
 from autoantibiotic.ml_scoring import (
     rescore_with_mmgbsa,
     rescore_with_ml,

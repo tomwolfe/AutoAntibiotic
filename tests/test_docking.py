@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 from rdkit import Chem
 
-from autoantibiotic.config import CONFIG, CompoundRecord
+from autoantibiotic.config import CONFIG
+from autoantibiotic.models import CompoundRecord
 from autoantibiotic.docking import (
     _run_gnina_docking,
     _run_vina_docking,

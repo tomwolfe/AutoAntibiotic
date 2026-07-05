@@ -24,7 +24,7 @@ from benchmarks.reference_data import (
     get_actives_smiles,
     get_inactives_smiles,
 )
-from autoantibiotic.config import CompoundRecord
+from autoantibiotic.models import CompoundRecord
 
 
 class TestEnrichmentFactor:

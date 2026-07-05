@@ -18,7 +18,8 @@ from rdkit.Chem import (
 from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.DataStructs import TanimotoSimilarity
 
-from .config import CONFIG, CompoundRecord
+from .config import CONFIG
+from .models import CompoundRecord
 from .io_utils import log
 
 try:

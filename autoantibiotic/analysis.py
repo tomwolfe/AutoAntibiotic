@@ -8,7 +8,8 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, Crippen, Descriptors, rdDistGeom, rdMolAlign
 
-from .config import CONFIG, CompoundRecord
+from .config import CONFIG
+from .models import CompoundRecord
 from .docking import _parallel_dock
 from .io_utils import log
 
