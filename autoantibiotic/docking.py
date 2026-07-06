@@ -465,7 +465,8 @@ def dock_compound(
         log.warning("  GNINA docking failed, falling back to Vina.")
         energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
 
-    for f in (lig_pdbqt, out_pdbqt):
+    # Keep out_pdbqt on disk for downstream IFP analysis.
+    for f in (lig_pdbqt,):
         try:
             os.remove(f)
         except OSError:
@@ -1439,6 +1440,17 @@ def screen_library(
 
     ranked.sort(key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else float("inf"))
     top10 = ranked[:CONFIG.top_n]
+
+    # Assign docked pose PDBQT paths for top candidates (used in IFP filtering)
+    tags_to_try = ["active", "allosteric", "flex_act", "flex_alloc",
+                   "ens_act_0", "ens_alloc_0"]
+    for r in top10:
+        safe_id = r.compound_id.replace("/", "_").replace(" ", "_")
+        for tag in tags_to_try:
+            expected = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
+            if os.path.exists(expected):
+                r.docked_pose_path = expected
+                break
 
     log.info(f"  Top {len(top10)} candidates selected.")
     for i, r in enumerate(top10):

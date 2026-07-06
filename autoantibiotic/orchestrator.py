@@ -17,6 +17,7 @@ from .config import CONFIG, PipelineConfig
 from .models import CompoundRecord
 from .docking import run_redocking_validation, screen_library
 from .analysis import analyze_selectivity_and_resistance, predict_meta_score
+from .scoring_metrics import check_key_interactions
 from .ml_scoring.meta_scorer import _get_meta_scorer
 from .io_utils import (
     ensure_output_dir,
@@ -193,6 +194,8 @@ class PipelineOrchestrator:
         if not self.top_candidates:
             log.warning("  No candidates after screening. Halting pipeline.")
             raise SystemExit(0)
+
+        self._filter_by_key_interactions()
 
     def analyze_selectivity(self) -> None:
         """Phase 4: Selectivity filtering and resistance analysis."""
@@ -415,6 +418,82 @@ class PipelineOrchestrator:
         generate_html_report(self.top_candidates, top50, self.config.output_dir)
 
     # ── Internal helpers ───────────────────────────────────────────
+
+    def _filter_by_key_interactions(self) -> None:
+        """Filter ``self.top_candidates`` by key interaction fingerprint.
+
+        Docked poses that do ***not*** contact any residue listed in
+        ``CONFIG.key_interaction_residues_allosteric`` **or**
+        ``CONFIG.key_interaction_residues_active`` are discarded **unless**
+        the check itself fails (missing file, parse error), in which case
+        the compound is retained (fail-safe).
+
+        The filter is bypassed entirely when
+        ``CONFIG.require_key_interactions_for_rescoring`` is ``False``.
+        """
+        flag = self.config.require_key_interactions_for_rescoring
+        if not flag:
+            log.info("  Key-interaction filter disabled.")
+            return
+
+        pb2pa = self.targets.get("PBP2a", {})
+        receptor_pdbqt = pb2pa.get("pdbqt", "")
+        if not receptor_pdbqt:
+            log.warning("  No PBP2a receptor PDBQT; skipping IFP filter.")
+            return
+
+        receptor_pdb = receptor_pdbqt.replace(".pdbqt", ".pdb")
+        if not os.path.isfile(receptor_pdb):
+            log.warning("  Receptor PDB not found; skipping IFP filter.")
+            return
+
+        allosteric_residues = self.config.key_interaction_residues_allosteric
+        active_residues = self.config.key_interaction_residues_active
+        n_before = len(self.top_candidates)
+        filtered: List[CompoundRecord] = []
+
+        for rec in self.top_candidates:
+            pose_path = rec.docked_pose_path
+            if not pose_path or not os.path.isfile(pose_path):
+                # Fail-safe: keep if pose file is missing
+                filtered.append(rec)
+                continue
+
+            try:
+                alloc_hit = check_key_interactions(
+                    pose_path, receptor_pdb, allosteric_residues,
+                )
+                act_hit = check_key_interactions(
+                    pose_path, receptor_pdb, active_residues,
+                )
+                if alloc_hit or act_hit:
+                    filtered.append(rec)
+                else:
+                    log.info(
+                        f"  Filtering out {rec.compound_id}: "
+                        "no key interactions detected."
+                    )
+            except Exception:
+                # Fail-safe: keep if the check itself fails
+                log.warning(
+                    f"  IFP check failed for {rec.compound_id}; "
+                    "keeping compound (fail-safe).",
+                    exc_info=True,
+                )
+                filtered.append(rec)
+
+        self.top_candidates = filtered
+        n_removed = n_before - len(filtered)
+        if n_removed:
+            log.info(
+                f"  Pose filtering removed {n_removed}/{n_before} "
+                f"candidates. {len(filtered)} remaining."
+            )
+        else:
+            log.info(
+                f"  Pose filtering: all {n_before} candidates "
+                "retained (all had key interactions)."
+            )
 
     def _setup_logging(self) -> None:
         logging.basicConfig(

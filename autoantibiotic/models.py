@@ -60,3 +60,6 @@ class CompoundRecord:
 
     water_displacement_energy: Optional[float] = None
     """Water displacement energy score from crystallographic water analysis."""
+
+    docked_pose_path: Optional[str] = None
+    """Path to the best docked pose PDBQT file for interaction fingerprint analysis."""

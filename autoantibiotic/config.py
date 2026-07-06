@@ -203,6 +203,11 @@ class PipelineConfig:
     key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["TYR159", "ALA237", "MET241"])
     key_interaction_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
     min_key_interactions: int = 1
+    require_key_interactions_for_rescoring: bool = True
+    """When True, filter out docked poses that lack key interactions
+    (H-bond / hydrophobic contacts with critical residues) before
+    expensive MM-GB/SA rescoring.  Fail-safe: if the interaction check
+    fails, the compound is kept."""
 
     # ── Filtering parameters ──
     similarity_threshold: float = 0.4
