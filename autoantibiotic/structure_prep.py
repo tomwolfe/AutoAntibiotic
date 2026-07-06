@@ -52,12 +52,15 @@ def calculate_adaptive_box_size(
 
 
 def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
-    """Minimal PDB → PDBQT conversion using RDKit fallback."""
+    """Minimal PDB → PDBQT conversion using RDKit fallback.
+
+    Produces a rigid-receptor PDBQT (plain ATOM records, no
+    ROOT/BRANCH sections) suitable for Vina rigid docking.
+    """
     try:
         mol = Chem.MolFromPDBFile(pdb_path, removeHs=False)
         if mol is None:
             return False
-        mol = Chem.AddHs(mol, addCoords=True)
         AllChem.ComputeGasteigerCharges(mol)
 
         _atom_type_map = {
@@ -68,6 +71,7 @@ def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
             "P": "P", "p": "P",
             "F": "F", "f": "F",
             "Cl": "Cl", "Br": "Br",
+            "I": "I",
             "H": "H",
         }
 
@@ -81,11 +85,11 @@ def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
             ad_type = _atom_type_map.get(elem, "C")
 
             x, y, z = pdbx.x, pdbx.y, pdbx.z
-            atom_name = f"{elem}{atom_no:>3}"[:4]
+            atom_name = f" {elem:<3s}"[:4]
             line = (
-                f"ATOM     {atom_no:>3} {atom_name:>4} PRT X   1    "
-                f"{x:>8.3f}{y:>8.3f}{z:>8.3f}  "
-                f"{gasteiger:>8.3f}     {ad_type:<2s}\n"
+                f"ATOM  {atom_no:>5d} {atom_name} PRT X   1    "
+                f"{x:>8.3f}{y:>8.3f}{z:>8.3f}  0.00  0.00"
+                f"{gasteiger:>10.4f} {ad_type:<2s}\n"
             )
             lines.append(line)
 
@@ -95,6 +99,24 @@ def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
 
     except Exception as exc:
         log.warning(f"  RDKit PDBQT fallback failed: {exc}")
+        return False
+
+
+def _is_rigid_pdbqt(pdbqt_path: str) -> bool:
+    """Check whether a PDBQT file is suitable as a rigid Vina receptor.
+
+    Returns True if the file contains ATOM/HETATM records and no
+    flex-receptor tags (ROOT/BRANCH/ENDBRANCH).
+    """
+    if not os.path.exists(pdbqt_path) or os.path.getsize(pdbqt_path) == 0:
+        return False
+    try:
+        with open(pdbqt_path) as f:
+            head = f.read(50000)
+        has_atoms = "ATOM" in head or "HETATM" in head
+        has_flex_tags = "ROOT" in head or "BRANCH" in head or "ENDBRANCH" in head
+        return has_atoms and not has_flex_tags
+    except Exception:
         return False
 
 
@@ -187,8 +209,12 @@ def clean_pdb_structure(
                     timeout=CONFIG.prepare_receptor_timeout,
                 )
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
-                    converted = True
-                    log.info("  PDBQT via prepare_receptor")
+                    if _is_rigid_pdbqt(pdbqt_path):
+                        converted = True
+                        log.info("  PDBQT via prepare_receptor")
+                    else:
+                        log.debug("  prepare_receptor produced flexible PDBQT; trying other methods.")
+                        os.remove(pdbqt_path)
             except (RuntimeError, OpenBabelError, AutoAntibioticError) as exc:
                 log.debug(f"  prepare_receptor failed: {exc}")
                 pass
@@ -200,8 +226,12 @@ def clean_pdb_structure(
                     timeout=CONFIG.obabel_timeout_s,
                 )
                 if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
-                    converted = True
-                    log.info("  PDBQT via obabel")
+                    if _is_rigid_pdbqt(pdbqt_path):
+                        converted = True
+                        log.info("  PDBQT via obabel")
+                    else:
+                        log.debug("  obabel produced flexible PDBQT.")
+                        os.remove(pdbqt_path)
             except (RuntimeError, OpenBabelError, AutoAntibioticError) as exc:
                 log.debug(f"  obabel failed: {exc}")
                 pass
@@ -214,6 +244,9 @@ def clean_pdb_structure(
             converted = _pdb_to_pdbqt_via_rdkit(out_path, pdbqt_path)
             if converted:
                 log.info("  PDBQT via RDKit fallback")
+                if not _is_rigid_pdbqt(pdbqt_path):
+                    log.warning("  RDKit fallback PDBQT is invalid; returning PDB only.")
+                    converted = False
             else:
                 log.warning("  ⚠  All PDBQT methods failed. Returning cleaned PDB only.")
 

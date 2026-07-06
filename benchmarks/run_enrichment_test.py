@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -402,6 +403,25 @@ def score_compounds_with_fingerprint_similarity(
 # ── Vina Docking Scoring ─────────────────────────────────────────────
 
 
+def _is_rigid_pdbqt(pdbqt_path: str) -> bool:
+    """Check if a PDBQT file is suitable as a rigid receptor for Vina.
+
+    A valid rigid-receptor PDBQT must contain ATOM/HETATM records and
+    must NOT contain ROOT/BRANCH/ENDBRANCH tags (which indicate a
+    flexible-receptor format that Vina rejects).
+    """
+    if not os.path.exists(pdbqt_path) or os.path.getsize(pdbqt_path) == 0:
+        return False
+    try:
+        with open(pdbqt_path) as f:
+            content = f.read(100000)
+        has_atoms = "ATOM" in content or "HETATM" in content
+        has_flex = "ROOT" in content or "BRANCH" in content or "ENDBRANCH" in content
+        return has_atoms and not has_flex
+    except Exception:
+        return False
+
+
 def _prepare_pbp2a_receptor() -> Optional[Dict[str, Any]]:
     """Download and prepare the PBP2a receptor for docking.
 
@@ -423,13 +443,27 @@ def _prepare_pbp2a_receptor() -> Optional[Dict[str, Any]]:
     cleaned_pdb = os.path.join(work_dir, "PBP2a_clean.pdb")
 
     if os.path.exists(cleaned_pdbqt) and os.path.exists(cleaned_pdb):
-        log.info("  Using cached prepared receptor.")
-    else:
+        if _is_rigid_pdbqt(cleaned_pdbqt):
+            log.info("  Using cached prepared receptor.")
+        else:
+            log.warning("  Cached PDBQT is in flexible-receptor format (incompatible with Vina). Regenerating…")
+            os.remove(cleaned_pdbqt)
+
+    if not os.path.exists(cleaned_pdbqt):
         log.info("  Preparing PBP2a receptor…")
         apo_path = fetch_structure(CONFIG.pdb_ids["PBP2a_apo"], pdb_dir)
-        result = clean_pdb_structure(apo_path, cleaned_pdb, deps={})
+
+        deps = {}
+        for tool_name in ("obabel",):
+            if shutil.which(tool_name):
+                deps[tool_name] = True
+
+        result = clean_pdb_structure(apo_path, cleaned_pdb, deps=deps)
         if not os.path.exists(cleaned_pdbqt):
             log.warning("  PDBQT not available; falling back to PDB for centroid calc.")
+            cleaned_pdbqt = cleaned_pdb
+        elif not _is_rigid_pdbqt(cleaned_pdbqt):
+            log.warning("  Generated PDBQT is not a valid rigid receptor. Falling back to PDB.")
             cleaned_pdbqt = cleaned_pdb
 
     try:
