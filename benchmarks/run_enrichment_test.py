@@ -46,6 +46,7 @@ from benchmarks.reference_data import (
     PBP2A_ACTIVES,
     PBP2A_INACTIVES,
     DECOY_COUNT,
+    get_active_labels,
     get_actives_smiles,
     get_inactive_labels,
     get_inactives_smiles,
@@ -191,6 +192,7 @@ def _property_distance(props_a: np.ndarray, props_b: np.ndarray) -> float:
 
 def generate_decoys(
     actives: List[Chem.Mol],
+    active_labels: List[str],
     n_decoys_per_active: int = 100,
     pool_size: int = 3000,
     seed: int = 42,
@@ -288,7 +290,7 @@ def generate_decoys(
         if len(selected) < n_decoys_per_active:
             log.warning(
                 f"  Only {len(selected)}/{n_decoys_per_active} decoys for "
-                f"active {PBP2A_ACTIVES[ai]['id']}. Relaxing fingerprint threshold…"
+                f"active {active_labels[ai]}. Relaxing fingerprint threshold…"
             )
             remaining = [
                 (pi, _property_distance(
@@ -311,7 +313,7 @@ def generate_decoys(
 
         for pi, _ in selected[:n_decoys_per_active]:
             used_indices.add(pi)
-            aid = PBP2A_ACTIVES[ai]["id"]
+            aid = active_labels[ai]
             decoys.append((f"DECOY_{decoy_idx:04d}", valid_pool[pi], aid))
             decoy_idx += 1
 
@@ -461,22 +463,26 @@ def run_enrichment_test(
 
     # 1. Load actives and inactives
     active_smiles = get_actives_smiles()
+    active_labels = get_active_labels()
     inactive_smiles = get_inactives_smiles()
 
     active_mols: List[Chem.Mol] = []
     active_records: List[CompoundRecord] = []
+    active_labels_filtered: List[str] = []
     for i, smi in enumerate(active_smiles):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
             log.warning(f"  Skipping active {i}: invalid SMILES")
             continue
         active_mols.append(mol)
+        active_labels_filtered.append(active_labels[i])
         active_records.append(
             CompoundRecord(
-                compound_id=f"ACTIVE_{PBP2A_ACTIVES[i]['id']}",
+                compound_id=f"ACTIVE_{active_labels[i]}",
                 smiles=smi, mol=mol,
             )
         )
+    active_labels = active_labels_filtered
 
     inactive_records: List[CompoundRecord] = []
     for i, smi in enumerate(inactive_smiles):
@@ -492,7 +498,7 @@ def run_enrichment_test(
 
     # 2. Generate decoys
     log.info("  Generating property-matched decoys…")
-    decoys = generate_decoys(active_mols, n_decoys_per_active, seed=42)
+    decoys = generate_decoys(active_mols, active_labels, n_decoys_per_active, seed=42)
     decoy_records: List[CompoundRecord] = []
     for did, mol, matched_active in decoys:
         decoy_records.append(
