@@ -65,6 +65,30 @@ try:
 except Exception:
     pass
 
+# Lazy imports for Vina docking (avoids hard dependency at module level)
+_VINA_IMPORTED: bool = False
+
+
+def _import_vina_deps() -> bool:
+    """Import Vina docking dependencies lazily.
+
+    Returns True if all required modules loaded successfully.
+    """
+    global _VINA_IMPORTED
+    if _VINA_IMPORTED:
+        return True
+    try:
+        from autoantibiotic.docking import dock_compound, prepare_ligand_pdbqt
+        from autoantibiotic.structure_prep import (
+            clean_pdb_structure,
+            compute_residue_centroid,
+            fetch_structure,
+        )
+        _VINA_IMPORTED = True
+        return True
+    except ImportError:
+        return False
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -375,6 +399,99 @@ def score_compounds_with_fingerprint_similarity(
     return records
 
 
+# ── Vina Docking Scoring ─────────────────────────────────────────────
+
+
+def _prepare_pbp2a_receptor() -> Optional[Dict[str, Any]]:
+    """Download and prepare the PBP2a receptor for docking.
+
+    Returns a dict with keys ``pdbqt``, ``allosteric_center``, and
+    ``active_center``, or None if preparation failed.
+    """
+    from autoantibiotic.structure_prep import (
+        clean_pdb_structure,
+        compute_residue_centroid,
+        fetch_structure,
+    )
+
+    pdb_dir = str(CONFIG.pdb_dir)
+    work_dir = str(CONFIG.work_dir)
+    os.makedirs(pdb_dir, exist_ok=True)
+    os.makedirs(work_dir, exist_ok=True)
+
+    cleaned_pdbqt = os.path.join(work_dir, "PBP2a_clean.pdbqt")
+    cleaned_pdb = os.path.join(work_dir, "PBP2a_clean.pdb")
+
+    if os.path.exists(cleaned_pdbqt) and os.path.exists(cleaned_pdb):
+        log.info("  Using cached prepared receptor.")
+    else:
+        log.info("  Preparing PBP2a receptor…")
+        apo_path = fetch_structure(CONFIG.pdb_ids["PBP2a_apo"], pdb_dir)
+        result = clean_pdb_structure(apo_path, cleaned_pdb, deps={})
+        if not os.path.exists(cleaned_pdbqt):
+            log.warning("  PDBQT not available; falling back to PDB for centroid calc.")
+            cleaned_pdbqt = cleaned_pdb
+
+    try:
+        allosteric_center = compute_residue_centroid(cleaned_pdb, CONFIG.allosteric_residues)
+        active_center = compute_residue_centroid(cleaned_pdb, CONFIG.active_site_residues)
+    except Exception as exc:
+        log.error(f"  Failed to compute binding site centroids: {exc}")
+        return None
+
+    return {
+        "pdbqt": cleaned_pdbqt,
+        "allosteric_center": allosteric_center,
+        "active_center": active_center,
+    }
+
+
+def score_compounds_with_vina(
+    records: List[CompoundRecord],
+    receptor: Dict[str, Any],
+    site: str = "allosteric",
+) -> List[CompoundRecord]:
+    """Score compounds using real AutoDock Vina docking.
+
+    Each compound is docked into the specified binding site and the
+    best binding energy (kcal/mol) is stored on the record.
+
+    Args:
+        records: List of compound records to dock.
+        receptor: Target dict with ``pdbqt``, ``allosteric_center``,
+            ``active_center`` keys.
+        site: ``"allosteric"`` or ``"active"``.
+
+    Returns:
+        Records with ``pb2pa_allosteric_energy`` (or ``pb2pa_active_energy``)
+        populated.
+    """
+    from autoantibiotic.docking import dock_compound, prepare_ligand_pdbqt
+
+    work_dir = str(CONFIG.work_dir)
+    os.makedirs(work_dir, exist_ok=True)
+
+    center_key = "allosteric_center" if site == "allosteric" else "active_center"
+    box_size = CONFIG.allosteric_box_size if site == "allosteric" else CONFIG.active_box_size
+    center = receptor[center_key]
+    receptor_pdbqt = receptor["pdbqt"]
+    energy_attr = "pb2pa_allosteric_energy" if site == "allosteric" else "pb2pa_active_energy"
+
+    n_scored = 0
+    for rec in records:
+        energy = dock_compound(
+            rec, receptor_pdbqt, center, box_size, work_dir, tag="bm",
+        )
+        if energy is not None:
+            setattr(rec, energy_attr, energy)
+            n_scored += 1
+        else:
+            setattr(rec, energy_attr, 0.0)
+
+    log.info(f"  Vina docking complete: {n_scored}/{len(records)} scored.")
+    return records
+
+
 # ── Metric calculation ───────────────────────────────────────────────
 
 
@@ -515,10 +632,25 @@ def run_enrichment_test(
     # 4. Score all compounds
     if use_vina:
         log.info("  Scoring with Vina docking…")
-        # Target preparation needed for real Vina docking
-        # For now fall back to fingerprint scoring when targets aren't available
-        log.warning("  Vina mode requires prepared targets. Using fingerprint proxy.")
-        all_records = score_compounds_with_fingerprint_similarity(all_records, active_smiles)
+        if not _HAVE_VINA:
+            log.error(
+                "  Vina is not installed or not found in PATH.\n"
+                "  Please install it with:\n"
+                "    conda install -c conda-forge vina\n"
+                "  Falling back to fingerprint similarity scoring."
+            )
+            all_records = score_compounds_with_fingerprint_similarity(all_records, active_smiles)
+        else:
+            log.info("  Preparing PBP2a receptor…")
+            receptor = _prepare_pbp2a_receptor()
+            if receptor is None:
+                log.error(
+                    "  Failed to prepare PBP2a receptor.\n"
+                    "  Falling back to fingerprint similarity scoring."
+                )
+                all_records = score_compounds_with_fingerprint_similarity(all_records, active_smiles)
+            else:
+                all_records = score_compounds_with_vina(all_records, receptor, site="allosteric")
     else:
         log.info("  Scoring with fingerprint similarity (no-dependency proxy).")
         all_records = score_compounds_with_fingerprint_similarity(all_records, active_smiles)

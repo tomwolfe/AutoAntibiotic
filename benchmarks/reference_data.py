@@ -116,37 +116,37 @@ DECOY_COUNT: int = 100
 PBP2A_ACTIVES_EXTRA: List[Dict[str, str]] = [
     {
         "id": "ALLOSTERIC_04",
-        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccccc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "smiles": "Cc1ccc(NC(=O)c2c(-c3ccccc3)nc3ccc(C(F)(F)F)cn23)cc1",
         "reference": "Pyrazole PBP2a binder, PMID 30946582",
     },
     {
         "id": "ALLOSTERIC_05",
-        "smiles": "COc1ccc(NC(=O)c2cc(-c3ccc(F)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "smiles": "COc1ccc(NC(=O)c2c(-c3ccc(F)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
         "reference": "Pyrazole PBP2a binder, PMID 30946582",
     },
     {
         "id": "ALLOSTERIC_06",
-        "smiles": "CC(C)(C)c1ccc(NC(=O)c2cc(-c3ccc(Cl)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "smiles": "CC(C)(C)c1ccc(NC(=O)c2c(-c3ccc(Cl)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
         "reference": "Pyrazole PBP2a binder, PMID 30946582",
     },
     {
         "id": "ALLOSTERIC_07",
-        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccccc3F)nc3ccc(C(F)(F)F)cn23)cc1",
+        "smiles": "Cc1ccc(NC(=O)c2c(-c3ccccc3F)nc3ccc(C(F)(F)F)cn23)cc1",
         "reference": "Pyrazole PBP2a binder, PMID 30946582",
     },
     {
         "id": "ALLOSTERIC_08",
-        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccc(C#N)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "smiles": "Cc1ccc(NC(=O)c2c(-c3ccc(C#N)cc3)nc3ccc(C(F)(F)F)cn23)cc1",
         "reference": "Pyrazole PBP2a binder, PMID 30946582",
     },
     {
         "id": "ALLOSTERIC_09",
-        "smiles": "Cc1ccc(NC(=O)c2cc(-c3cccs3)nc3ccc(C(F)(F)F)cn23)cc1",
+        "smiles": "Cc1ccc(NC(=O)c2c(-c3cccs3)nc3ccc(C(F)(F)F)cn23)cc1",
         "reference": "Pyrazole PBP2a binder, PMID 30946582",
     },
     {
         "id": "ALLOSTERIC_10",
-        "smiles": "Cc1ccc(NC(=O)c2cc(-c3ccc4c(c3)OCO4)nc3ccc(C(F)(F)F)cn23)cc1",
+        "smiles": "Cc1ccc(NC(=O)c2c(-c3ccc4c(c3)OCO4)nc3ccc(C(F)(F)F)cn23)cc1",
         "reference": "Pyrazole PBP2a binder, PMID 30946582",
     },
     {
