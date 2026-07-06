@@ -848,6 +848,7 @@ def _parallel_dock(
     n_jobs: int = CONFIG.n_jobs,
     cache: _CacheLike = None,
     use_cache: bool = False,
+    dry_run: bool = CONFIG.dry_run,
 ) -> List[Tuple[str, Optional[float]]]:
     """Dock a list of compounds in parallel with batched processing.
 
@@ -881,7 +882,7 @@ def _parallel_dock(
 
         worker_seed = CONFIG.random_seed + batch_start
         work_items: List[Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int]] = [
-            (cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, CONFIG.dry_run, worker_seed)
+            (cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run, worker_seed)
             for cid, smiles, _ in batch
         ]
 
@@ -968,6 +969,7 @@ def _parallel_dock_ensemble(
     n_jobs: int = CONFIG.n_jobs,
     cache: _CacheLike = None,
     use_cache: bool = False,
+    dry_run: bool = CONFIG.dry_run,
 ) -> List[Tuple[str, Optional[float]]]:
     """Dock a list of compounds against an ensemble of receptors.
 
@@ -978,7 +980,11 @@ def _parallel_dock_ensemble(
     """
     results: List[Tuple[str, Optional[float]]] = []
 
+    rng = np.random.default_rng(CONFIG.random_seed)
     for cid, smiles in items:
+        if dry_run:
+            results.append((cid, float(rng.uniform(-10.0, -5.0))))
+            continue
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             results.append((cid, None))
@@ -1093,6 +1099,7 @@ def _screen_ensemble(
     work_dir: str,
     cache: _CacheLike = None,
     use_cache: bool = False,
+    dry_run: bool = CONFIG.dry_run,
 ) -> List[CompoundRecord]:
     """Ensemble docking against multiple receptor structures with consensus scoring.
 
@@ -1116,7 +1123,7 @@ def _screen_ensemble(
         results = _parallel_dock(
             items, rec_pdbqt, center, CONFIG.allosteric_box_size,
             work_dir, f"ens_alloc_{i}",
-            cache=cache, use_cache=use_cache,
+            cache=cache, use_cache=use_cache, dry_run=dry_run,
         )
         receptor_energies.append([e for _, e in results])
 
@@ -1138,7 +1145,7 @@ def _screen_ensemble(
             results = _parallel_dock(
                 active_items, rec_pdbqt, center, CONFIG.active_box_size,
                 work_dir, f"ens_act_{i}",
-                cache=cache, use_cache=use_cache,
+                cache=cache, use_cache=use_cache, dry_run=dry_run,
             )
             active_receptor_energies.append([e for _, e in results])
         _apply_consensus_scoring(top50, active_receptor_energies, "pb2pa_active_energy")
@@ -1153,6 +1160,7 @@ def _screen_flexible(
     deps: Dict[str, Any],
     cache: _CacheLike = None,
     use_cache: bool = False,
+    dry_run: bool = CONFIG.dry_run,
 ) -> List[CompoundRecord]:
     """Flexible docking with side-chain rotamer conformers (min-score consensus)."""
     pb2pa = targets["PBP2a"]
@@ -1165,7 +1173,7 @@ def _screen_flexible(
 
     if not os.path.exists(receptor_pdb):
         log.warning("  Receptor PDB not found for flexible docking; falling back to standard.")
-        return _screen_standard(records, targets, work_dir, cache=cache, use_cache=use_cache)
+        return _screen_standard(records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run)
 
     log.info("  Flexible-docking mode enabled — generating side-chain conformers…")
     flex_alloc_pdbqt_list, flex_alloc_center_list = _build_flexible_ensemble(
@@ -1183,7 +1191,7 @@ def _screen_flexible(
         [(r.compound_id, r.smiles) for r in records],
         flex_alloc_pdbqt_list, flex_alloc_center_list,
         CONFIG.allosteric_box_size, work_dir, "flex_alloc",
-        cache=cache, use_cache=use_cache,
+        cache=cache, use_cache=use_cache, dry_run=dry_run,
     )
     CONFIG.consensus_scoring_method = saved_method
 
@@ -1214,7 +1222,7 @@ def _screen_flexible(
         [(r.compound_id, r.smiles) for r in top50],
         flex_act_pdbqt_list, flex_act_center_list,
         CONFIG.active_box_size, work_dir, "flex_act",
-        cache=cache, use_cache=use_cache,
+        cache=cache, use_cache=use_cache, dry_run=dry_run,
     )
     CONFIG.consensus_scoring_method = saved_method
 
@@ -1231,6 +1239,7 @@ def _screen_standard(
     work_dir: str,
     cache: _CacheLike = None,
     use_cache: bool = False,
+    dry_run: bool = CONFIG.dry_run,
 ) -> List[CompoundRecord]:
     """Standard Vina/GNINA docking: allosteric site → top 50 to active site."""
     pb2pa = targets["PBP2a"]
@@ -1243,7 +1252,7 @@ def _screen_standard(
         items, pb2pa["pdbqt"],
         allosteric_center, CONFIG.allosteric_box_size,
         work_dir, "allosteric",
-        cache=cache, use_cache=use_cache,
+        cache=cache, use_cache=use_cache, dry_run=dry_run,
     )
 
     cid_to_record = {r.compound_id: r for r in records}
@@ -1265,7 +1274,7 @@ def _screen_standard(
         active_items, pb2pa["pdbqt"],
         active_center, CONFIG.active_box_size,
         work_dir, "active",
-        cache=cache, use_cache=use_cache,
+        cache=cache, use_cache=use_cache, dry_run=dry_run,
     )
 
     for cid, energy in active_results:
@@ -1375,6 +1384,7 @@ def screen_library(
     cache: _CacheLike = None,
     use_cache: bool = False,
     water_results: Optional[WaterAnalysisResult] = None,
+    dry_run: bool = CONFIG.dry_run,
 ) -> List[CompoundRecord]:
     """Phase 3 — Virtual screening.
 
@@ -1406,15 +1416,15 @@ def screen_library(
                 log.info("  Both ensemble and flexible-docking enabled; ensemble takes priority.")
             log.info(f"  Ensemble docking (method={CONFIG.consensus_scoring_method}) against {len(ensemble_targets)} structures…")
             top_candidates = _screen_ensemble(
-                records, targets, work_dir, cache=cache, use_cache=use_cache,
+                records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run,
             )
         elif CONFIG.flexible_docking and _HAVE_BIOPDB:
             top_candidates = _screen_flexible(
-                records, targets, work_dir, deps, cache=cache, use_cache=use_cache,
+                records, targets, work_dir, deps, cache=cache, use_cache=use_cache, dry_run=dry_run,
             )
         else:
             top_candidates = _screen_standard(
-                records, targets, work_dir, cache=cache, use_cache=use_cache,
+                records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run,
             )
 
         # ML rescoring on top N Vina hits

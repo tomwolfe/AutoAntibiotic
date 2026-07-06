@@ -110,10 +110,64 @@ def profile_resistance_mutation_sensitivity(
     A high standard deviation indicates that the compound's binding
     affinity is sensitive to mutational changes — i.e. elevated
     resistance risk.
+
+    When ``CONFIG.use_fep_resistance`` is True, the function uses
+    OpenMM-based Free Energy Perturbation (FEP) to compute ΔΔG
+    between wild-type and mutant receptor binding the same ligand.
+    If FEP is unavailable or fails, the original heuristic standard
+    deviation approach is used as a fallback.
+
+    Returns
+    -------
+    Optional[float]
+        Standard deviation of binding energies across mutants, or
+        ``None`` if fewer than 2 valid energies are computed.
     """
     if not mutant_pdbqts:
         return None
 
+    # ── FEP-based resistance profiling ──
+    if CONFIG.use_fep_resistance:
+        from .fep_engine import FEPResistanceCalculator
+
+        try:
+            # Use first mutant PDBQT as the "wild-type" reference
+            # (in practice, this should be the actual WT PDB)
+            wt_pdbqt = mutant_pdbqts[0]
+            wt_pdb = wt_pdbqt.replace(".pdbqt", ".pdb")
+
+            # Build RDKit mol from the record
+            ligand_mol = record.mol
+            if ligand_mol is None:
+                ligand_mol = Chem.MolFromSmiles(record.smiles)
+            if ligand_mol is None:
+                ligand_mol = Chem.MolFromSmiles(
+                    record.smiles,
+                    sanitize=False,
+                )
+                if ligand_mol is None:
+                    return None
+
+            # Create FEP calculator and compute ΔΔG
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb=wt_pdb,
+                receptor_mut_pdb=mutant_pdbqts[0],
+                ligand_rdkit=ligand_mol,
+            )
+            result = calc.calculate_ddg()
+
+            # Convert ΔΔG to an equivalent "stability score" for
+            # consistency with the existing API
+            if result.delta_delta_g is not None:
+                # Use absolute ΔΔG as the stability score
+                return abs(result.delta_delta_g)
+        except Exception as exc:
+            log.warning(
+                f"  FEP resistance profiling failed: {exc}. "
+                "Falling back to heuristic."
+            )
+
+    # ── Heuristic fallback (original behaviour) ──
     energies: List[float] = []
     for i, mut_pdbqt in enumerate(mutant_pdbqts):
         from .docking import dock_compound

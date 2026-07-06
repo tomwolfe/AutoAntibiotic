@@ -182,7 +182,7 @@ class PipelineOrchestrator:
         self.top_candidates = screen_library(
             self.filtered, self.targets, str(self.config.work_dir),
             self.deps, cache=self.cache, use_cache=self.use_cache,
-            water_results=self.water_results,
+            water_results=self.water_results, dry_run=self.config.dry_run,
         )
 
         if not self.top_candidates:

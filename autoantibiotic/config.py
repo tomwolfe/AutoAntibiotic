@@ -235,6 +235,64 @@ class PipelineConfig:
     water_distance_cutoff: float = 5.0
     water_displacement_energy_threshold: float = 2.5
 
+    # ── FEP / resistance profiling ──
+    use_fep_resistance: bool = False
+    """When True, use OpenMM-based Free Energy Perturbation (FEP) for
+    resistance profiling instead of the heuristic standard-deviation
+    approach.  Falls back to the heuristic when OpenMM/alchemical tools
+    are unavailable."""
+    fep_lambda_windows: int = 11
+    """Number of lambda windows for the FEP alchemical transformation."""
+    fep_stages: str = "van_der_waals_and_electrostatics"
+    """FEP stage combination: ``'van_der_waals_and_electrostatics'``,
+    ``'van_der_waals'``, or ``'electrostatics'``."""
+    fep_time_step_ps: float = 0.002
+    """Time step (ps) for FEP MD simulation."""
+    fep_n_steps: int = 500
+    """Number of FEP steps per lambda window (equilibration + production)."""
+    fep_kT_kcal_per_mol: float = 0.596
+    """kT value (kcal/mol) at 298.15 K for FEP free-energy calculation."""
+    fep_warmup_steps: int = 500
+    """Number of warm-up steps before production FEP sampling."""
+    fep_warmup_min_iterations: int = 500
+    """Minimum energy minimisation iterations before FEP production."""
+
+    # ── Entropy estimation ──
+    include_entropy: bool = False
+    """When True, include entropy estimation (Normal Mode Analysis) in MM-GB/SA rescoring."""
+    entropy_nma_frames: int = 10
+    """Number of trajectory frames for quasi-harmonic entropy estimation."""
+    entropy_min_rmsd: float = 0.5
+    """Minimum RMSD threshold for including frames in entropy calculation."""
+
+    # ── Generative design parameters ──
+    generative_mode: bool = False
+    """When True, use a JT-VAE / graph-based generative model to produce
+    novel scaffold analogs instead of rigid BRICS recombination."""
+    generative_n_samples: int = 100
+    """Number of novel scaffolds to generate per core scaffold."""
+    generative_temperature: float = 0.8
+    """Sampling temperature for the JT-VAE latent-space decode."""
+    generative_max_length: int = 40
+    """Maximum SMILES length for generated molecules."""
+    generative_min_length: int = 8
+    """Minimum SMILES length for generated molecules."""
+    generative_n_workers: int = 4
+    """Number of parallel workers for latent-space decoding."""
+
+    # ── Synthesis planning parameters ──
+    strict_synthesis_check: bool = False
+    """When True, apply hard synthesis-filter based on retrosynthesis API
+    results (e.g. IBM RXN or ASKCOS)."""
+    synthesis_api_url: str = "https://rxn.rxnchemistry.com/rxnchem"
+    """Base URL for the retrosynthesis API (IBM RXN default)."""
+    synthesis_api_timeout_s: int = 30
+    """Timeout (seconds) for retrosynthesis API requests."""
+    synthesis_api_min_confidence: float = 0.5
+    """Minimum confidence score to accept a synthetic route."""
+    synthesis_api_max_routes: int = 3
+    """Maximum number of synthesis routes to evaluate per compound."""
+
     # ── Reporting parameters ──
     csv_report_name: str = "top_candidates.csv"
     html_report_name: str = "report.html"

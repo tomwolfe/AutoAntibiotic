@@ -355,9 +355,47 @@ def generate_candidate_library(
     Returns a list of CompoundRecord objects. When *target_count* exceeds
     :attr:`CONFIG.library_generator_threshold` (default 1000), returns a
     generator that yields records lazily to reduce memory pressure.
+
+    When ``CONFIG.generativemode`` is True, the function uses a
+    JT-VAE-based generative model to produce novel scaffold analogs
+    instead of rigid BRICS recombination.
     """
     log.info("─── Phase 2: Library Generation ───")
 
+    # ── Generative mode ──
+    if CONFIG.generative_mode:
+        try:
+            from .generative_design import generate_novel_scaffolds
+            log.info("  Generative mode enabled: using JT-VAE for scaffold generation.")
+
+            # Use the first scaffold as the core for generation
+            all_scaffolds: List[str] = CONFIG.natural_product_scaffolds + CONFIG.additional_scaffolds
+            core_smiles = all_scaffolds[0] if all_scaffolds else ""
+
+            if core_smiles:
+                n_samples = CONFIG.generative_n_samples or target_count
+                scaffolds = generate_novel_scaffolds(
+                    core_smiles,
+                    n_samples=n_samples,
+                )
+
+                records: List[CompoundRecord] = []
+                for i, smi in enumerate(scaffolds):
+                    mol = Chem.MolFromSmiles(smi)
+                    if mol is None:
+                        continue
+                    records.append(CompoundRecord(
+                        compound_id=f"GEN-{i:04d}",
+                        smiles=smi,
+                        mol=mol,
+                    ))
+
+                log.info(f"  Generative mode: {len(records)} novel scaffolds generated.")
+                return records[:target_count]
+        except Exception as exc:
+            log.warning(f"  Generative mode failed: {exc}. Falling back to BRICS.")
+
+    # ── BRICS fallback ──
     use_generator = target_count > CONFIG.library_generator_threshold
     gen = _generate_records(target_count, seed)
 
