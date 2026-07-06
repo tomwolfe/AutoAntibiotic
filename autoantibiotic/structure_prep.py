@@ -73,7 +73,6 @@ def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
 
         conf = mol.GetConformer()
         lines: list = []
-        lines.append("ROOT")
         for i, atom in enumerate(mol.GetAtoms()):
             atom_no = i + 1
             elem = atom.GetSymbol()
@@ -89,8 +88,6 @@ def _pdb_to_pdbqt_via_rdkit(pdb_path: str, pdbqt_path: str) -> bool:
                 f"{gasteiger:>8.3f}     {ad_type:<2s}\n"
             )
             lines.append(line)
-        lines.append("ENDROOT")
-        lines.append("TORSDOF 0\n")
 
         with open(pdbqt_path, "w") as f:
             f.writelines(lines)
@@ -210,7 +207,10 @@ def clean_pdb_structure(
                 pass
 
         if not converted:
-            log.warning("  No external PDBQT tool found. Using RDKit fallback.")
+            if deps.get("obabel") or deps.get("prepare_receptor"):
+                log.warning("  External PDBQT tool(s) failed or timed out. Using RDKit fallback.")
+            else:
+                log.warning("  No external PDBQT tool available. Using RDKit fallback.")
             converted = _pdb_to_pdbqt_via_rdkit(out_path, pdbqt_path)
             if converted:
                 log.info("  PDBQT via RDKit fallback")

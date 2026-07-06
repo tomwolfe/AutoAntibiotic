@@ -13,6 +13,16 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
+import rdkit
+if not hasattr(rdkit, "six"):
+    import sys as _sys
+    import io as _io
+    _six_mod = type(_sys)("rdkit.six")
+    _six_mod.StringIO = _io.StringIO
+    _sys.modules["rdkit.six"] = _six_mod
+    rdkit.six = _six_mod
+    del _sys, _io, _six_mod
+
 from .config import CONFIG
 from .models import CompoundRecord
 from .io_utils import (
@@ -338,6 +348,8 @@ def prepare_ligand_pdbqt(
         try:
             mol_tmp = Chem.RWMol(mol)
             mol_tmp = Chem.AddHs(mol_tmp, addCoords=True)
+            if mol_tmp.GetNumConformers() == 0:
+                AllChem.EmbedMolecule(mol_tmp, randomSeed=42)
             AllChem.ComputeGasteigerCharges(mol_tmp)
 
             conf = mol_tmp.GetConformer()

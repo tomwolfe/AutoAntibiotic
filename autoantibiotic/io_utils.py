@@ -234,9 +234,11 @@ def run_tool(
 
         return result
     except subprocess.TimeoutExpired:
+        tool_name = os.path.basename(cmd[0])
         raise AutoAntibioticError(
-            f"Tool {' '.join(cmd)} timed out after {timeout}s. "
-            "Consider increasing CONFIG.vina_timeout_s."
+            f"Tool {tool_name} timed out after {timeout}s. "
+            f"The tool may be too slow for this input, or the timeout "
+            f"needs to be increased."
         )
 
 

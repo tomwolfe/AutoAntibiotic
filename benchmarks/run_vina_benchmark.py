@@ -272,6 +272,8 @@ def _prepare_pbp2a_receptor() -> Optional[Dict[str, Any]]:
         compute_residue_centroid,
         fetch_structure,
     )
+    import shutil
+
     pdb_dir = str(CONFIG.pdb_dir)
     work_dir = str(CONFIG.work_dir)
     os.makedirs(pdb_dir, exist_ok=True)
@@ -280,12 +282,21 @@ def _prepare_pbp2a_receptor() -> Optional[Dict[str, Any]]:
     cleaned_pdbqt = os.path.join(work_dir, "PBP2a_clean.pdbqt")
     cleaned_pdb = os.path.join(work_dir, "PBP2a_clean.pdb")
 
+    deps = {}
+    _conda_bin = os.path.dirname(sys.executable)
+    obabel_path = os.path.join(_conda_bin, "obabel")
+    if os.path.isfile(obabel_path):
+        deps["obabel"] = True
+    prepare_receptor_path = shutil.which("prepare_receptor")
+    if prepare_receptor_path is not None:
+        deps["prepare_receptor"] = True
+
     if os.path.exists(cleaned_pdbqt) and os.path.exists(cleaned_pdb):
         log.info("  Using cached prepared receptor.")
     else:
         log.info("  Downloading and preparing PBP2a receptor…")
         apo_path = fetch_structure(CONFIG.pdb_ids["PBP2a_apo"], pdb_dir)
-        _ = clean_pdb_structure(apo_path, cleaned_pdb, deps={})
+        _ = clean_pdb_structure(apo_path, cleaned_pdb, deps=deps)
         if not os.path.exists(cleaned_pdbqt):
             log.warning("  PDBQT not available; using PDB.")
             cleaned_pdbqt = cleaned_pdb
