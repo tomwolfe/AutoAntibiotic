@@ -285,7 +285,7 @@ def analyze_selectivity_and_resistance(
         if cid in cid_map:
             cid_map[cid].human_trypsin_energy = energy
 
-    log.info("  Docking top 10 vs Human Carboxylesterase 1 (3KJZ)…")
+    log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YA4)…")
     ces1_center = ces1_target.get("active_center", np.array([0.0, 0.0, 0.0]))
     ces1_items = [(r.compound_id, r.smiles) for r in top10]
     ces1_results = _parallel_dock(

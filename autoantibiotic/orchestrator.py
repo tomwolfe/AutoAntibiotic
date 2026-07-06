@@ -126,7 +126,7 @@ class PipelineOrchestrator:
             return
 
         pdb_dir = self.config.pdb_dir
-        holo_pdb_id = self.config.pdb_ids.get("PBP2a_holo", "6TKO")
+        holo_pdb_id = self.config.pdb_ids.get("PBP2a_holo", "3ZG0")
         holo_pdb_path = os.path.join(str(pdb_dir), f"{holo_pdb_id}.pdb")
 
         if os.path.exists(holo_pdb_path):

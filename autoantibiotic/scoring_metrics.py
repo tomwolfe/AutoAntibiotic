@@ -11,25 +11,25 @@ from .config import CONFIG
 from .io_utils import log
 
 
-_IFP_RESIDUES = ["TYR159", "ALA237", "MET241", "SER403"]
+_IFP_RESIDUES = ["ASN159", "GLU237", "ARG241", "SER403"]
 
 _RESIDUE_IFP_CLASSES = {
-    "TYR": {
-        "donor": ["N", "OH"],
-        "acceptor": ["O", "OH"],
-        "hydrophobic": ["CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ"],
-        "aromatic": ["CG", "CD1", "CD2", "CE1", "CE2", "CZ"],
-    },
-    "ALA": {
-        "donor": ["N"],
-        "acceptor": ["O"],
+    "ASN": {
+        "donor": ["N", "ND2"],
+        "acceptor": ["O", "OD1"],
         "hydrophobic": ["CA", "CB"],
         "aromatic": [],
     },
-    "MET": {
+    "GLU": {
         "donor": ["N"],
+        "acceptor": ["O", "OE1", "OE2"],
+        "hydrophobic": ["CA", "CB", "CG"],
+        "aromatic": [],
+    },
+    "ARG": {
+        "donor": ["N", "NE", "NH1", "NH2"],
         "acceptor": ["O"],
-        "hydrophobic": ["CB", "CG", "CE"],
+        "hydrophobic": ["CA", "CB", "CG", "CD"],
         "aromatic": [],
     },
     "SER": {

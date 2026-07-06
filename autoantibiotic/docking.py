@@ -228,7 +228,7 @@ def run_redocking_validation(
 ) -> Tuple[bool, Optional[float]]:
     """Phase 0 — Protocol Validation.
 
-    Extracts the native ligand from 6TKO, docks it back into the prepared
+    Extracts the native ligand from 3ZG0, docks it back into the prepared
     PBP2a receptor, and computes the RMSD to the crystal pose.
 
     Returns (success: bool, rmsd: float | None).

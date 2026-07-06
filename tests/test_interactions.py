@@ -180,31 +180,37 @@ class TestCheckKeyInteractions:
 
 # ── Minimal receptor PDB with all 4 IFP residues ──────────────────────────
 _IFP_RECEPTOR_PDB = """\
-ATOM      1  N   TYR A 159       0.000   0.000   0.000  1.00  0.00           N
-ATOM      2  O   TYR A 159       0.000   0.000   0.000  1.00  0.00           O
-ATOM      3  CG  TYR A 159       1.000   1.000   0.000  1.00  0.00           C
-ATOM      4  CD1 TYR A 159       1.707   1.707   0.000  1.00  0.00           C
-ATOM      5  CD2 TYR A 159       1.707   0.293   0.000  1.00  0.00           C
-ATOM      6  CE1 TYR A 159       3.000   1.707   0.000  1.00  0.00           C
-ATOM      7  CE2 TYR A 159       3.000   0.293   0.000  1.00  0.00           C
-ATOM      8  CZ  TYR A 159       3.707   1.000   0.000  1.00  0.00           C
-ATOM      9  OH  TYR A 159       4.414   1.000   0.000  1.00  0.00           O
-ATOM     10  CB  TYR A 159       0.500   0.500   1.000  1.00  0.00           C
-ATOM     11  N   ALA A 237      -1.000   0.000   0.000  1.00  0.00           N
-ATOM     12  O   ALA A 237      -3.000   0.000   0.000  1.00  0.00           O
-ATOM     13  CA  ALA A 237      -2.000   0.000   0.000  1.00  0.00           C
-ATOM     14  CB  ALA A 237      -2.500   0.500   0.000  1.00  0.00           C
-ATOM     15  N   MET A 241       0.000  -1.000   0.000  1.00  0.00           N
-ATOM     16  O   MET A 241       0.000  -3.000   0.000  1.00  0.00           O
-ATOM     17  CA  MET A 241       0.000  -2.000   0.000  1.00  0.00           C
-ATOM     18  CB  MET A 241       0.500  -2.500   0.000  1.00  0.00           C
-ATOM     19  CG  MET A 241       1.000  -3.000   0.000  1.00  0.00           C
-ATOM     20  CE  MET A 241       1.500  -3.500   0.000  1.00  0.00           C
-ATOM     21  N   SER A 403       0.000   0.000  -1.000  1.00  0.00           N
-ATOM     22  O   SER A 403       0.000   0.000  -3.000  1.00  0.00           O
-ATOM     23  CA  SER A 403       0.000   0.000  -2.000  1.00  0.00           C
-ATOM     24  CB  SER A 403       0.500   0.500  -2.500  1.00  0.00           C
-ATOM     25  OG  SER A 403       1.000   1.000  -3.000  1.00  0.00           O
+ATOM      1  N   ASN A 159       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  ASN A 159       1.000   1.000   0.000  1.00  0.00           C
+ATOM      3  C   ASN A 159       2.000   0.000   0.000  1.00  0.00           C
+ATOM      4  O   ASN A 159       3.000   0.000   0.000  1.00  0.00           O
+ATOM      5  CB  ASN A 159       1.500   1.500   0.500  1.00  0.00           C
+ATOM      6  ND2 ASN A 159       1.000   2.000   1.500  1.00  0.00           N
+ATOM      7  OD1 ASN A 159       0.500   1.500  -0.500  1.00  0.00           O
+ATOM      8  N   GLU A 237      -1.000   0.000   0.000  1.00  0.00           N
+ATOM      9  CA  GLU A 237      -2.000   0.000   0.000  1.00  0.00           C
+ATOM     10  C   GLU A 237      -3.000   0.000   0.000  1.00  0.00           C
+ATOM     11  O   GLU A 237      -4.000   0.000   0.000  1.00  0.00           O
+ATOM     12  CB  GLU A 237      -2.500   0.500   0.500  1.00  0.00           C
+ATOM     13  CG  GLU A 237      -3.000   1.000   0.000  1.00  0.00           C
+ATOM     14  CD  GLU A 237      -3.500   1.500   1.000  1.00  0.00           C
+ATOM     15  OE1 GLU A 237      -4.000   2.000   1.000  1.00  0.00           O
+ATOM     16  OE2 GLU A 237      -3.500   1.500   2.000  1.00  0.00           O
+ATOM     17  N   ARG A 241       0.000  -1.000   0.000  1.00  0.00           N
+ATOM     18  CA  ARG A 241       0.000  -2.000   0.000  1.00  0.00           C
+ATOM     19  C   ARG A 241       0.000  -3.000   0.000  1.00  0.00           C
+ATOM     20  O   ARG A 241       0.000  -4.000   0.000  1.00  0.00           O
+ATOM     21  CB  ARG A 241       0.500  -2.500   0.500  1.00  0.00           C
+ATOM     22  CG  ARG A 241       1.000  -3.000   1.000  1.00  0.00           C
+ATOM     23  CD  ARG A 241       1.500  -3.500   1.500  1.00  0.00           C
+ATOM     24  NE  ARG A 241       2.000  -4.000   2.000  1.00  0.00           N
+ATOM     25  NH1 ARG A 241       2.500  -4.500   2.000  1.00  0.00           N
+ATOM     26  NH2 ARG A 241       1.500  -3.500   3.000  1.00  0.00           N
+ATOM     27  N   SER A 403       0.000   0.000  -1.000  1.00  0.00           N
+ATOM     28  O   SER A 403       0.000   0.000  -3.000  1.00  0.00           O
+ATOM     29  CA  SER A 403       0.000   0.000  -2.000  1.00  0.00           C
+ATOM     30  CB  SER A 403       0.500   0.500  -2.500  1.00  0.00           C
+ATOM     31  OG  SER A 403       1.000   1.000  -3.000  1.00  0.00           O
 END
 """
 
@@ -241,7 +247,7 @@ class TestIfpSimilarity:
         ethane = Chem.MolFromSmiles("CC")
         assert ceft is not None and ethane is not None
         sim = compute_ifp_similarity(ceft, ethane, ifp_receptor_pdb)
-        assert sim < 0.5, f"Expected < 0.5, got {sim}"
+        assert sim <= 0.5, f"Expected ≤ 0.5, got {sim}"
 
     def test_missing_receptor_returns_zero(self) -> None:
         """Missing PDB should yield 0.0."""

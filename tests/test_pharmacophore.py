@@ -38,9 +38,9 @@ class TestBuildAllostericPharmacophore:
     def test_residue_map_complete(self) -> None:
         query = _build_allosteric_pharmacophore()
         if query is not None:
-            assert "TYR159" in query["residue_map"]
-            assert "ALA237" in query["residue_map"]
-            assert "MET241" in query["residue_map"]
+            assert "ASN159" in query["residue_map"]
+            assert "GLU237" in query["residue_map"]
+            assert "ARG241" in query["residue_map"]
 
 
 class TestCheckPharmacophoreMatch:

@@ -406,7 +406,7 @@ def prepare_targets(
     )
 
     cleaned_pdb = pbp2a_pdbqt.replace(".pdbqt", ".pdb")
-    log.info("  Computing allosteric site centroid (ALA237, MET241, TYR159)…")
+    log.info("  Computing allosteric site centroid (ASN159, GLU237, ARG241)…")
     allosteric_center = compute_residue_centroid(cleaned_pdb, CONFIG.allosteric_residues)
     log.info(f"    Allosteric site center: {allosteric_center}")
 
@@ -484,7 +484,7 @@ def prepare_targets(
     log.info(f"    Trypsin active site center: {tryp_center}")
     result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
 
-    log.info("  Cleaning Human Carboxylesterase 1 (3KJZ)…")
+    log.info("  Cleaning Human Carboxylesterase 1 (1YA4)…")
     ces1_pdbqt = clean_pdb_structure(
         ces1_path,
         os.path.join(work_dir, "CES1_clean.pdb"),

@@ -460,9 +460,9 @@ def _build_allosteric_pharmacophore() -> Optional[Dict[str, Any]]:
     model is constructed from the reference ligand (generated with ETKDGv3).
     Otherwise the method falls back to the original 2-D feature-counting
     approach based on the three key allosteric residues:
-      1. H-bond donor  – TYR159 (phenolic OH)
-      2. H-bond acceptor – ALA237 (backbone carbonyl)
-      3. Hydrophobic    – MET241 (side chain)
+      1. H-bond donor  – ASN159 (side-chain amide)
+      2. H-bond acceptor – GLU237 (side-chain carboxyl)
+      3. Hydrophobic    – ARG241 (aliphatic side chain)
 
     Returns:
         A dict with mode-specific keys, or ``None`` if the RDKit feature
@@ -496,9 +496,9 @@ def _build_allosteric_pharmacophore() -> Optional[Dict[str, Any]]:
     return {
         "feat_types": ["Donor", "Acceptor", "Hydrophobe"],
         "residue_map": {
-            "TYR159": "Donor",
-            "ALA237": "Acceptor",
-            "MET241": "Hydrophobe",
+            "ASN159": "Donor",
+            "GLU237": "Acceptor",
+            "ARG241": "Hydrophobe",
         },
         "mode": "2d",
     }
@@ -649,7 +649,7 @@ def generate_pharmacophore_aware_library(
         target_count: Desired number of output compounds.
         seed: Random seed for reproducibility.
         allosteric_pocket_coords: Optional (3, 3) array of Cα coordinates
-            for the three allosteric residues (TYR159, ALA237, MET241).
+            for the three allosteric residues (ASN159, GLU237, ARG241).
             Used for informative logging only; the actual 3-D matching
             uses the reference ligand pharmacophore.
 

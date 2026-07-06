@@ -1,7 +1,7 @@
 """
 Water Analysis Module
 ======================
-Identifies crystallographic waters in the PBP2a holo structure (6TKO),
+Identifies crystallographic waters in the PBP2a holo structure (3ZG0),
 characterises them as displaceable (high-energy) or structural (bridging),
 and provides data for water-aware receptor preparation.
 """
@@ -198,7 +198,7 @@ def analyze_waters(
     Parameters
     ----------
     pdb_path : str
-        Path to a PDB file (typically the holo structure 6TKO).
+        Path to a PDB file (typically the holo structure 3ZG0).
     allosteric_residues : list of str, optional
         Residue identifiers for the allosteric site (default from CONFIG).
     active_site_residues : list of str, optional

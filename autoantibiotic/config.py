@@ -56,7 +56,7 @@ class PipelineConfig:
     mutation_variants: List[str] = field(default_factory=lambda: [
         "G246", "N146", "E150", "H351", "E644",
         "A601", "F241", "N104", "G298", "S403",
-        "Y159", "M241",
+        "N159", "R241",
     ])
 
     # Meta-learner consensus scoring
@@ -99,19 +99,19 @@ class PipelineConfig:
 
     # Library data
     beta_lactam_smarts: str = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
-    allosteric_residues: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
+    allosteric_residues: List[str] = field(default_factory=lambda: ["ASN159", "GLU237", "ARG241"])
     active_site_residues: List[str] = field(default_factory=lambda: ["SER403"])
     trypsin_active_site_residues: List[str] = field(default_factory=lambda: ["HIS57", "ASP102", "SER195"])
     ces1_active_site_residues: List[str] = field(default_factory=lambda: ["SER221", "HIS468", "GLU354"])
     conserved_residues: set = field(default_factory=lambda: {"SER403", "KYS406", "TYR446"})
-    mutable_residues: set = field(default_factory=lambda: {"G246", "N146", "E150", "H351", "E644", "A601", "F241", "N104", "G298", "S403", "Y159", "M241"})
+    mutable_residues: set = field(default_factory=lambda: {"G246", "N146", "E150", "H351", "E644", "A601", "F241", "N104", "G298", "S403", "N159", "R241"})
     use_pharmacophore_filter: bool = True
 
     pdb_ids: Dict[str, str] = field(default_factory=lambda: {
-        "PBP2a_apo": "3QPD",
-        "PBP2a_holo": "6TKO",
+        "PBP2a_apo": "1VQQ",
+        "PBP2a_holo": "3ZG0",
         "trypsin": "1UTN",
-        "CES1": "3KJZ",
+        "CES1": "1YA4",
     })
     reference_antibiotics: Dict[str, str] = field(default_factory=lambda: {
         "Methicillin":  "CC1(C(N2C(S1)C(C2=O)NC(=O)C3=C(C(=C(C=C3)OC)OC)OC)C(=O)O)C",
@@ -190,17 +190,17 @@ class PipelineConfig:
     gnina_binary_path: str = "gnina"
     ensemble_mode: bool = True
     ensemble_structures_dir: Optional[Path] = None
-    default_ensemble_pdb_ids: List[str] = field(default_factory=lambda: ["3QPD", "6TKO", "4CJN"])
+    default_ensemble_pdb_ids: List[str] = field(default_factory=lambda: ["1VQQ", "3ZG0", "4CJN"])
     consensus_scoring_method: str = "rank"
     flexible_docking: bool = False
-    flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["ALA237", "MET241", "TYR159"])
+    flexible_residues_allosteric: List[str] = field(default_factory=lambda: ["GLU237", "ARG241", "ASN159"])
     flexible_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
     max_flexible_conformers: int = 9
     use_ml_rescoring: bool = True
     use_mm_gbsa: bool = False
     use_mm_gbsa_rescoring: bool = False
     mm_gbsa_top_n: int = 50
-    key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["TYR159", "ALA237", "MET241"])
+    key_interaction_residues_allosteric: List[str] = field(default_factory=lambda: ["ASN159", "GLU237", "ARG241"])
     key_interaction_residues_active: List[str] = field(default_factory=lambda: ["SER403"])
     min_key_interactions: int = 1
     require_key_interactions_for_rescoring: bool = True

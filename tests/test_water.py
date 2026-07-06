@@ -22,18 +22,18 @@ from autoantibiotic.water_analysis import (
 # ── Test fixtures ──────────────────────────────────────────────
 
 _PDB_WITH_WATERS = """\
-ATOM      1  N   ALA A 237       1.000   1.000   1.000  1.00  0.00           N
-ATOM      2  CA  ALA A 237       1.500   1.500   1.500  1.00  0.00           C
-ATOM      3  C   ALA A 237       2.500   2.000   1.800  1.00  0.00           C
-ATOM      4  O   ALA A 237       3.200   2.800   1.200  1.00  0.00           O
-ATOM      5  N   MET A 241       2.000   2.000   2.000  1.00  0.00           N
-ATOM      6  CA  MET A 241       2.500   2.500   2.500  1.00  0.00           C
-ATOM      7  C   MET A 241       3.500   3.000   2.800  1.00  0.00           C
-ATOM      8  O   MET A 241       4.200   3.800   2.200  1.00  0.00           O
-ATOM      9  N   TYR A 159       3.000   3.000   3.000  1.00  0.00           N
-ATOM     10  CA  TYR A 159       3.500   3.500   3.500  1.00  0.00           C
-ATOM     11  C   TYR A 159       4.500   4.000   3.800  1.00  0.00           C
-ATOM     12  O   TYR A 159       5.200   4.800   3.200  1.00  0.00           O
+ATOM      1  N   ASN A 159       1.000   1.000   1.000  1.00  0.00           N
+ATOM      2  CA  ASN A 159       1.500   1.500   1.500  1.00  0.00           C
+ATOM      3  C   ASN A 159       2.500   2.000   1.800  1.00  0.00           C
+ATOM      4  O   ASN A 159       3.200   2.800   1.200  1.00  0.00           O
+ATOM      5  N   GLU A 237       2.000   2.000   2.000  1.00  0.00           N
+ATOM      6  CA  GLU A 237       2.500   2.500   2.500  1.00  0.00           C
+ATOM      7  C   GLU A 237       3.500   3.000   2.800  1.00  0.00           C
+ATOM      8  O   GLU A 237       4.200   3.800   2.200  1.00  0.00           O
+ATOM      9  N   ARG A 241       3.000   3.000   3.000  1.00  0.00           N
+ATOM     10  CA  ARG A 241       3.500   3.500   3.500  1.00  0.00           C
+ATOM     11  C   ARG A 241       4.500   4.000   3.800  1.00  0.00           C
+ATOM     12  O   ARG A 241       5.200   4.800   3.200  1.00  0.00           O
 ATOM     13  N   SER A 403       4.000   4.000   4.000  1.00  0.00           N
 ATOM     14  CA  SER A 403       4.500   4.500   4.500  1.00  0.00           C
 ATOM     15  C   SER A 403       5.500   5.000   4.800  1.00  0.00           C
@@ -194,8 +194,8 @@ class TestDisplacementEnergy:
 class TestAnalyzeWaters:
     def test_no_waters_returns_empty(self) -> None:
         pdb_no_waters = """\
-ATOM      1  N   ALA A 237       1.000   1.000   1.000  1.00  0.00           N
-ATOM      2  CA  ALA A 237       1.500   1.500   1.500  1.00  0.00           C
+ATOM      1  N   ASN A 159       1.000   1.000   1.000  1.00  0.00           N
+ATOM      2  CA  ASN A 159       1.500   1.500   1.500  1.00  0.00           C
 END
 """
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False)
@@ -204,7 +204,7 @@ END
         try:
             result = analyze_waters(
                 tmp.name,
-                allosteric_residues=["ALA237"],
+                allosteric_residues=["ASN159"],
                 active_site_residues=[],
             )
             assert isinstance(result, WaterAnalysisResult)
@@ -218,7 +218,7 @@ END
     def test_analyze_with_waters(self, pdb_with_waters_path: str) -> None:
         result = analyze_waters(
             pdb_with_waters_path,
-            allosteric_residues=["ALA237", "MET241", "TYR159"],
+            allosteric_residues=["ASN159", "GLU237", "ARG241"],
             active_site_residues=["SER403"],
             distance_cutoff=5.0,
             displacement_energy_threshold=2.5,
