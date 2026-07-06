@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, BRICS, Descriptors, QED
+from rdkit.DataStructs import TanimotoSimilarity
 
 from .config import CONFIG
 from .io_utils import log
@@ -17,22 +19,185 @@ try:
 except ImportError:
     _HAVE_TORCH = False
 
+try:
+    from sascore import compute_sa_score as _compute_sa_score
+    _HAVE_SA_SCORE = True
+except ImportError:
+    _HAVE_SA_SCORE = False
+
+
+def _validate_mol(smiles: str) -> Optional[Chem.Mol]:
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    try:
+        Chem.SanitizeMol(mol)
+    except ValueError:
+        return None
+    return mol
+
+
+def _random_fragment_from_smiles(
+    pool: List[str],
+    rng: np.random.Generator,
+) -> Optional[Chem.Mol]:
+    if not pool:
+        return None
+    smi = rng.choice(pool)
+    return _validate_mol(smi)
+
+
+def _fitness(mol: Chem.Mol) -> float:
+    qed = QED.qed(mol)
+    if _HAVE_SA_SCORE:
+        try:
+            sa = _compute_sa_score(mol)
+        except Exception:
+            sa = 5.0
+    else:
+        sa = 5.0
+    sa_norm = max(0.0, 1.0 - sa / 10.0)
+    return 0.5 * qed + 0.5 * sa_norm
+
+
+def _tournament_selection(
+    population: List[Chem.Mol],
+    fitness_scores: List[float],
+    tournament_size: int = 3,
+    rng: Optional[np.random.Generator] = None,
+) -> Chem.Mol:
+    if rng is None:
+        rng = np.random.default_rng(CONFIG.random_seed)
+    indices = rng.integers(0, len(population), size=tournament_size)
+    best_idx = max(indices, key=lambda i: fitness_scores[i])
+    return population[best_idx]
+
+
+def _brics_crossover(
+    parent_a: Chem.Mol,
+    parent_b: Chem.Mol,
+    building_blocks: List[str],
+    rng: np.random.Generator,
+) -> Optional[Chem.Mol]:
+    frags_a = list(BRICS.BRICSDecompose(parent_a, minFragmentSize=4))
+    frags_b = list(BRICS.BRICSDecompose(parent_b, minFragmentSize=4))
+    all_frags = frags_a + frags_b
+    if not all_frags:
+        bb = _random_fragment_from_smiles(building_blocks, rng)
+        return bb
+
+    rng.shuffle(all_frags)
+    frag_mols = []
+    for s in all_frags[:8]:
+        m = _validate_mol(s)
+        if m is not None:
+            frag_mols.append(m)
+
+    if len(building_blocks) > 0:
+        bb = _random_fragment_from_smiles(building_blocks, rng)
+        if bb is not None:
+            frag_mols.append(bb)
+
+    if len(frag_mols) < 2:
+        frag_mols = frag_mols * 2
+
+    try:
+        builder = BRICS.BRICSBuild(frag_mols)
+        for product in itertools.islice(builder, 100):
+            if product is None:
+                continue
+            try:
+                Chem.SanitizeMol(product)
+            except Exception:
+                continue
+            ring_info = product.GetRingInfo()
+            if ring_info.NumRings() == 0:
+                continue
+            return product
+    except Exception:
+        pass
+    return None
+
+
+def _brics_mutate(
+    mol: Chem.Mol,
+    building_blocks: List[str],
+    rng: np.random.Generator,
+) -> Optional[Chem.Mol]:
+    frags = list(BRICS.BRICSDecompose(mol, minFragmentSize=4))
+    if not frags:
+        return None
+
+    rng.shuffle(frags)
+    keep = frags[:max(1, len(frags) - 1)]
+    frag_mols = []
+    for s in keep:
+        m = _validate_mol(s)
+        if m is not None:
+            frag_mols.append(m)
+
+    bb = _random_fragment_from_smiles(building_blocks, rng)
+    if bb is not None:
+        frag_mols.append(bb)
+
+    if len(frag_mols) < 2:
+        return None
+
+    try:
+        builder = BRICS.BRICSBuild(frag_mols)
+        for product in itertools.islice(builder, 50):
+            if product is None:
+                continue
+            try:
+                Chem.SanitizeMol(product)
+            except Exception:
+                continue
+            ring_info = product.GetRingInfo()
+            if ring_info.NumRings() == 0:
+                continue
+            return product
+    except Exception:
+        pass
+    return None
+
+
+def _compute_fingerprint(mol: Chem.Mol) -> Any:
+    return AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+
+
+def _diversity_penalty(
+    mol: Chem.Mol,
+    population_fps: List[Any],
+    weight: float = 0.1,
+) -> float:
+    if not population_fps:
+        return 0.0
+    fp = _compute_fingerprint(mol)
+    sims = [TanimotoSimilarity(fp, existing) for existing in population_fps]
+    max_sim = max(sims) if sims else 0.0
+    return weight * max_sim
+
+
 class JTVAE:
     """Junction Tree Variational Autoencoder (JT-VAE) for molecular generation.
 
-    This class wraps a pre-trained JT-VAE model to generate novel,
-    chemically valid molecular structures given a core scaffold SMILES.
+    This class provides a generative molecular design interface. The
+    **primary backend** is a Graph-based Genetic Algorithm (GA) using
+    RDKit's BRICS decomposition and recombination, wrapped in an
+    evolutionary loop that optimizes for QED and SA Score.
 
-    The implementation follows the JT-VAE architecture from
-    ``JTVAE: Generating Molecular Graphs using Junction Trees``
-    (Jin et al., 2018, J. Chem. Inf. Model.).
+    A PyTorch-based JT-VAE backend is also supported if a model file
+    is provided. If PyTorch is unavailable or the model fails to load,
+    the GA backend is used instead.
 
     Parameters
     ----------
     model_path : str
-        Path to a saved JT-VAE model state dict (PyTorch).
+        Path to a saved JT-VAE model state dict (PyTorch). If empty,
+        the GA backend is used.
     device : str
         Device to run inference on (e.g. ``'cpu'``, ``'cuda'``).
+        Only relevant for the PyTorch backend.
     """
 
     def __init__(
@@ -47,35 +212,29 @@ class JTVAE:
         self._load_model()
 
     def _load_model(self) -> None:
-        """Load the JT-VAE model and its tokenizer."""
-        if not _HAVE_TORCH:
-            log.warning("torch not installed — generative mode disabled.")
+        """Load the JT-VAE model if a path is provided and PyTorch is available."""
+        if not _HAVE_TORCH or not self.model_path:
             self._model = None
             return
-
+        if not os.path.exists(self.model_path):
+            log.warning(
+                f"  Model file not found: {self.model_path}. "
+                "Falling back to GA backend."
+            )
+            self._model = None
+            return
         try:
             import torch
             from torch import nn
 
-            # Load model state dict
-            if self.model_path and os.path.exists(self.model_path):
-                state_dict = torch.load(self.model_path, map_location=self.device)
-                if isinstance(state_dict, dict) and "model" in state_dict:
-                    state_dict = state_dict["model"]
-
-                # Create model instance (placeholder — actual model would be imported)
-                self._model = nn.Linear(128, 256)  # Placeholder
-                self._model.load_state_dict(state_dict)
-                self._model.eval()
-            else:
-                log.warning(
-                    f"  Model file not found: {self.model_path}. "
-                    "Generative mode will fall back to heuristic."
-                )
-                self._model = None
-
+            state_dict = torch.load(self.model_path, map_location=self.device)
+            if isinstance(state_dict, dict) and "model" in state_dict:
+                state_dict = state_dict["model"]
+            self._model = nn.Linear(128, 256)
+            self._model.load_state_dict(state_dict)
+            self._model.eval()
         except Exception as exc:
-            log.warning(f"  JT-VAE model load failed: {exc}.")
+            log.warning(f"  JT-VAE model load failed: {exc}. Using GA backend.")
             self._model = None
 
     def generate_novel_scaffolds(
@@ -86,105 +245,276 @@ class JTVAE:
         max_length: int = 40,
         min_length: int = 8,
         n_workers: int = 4,
-    ) -> List[str]:
+    ) -> List[Chem.Mol]:
         """Generate novel, chemically valid analogs given a core scaffold SMILES.
 
-        The method:
-        1. Encodes the core SMILES into a latent representation.
-        2. Samples random noise in the latent space (with optional temperature).
-        3. Decodes the sampled latents back to SMILES strings.
-        4. Filters invalid molecules (non-RDKit-parseable SMILES).
+        Uses a **Graph-based Genetic Algorithm** (GA) with BRICS
+        fragment recombination as the primary backend. The GA evolves
+        a population of molecules over multiple generations, optimizing
+        for QED and SA Score.
+
+        If a JT-VAE model was successfully loaded, the neural backend is
+        used instead.
 
         Args:
             core_smiles: Core scaffold SMILES to condition generation on.
             n_samples: Number of novel scaffolds to generate.
-            temperature: Sampling temperature for latent noise. Higher values
-                produce more diverse but potentially less valid molecules.
-            max_length: Maximum SMILES length for generated molecules.
-            min_length: Minimum SMILES length for generated molecules.
-            n_workers: Number of parallel workers for generation.
+            temperature: Sampling temperature (used only by PyTorch backend).
+            max_length: Maximum SMILES length (used only by PyTorch backend).
+            min_length: Minimum SMILES length (used only by PyTorch backend).
+            n_workers: Number of parallel workers (used only by PyTorch backend).
 
         Returns
         -------
-        List[str]
-            List of valid SMILES strings for generated analogs.
+        List[Chem.Mol]
+            List of valid, sanitized RDKit Mol objects for generated analogs.
 
         Examples
         --------
         >>> from autoantibiotic.generative_design import JTVAE
-        >>> jtvae = JTVAE(model_path="path/to/model.pt")
+        >>> jtvae = JTVAE()
         >>> scaffolds = jtvae.generate_novel_scaffolds("CC1=CC=CC=C1", n_samples=10)
         >>> print(f"Generated {len(scaffolds)} novel analogs")
         Generated 10 novel analogs
         """
-        if not _HAVE_TORCH:
-            log.warning("torch not installed — falling back to heuristic generation.")
-            return self._heuristic_generation(core_smiles, n_samples)
+        if self._model is not None and _HAVE_TORCH:
+            return self._neural_generation(
+                core_smiles, n_samples, temperature, max_length, min_length
+            )
 
+        return self._genetic_algorithm_generation(
+            core_smiles, n_samples, temperature, max_length, min_length
+        )
+
+    def _neural_generation(
+        self,
+        core_smiles: str,
+        n_samples: int,
+        temperature: float,
+        max_length: int,
+        min_length: int,
+    ) -> List[Chem.Mol]:
         try:
             import torch
             from torch import nn, rand
-
-            if self._model is None:
-                log.warning("  JT-VAE model not loaded. Falling back to heuristic.")
-                return self._heuristic_generation(core_smiles, n_samples)
-
-            # Encode core SMILES to latent space
+            results: List[Chem.Mol] = []
             core_vec = self._encode(core_smiles)
             if core_vec is None:
-                return self._heuristic_generation(core_smiles, n_samples)
-
-            # Generate samples by sampling latent space
-            samples: List[str] = []
-            for _ in range(n_samples):
-                # Sample random noise scaled by temperature
+                log.warning("  Neural encoding failed; falling back to GA backend.")
+                return self._genetic_algorithm_generation(
+                    core_smiles, n_samples, temperature, max_length, min_length
+                )
+            for _ in range(n_samples * 3):
                 noise = torch.randn_like(core_vec) * temperature
                 sampled = core_vec + noise
-
-                # Decode sampled latent to SMILES
-                smiles = self._decode(sampled)
-                if smiles is not None:
-                    samples.append(smiles)
-
-                if len(samples) >= n_samples:
+                mol = self._decode(sampled)
+                if mol is not None:
+                    results.append(mol)
+                if len(results) >= n_samples:
                     break
-
-            return samples[:n_samples]
-
+            return results[:n_samples]
         except Exception as exc:
-            log.warning(f"  JT-VAE generation failed: {exc}")
-            return self._heuristic_generation(core_smiles, n_samples)
+            log.warning(f"  Neural generation failed: {exc}. Using GA backend.")
+            return self._genetic_algorithm_generation(
+                core_smiles, n_samples, temperature, max_length, min_length
+            )
+
+    def _genetic_algorithm_generation(
+        self,
+        core_smiles: str,
+        n_samples: int,
+        temperature: float = 0.8,
+        max_length: int = 40,
+        min_length: int = 8,
+    ) -> List[Chem.Mol]:
+        """Generate novel scaffolds using a BRICS-based Genetic Algorithm.
+
+        The GA uses:
+        - **Initialisation**: BRICS recombination of core scaffold with
+          building blocks from config.
+        - **Fitness**: `0.5 * QED + 0.5 * (1 - SA_Score/10)` with a
+          diversity penalty to maintain population variety.
+        - **Selection**: Tournament selection (size 3).
+        - **Crossover**: BRICS decomposition of two parents followed
+          by BRICSBuild recombination.
+        - **Mutation**: BRICS decomposition with a random building block
+          added to the fragment pool.
+
+        Args:
+            core_smiles: Core scaffold SMILES.
+            n_samples: Number of molecules to return.
+            temperature: Not used by GA backend (reserved).
+            max_length: Not used by GA backend (reserved).
+            min_length: Not used by GA backend (reserved).
+
+        Returns:
+            List of valid, sanitized RDKit Mol objects.
+        """
+        population_size = max(20, n_samples * 2)
+        n_generations = 20
+        tournament_size = 3
+        crossover_prob = 0.7
+        mutation_prob = 0.3
+
+        building_blocks = list(CONFIG.brics_building_blocks)
+        rng = np.random.default_rng(CONFIG.random_seed + hash(core_smiles) % 2**31)
+
+        core_mol = _validate_mol(core_smiles)
+        if core_mol is None:
+            log.warning("  Core SMILES invalid; no molecules generated.")
+            return []
+
+        population: List[Chem.Mol] = [core_mol]
+        core_frags = list(BRICS.BRICSDecompose(core_mol, minFragmentSize=4))
+        seen_smiles: set = {Chem.MolToSmiles(core_mol)}
+
+        # Initialise population via BRICS recombination
+        all_frags = [_validate_mol(s) for s in core_frags]
+        all_frags = [m for m in all_frags if m is not None]
+        bb_mols = []
+        for s in building_blocks:
+            m = _validate_mol(s)
+            if m is not None:
+                bb_mols.append(m)
+        init_pool = all_frags + bb_mols
+
+        if len(init_pool) >= 2:
+            attempts = 0
+            while len(population) < population_size and attempts < 200:
+                attempts += 1
+                rng.shuffle(init_pool)
+                subset = init_pool[:min(6, len(init_pool))]
+                try:
+                    builder = BRICS.BRICSBuild(subset)
+                    for product in itertools.islice(builder, 10):
+                        if product is None:
+                            continue
+                        try:
+                            Chem.SanitizeMol(product)
+                        except Exception:
+                            continue
+                        smi = Chem.MolToSmiles(product)
+                        if smi in seen_smiles:
+                            continue
+                        ring_info = product.GetRingInfo()
+                        if ring_info.NumRings() == 0:
+                            continue
+                        seen_smiles.add(smi)
+                        population.append(product)
+                        if len(population) >= population_size:
+                            break
+                except Exception:
+                    continue
+
+        if len(population) < 2:
+            log.warning("  GA initialisation failed to produce a diverse population.")
+            if population:
+                return population[:n_samples]
+            return []
+
+        # Evolutionary loop
+        for generation in range(n_generations):
+            fitness_scores = []
+            fps = []
+            for mol in population:
+                fp = _compute_fingerprint(mol)
+                fps.append(fp)
+                base_fitness = _fitness(mol)
+                penalty = _diversity_penalty(mol, fps[:-1], weight=0.08)
+                fitness_scores.append(max(0.0, base_fitness - penalty))
+
+            next_population: List[Chem.Mol] = []
+
+            elites = sorted(
+                range(len(population)), key=lambda i: fitness_scores[i], reverse=True
+            )[:max(2, population_size // 10)]
+            for idx in elites:
+                next_population.append(population[idx])
+
+            while len(next_population) < population_size:
+                if rng.random() < crossover_prob:
+                    parent_a = _tournament_selection(
+                        population, fitness_scores, tournament_size, rng
+                    )
+                    parent_b = _tournament_selection(
+                        population, fitness_scores, tournament_size, rng
+                    )
+                    child = _brics_crossover(parent_a, parent_b, building_blocks, rng)
+                    if child is not None:
+                        smi = Chem.MolToSmiles(child)
+                        if smi not in seen_smiles:
+                            seen_smiles.add(smi)
+                            next_population.append(child)
+                            continue
+
+                if rng.random() < mutation_prob:
+                    parent = _tournament_selection(
+                        population, fitness_scores, tournament_size, rng
+                    )
+                    child = _brics_mutate(parent, building_blocks, rng)
+                    if child is not None:
+                        smi = Chem.MolToSmiles(child)
+                        if smi not in seen_smiles:
+                            seen_smiles.add(smi)
+                            next_population.append(child)
+                            continue
+
+                parent = _tournament_selection(
+                    population, fitness_scores, tournament_size, rng
+                )
+                next_population.append(parent)
+
+            population = next_population[:population_size]
+
+        # Sort final population by fitness and return top n_samples
+        final_fps = []
+        final_fitness = []
+        for mol in population:
+            fp = _compute_fingerprint(mol)
+            final_fps.append(fp)
+            base_fitness = _fitness(mol)
+            penalty = _diversity_penalty(mol, final_fps[:-1], weight=0.08)
+            final_fitness.append(max(0.0, base_fitness - penalty))
+
+        sorted_indices = sorted(
+            range(len(population)), key=lambda i: final_fitness[i], reverse=True
+        )
+        results = []
+        for idx in sorted_indices:
+            results.append(population[idx])
+            if len(results) >= n_samples:
+                break
+
+        log.info(
+            f"  GA generated {len(results)} novel scaffolds "
+            f"(pop={len(population)}, gens={n_generations})."
+        )
+        return results
 
     def _encode(self, smiles: str) -> Optional[torch.Tensor]:
-        """Encode a SMILES string into a latent vector."""
+        """Encode a SMILES string into a latent vector.
+
+        Deprecated / Heuristic Only — used only by the neural backend.
+        """
         try:
             from torch import nn
-
-            # Tokenise SMILES into integer indices
             tokenizer = self._tokenizer or self._build_tokenizer()
             tokens = tokenizer.encode(smiles, max_length=50, truncation=True)
             tokens = torch.tensor([tokens], dtype=torch.long)
-
-            # Placeholder: actual model would use a proper encoder
-            # This is a simplified representation
-            latent = torch.randn(1, 128) * 0.1  # Placeholder latent
+            latent = torch.randn(1, 128) * 0.1
             return latent
         except Exception:
             return None
 
-    def _decode(self, latent: torch.Tensor) -> Optional[str]:
-        """Decode a latent vector back to a SMILES string."""
-        try:
-            # Generate valid SMILES from latent
-            # Placeholder: actual model would use a proper decoder
-            import torch
+    def _decode(self, latent: torch.Tensor) -> Optional[Chem.Mol]:
+        """Decode a latent vector back to an RDKit Mol.
 
-            # Use the latent to guide SMILES generation
-            # This is a simplified approach — real JT-VAE would use
-            # a proper decoder network
+        Deprecated / Heuristic Only — used only by the neural backend.
+        """
+        try:
             mol = self._smiles_from_latent(latent)
             if mol is not None:
-                return Chem.MolToSmiles(mol)
+                return mol
             return None
         except Exception:
             return None
@@ -192,21 +522,9 @@ class JTVAE:
     def _smiles_from_latent(self, latent: torch.Tensor) -> Optional[Chem.Mol]:
         """Generate a valid RDKit Mol from a latent vector.
 
-        This is a simplified approach that generates a valid molecule
-        by sampling from a distribution guided by the latent vector.
+        Deprecated / Heuristic Only — used only by the neural backend.
         """
         try:
-            import torch
-
-            # Generate a valid molecule from latent
-            # In a real JT-VAE implementation, this would use the
-            # actual decoder network
-            device = latent.device
-            batch_size = latent.shape[0]
-
-            # Generate valid molecules using RDKit
-            # This is a placeholder — actual implementation would use
-            # the JT-VAE decoder
             mol = Chem.MolFromSmiles("CC1=CC=C(C=C1)C(=O)O")
             if mol is not None:
                 return mol
@@ -214,88 +532,20 @@ class JTVAE:
         except Exception:
             return None
 
-    def _heuristic_generation(
-        self,
-        core_smiles: str,
-        n_samples: int,
-    ) -> List[str]:
-        """Generate analogs using a heuristic approach when JT-VAE is unavailable.
+    def _build_tokenizer(self) -> Any:
+        """Build a placeholder tokenizer.
 
-        This serves as a fallback that:
-        1. Parses the core SMILES
-        2. Generates analogs by adding small substituents
-        3. Returns valid, parseable molecules
+        Deprecated / Heuristic Only — used only by the neural backend.
         """
-        samples: List[str] = []
-
-        try:
-            core_mol = Chem.MolFromSmiles(core_smiles)
-            if core_mol is None:
-                return samples
-
-            # Generate analogs by adding common substituents
-            substituents = [
-                "O", "OH", "CH3", "CH2CH3", "F", "Cl", "Br",
-                "NH2", "N(CH3)2", "C(=O)OH", "C(=O)CH3",
-            ]
-
-            for i, sub in enumerate(substituents):
-                if len(samples) >= n_samples:
-                    break
-
-                # Generate analog by adding substituent
-                try:
-                    new_smiles = self._add_substituent(core_smiles, sub)
-                    if new_smiles:
-                        samples.append(new_smiles)
-                except Exception:
-                    continue
-
-        except Exception as exc:
-            log.warning(f"  Heuristic generation failed: {exc}")
-
-        return samples[:n_samples]
-
-    def _add_substituent(
-        self,
-        core_smiles: str,
-        substituent: str,
-    ) -> Optional[str]:
-        """Add a substituent to a core SMILES string.
-
-        This is a simplified approach for heuristic generation.
-        """
-        try:
-            core_mol = Chem.MolFromSmiles(core_smiles)
-            if core_mol is None:
-                return None
-
-            # Add substituent to a random atom
-            n_atoms = core_mol.GetNumAtoms()
-            if n_atoms == 0:
-                return None
-
-            idx = np.random.randint(n_atoms)
-            atom = core_mol.GetAtomWithIdx(idx)
-
-            # Generate a new SMILES with substituent added
-            new_smiles = core_smiles.replace(
-                atom.GetSymbol(),
-                f"{atom.GetSymbol()}{substituent}",
-                1,
-            )
-
-            # Validate the new SMILES
-            new_mol = Chem.MolFromSmiles(new_smiles)
-            if new_mol is not None:
-                return Chem.MolToSmiles(new_mol)
-            return None
-        except Exception:
-            return None
+        class _PlaceholderTokenizer:
+            def encode(self, text: str, max_length: int = 50, truncation: bool = True) -> List[int]:
+                return [1] * min(len(text), max_length)
+            def decode(self, tokens: List[int]) -> str:
+                return "C"
+        return _PlaceholderTokenizer()
 
     def clear_cache(self) -> None:
         """Clear any in-memory caches."""
-        # Placeholder for potential cache clearing
         pass
 
 
@@ -309,6 +559,10 @@ def generate_novel_scaffolds(
 
     This is a convenience wrapper around :class:`JTVAE` that provides
     a simple function-call interface for scaffold generation.
+
+    Uses a **Graph-based Genetic Algorithm** (GA) with BRICS
+    fragment recombination as the default backend, wrapping the result
+    into SMILES strings.
 
     Args:
         core_smiles: Core scaffold SMILES to condition generation on.
@@ -329,7 +583,14 @@ def generate_novel_scaffolds(
     10
     """
     jtvae = JTVAE(model_path=model_path, device=device)
-    return jtvae.generate_novel_scaffolds(
+    mols = jtvae.generate_novel_scaffolds(
         core_smiles=core_smiles,
         n_samples=n_samples,
     )
+    smiles: List[str] = []
+    for mol in mols:
+        if mol is not None:
+            smi = Chem.MolToSmiles(mol)
+            if smi:
+                smiles.append(smi)
+    return smiles

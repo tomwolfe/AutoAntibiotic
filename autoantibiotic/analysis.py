@@ -22,7 +22,7 @@ from rdkit.Chem import AllChem, Crippen, Descriptors, QED, rdDistGeom, rdMolAlig
 from sklearn.ensemble import RandomForestClassifier as _RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
 
-from .config import CONFIG
+from .config import CONFIG, ConfigurationError
 from .models import CompoundRecord
 from .docking import _parallel_dock
 from .io_utils import log
@@ -161,6 +161,8 @@ def profile_resistance_mutation_sensitivity(
             if result.delta_delta_g is not None:
                 # Use absolute ΔΔG as the stability score
                 return abs(result.delta_delta_g)
+        except ConfigurationError:
+            raise
         except Exception as exc:
             log.warning(
                 f"  FEP resistance profiling failed: {exc}. "

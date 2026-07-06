@@ -9,6 +9,15 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 
+class ConfigurationError(Exception):
+    """Error raised when the pipeline configuration is invalid or
+    required dependencies for a requested feature are missing.
+
+    The error message is always actionable, telling the user what
+    is missing and how to resolve it.
+    """
+
+
 @dataclass
 class PipelineConfig:
     """Top-level configuration container for the AutoAntibiotic pipeline."""
@@ -313,6 +322,87 @@ class PipelineConfig:
     @property
     def pdb_dir(self) -> Path:
         return self.output_dir / "pdb"
+
+    def validate_config(self) -> None:
+        """Validate the configuration for logical consistency.
+
+        Checks that:
+        - If ``use_explicit_solvent_mmgbsa`` is True, OpenMM and pdbfixer
+          are importable.
+        - If ``use_fep_resistance`` is True, OpenMM and openmmtools are
+          importable.
+        - If ``generative_mode`` is True, the required generative backend
+          (at minimum RDKit for the GA backend) is available.
+
+        When ``dry_run`` is True, dependency checks are skipped since
+        those features will not actually be executed.
+
+        Raises
+        ------
+        ConfigurationError
+            If a required dependency for an enabled feature is not
+            installed.
+        """
+        if self.dry_run:
+            return
+
+        if self.use_explicit_solvent_mmgbsa:
+            try:
+                import openmm  # noqa: F401
+            except ImportError:
+                raise ConfigurationError(
+                    "Explicit solvent MM-GB/SA requested (use_explicit_solvent_mmgbsa=True) "
+                    "but OpenMM is not installed. Please install via conda:\n"
+                    "  conda install -c conda-forge openmm"
+                )
+            try:
+                import pdbfixer  # noqa: F401
+            except ImportError:
+                raise ConfigurationError(
+                    "Explicit solvent MM-GB/SA requested (use_explicit_solvent_mmgbsa=True) "
+                    "but pdbfixer is not installed. Please install via conda:\n"
+                    "  conda install -c conda-forge pdbfixer"
+                )
+
+        if self.use_fep_resistance:
+            try:
+                import openmm  # noqa: F401
+            except ImportError:
+                raise ConfigurationError(
+                    "FEP resistance profiling requested (use_fep_resistance=True) "
+                    "but OpenMM is not installed. OpenMM is required for molecular "
+                    "mechanics force field evaluation. Please install via conda:\n"
+                    "  conda install -c conda-forge openmm"
+                )
+            try:
+                import openmmtools  # noqa: F401
+            except ImportError:
+                raise ConfigurationError(
+                    "FEP resistance profiling requested (use_fep_resistance=True) "
+                    "but openmmtools is not installed. openmmtools provides the "
+                    "alchemical factory and MBAR estimator. Please install via conda:\n"
+                    "  conda install -c conda-forge openmmtools"
+                )
+
+        if self.generative_mode:
+            try:
+                from rdkit import Chem  # noqa: F401
+            except ImportError:
+                raise ConfigurationError(
+                    "Generative mode requested (generative_mode=True) "
+                    "but RDKit is not installed. Please install via conda:\n"
+                    "  conda install -c conda-forge rdkit"
+                )
+            # Also check for the GA backend dependencies
+            try:
+                from rdkit.Chem import BRICS  # noqa: F401
+            except ImportError:
+                raise ConfigurationError(
+                    "Generative mode requested (generative_mode=True) "
+                    "but RDKit BRICS module is not available. "
+                    "Please upgrade RDKit:\n"
+                    "  conda install -c conda-forge rdkit"
+                )
 
 
 CONFIG = PipelineConfig()

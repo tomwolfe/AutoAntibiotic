@@ -13,7 +13,7 @@ import copy
 from pathlib import Path
 from typing import Optional, List
 
-from .config import CONFIG, PipelineConfig
+from .config import CONFIG, PipelineConfig, ConfigurationError
 from .orchestrator import PipelineOrchestrator
 
 
@@ -99,6 +99,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.use_mm_gbsa or args.use_mm_gbsa_rescoring:
         cfg.use_mm_gbsa = True
         cfg.use_mm_gbsa_rescoring = True
+
+    # ── Validate configuration ──
+    try:
+        cfg.validate_config()
+    except ConfigurationError as exc:
+        print(f"Configuration Error: {exc}")
+        raise
 
     orchestrator = PipelineOrchestrator(use_cache=args.use_cache, config=cfg)
     orchestrator.run()

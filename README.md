@@ -13,6 +13,8 @@ A virtual screening pipeline for discovering novel MRSA PBP2a inhibitors. The pi
 - **Meta-Learner Consensus Scoring (Phase 4.5)** — Trains a stacking regressor on benchmark actives/inactives to predict activity from Vina energy, shape score, IFP, QED, and LogP features. If MD validation was run, **dynamic stability features** (ligand RMSD, pocket Rg stability) are automatically included in the feature vector.
 - **Selectivity Profiling (Phase 4)** — Docks top candidates against human trypsin (1UTN) and CES1 (3KJZ) off-targets; computes Selectivity Index and resistance-risk profile.
 - **Resistance Mutation Profiling (Phase 4)** — Optionally docks candidates against mutant receptor variants and computes binding-energy standard deviation as a resistance-risk metric.
+- **Free Energy Perturbation (FEP) Resistance Profiling (Phase 4)** — When enabled (`use_fep_resistance=True`), replaces heuristic resistance scoring with a rigorous Equilibrium FEP calculation using OpenMM and openmmtools. Uses 11 λ-windows, alchemical decoupling of the ligand, and MBAR free energy estimation to compute ΔΔG between wild-type and mutant receptor binding. Requires `openmm` and `openmmtools`.
+- **Generative Design (Phase 2)** — When enabled (`generative_mode=True`), replaces BRICS recombination with a **Graph-based Genetic Algorithm** that evolves a population of molecules via BRICS crossover and mutation, optimized for QED and SA Score. Returns valid, sanitized RDKit Mol objects.
 - **MD Validation (Phase 4.7)** — Optional explicit-solvent MD simulation (OpenMM) of top candidates to assess ligand stability via RMSD and pocket Rg stability. Results are stored in `CompoundRecord` and consumed by the MetaScorer (Phase 4.5).
 - **Reporting (Phase 5)** — Generates a CSV report, 2D structure images (top 3), and an interactive HTML report with embedded matplotlib figures.
 
@@ -96,6 +98,20 @@ gnina --help
 
 Download from [https://ccsb.scripps.edu/adfr/](https://ccsb.scripps.edu/adfr/) and add the `prepare_receptor` binary to your `PATH`.
 
+#### OpenMM Tools (FEP resistance profiling)
+
+```bash
+conda install -c conda-forge openmmtools
+```
+
+OpenMM Tools provides the alchemical factory and MBAR/MBAR free energy estimators used by the rigorous FEP resistance profiling module. Install alongside `openmm` and `pdbfixer`:
+
+```bash
+conda install -c conda-forge openmm openmmtools pdbfixer
+```
+
+Note: FEP resistance profiling (`use_fep_resistance=True`) and explicit-solvent MM-GB/SA (`use_explicit_solvent_mmgbsa=True`) now **require** their respective dependencies. The pipeline will raise a clear `ConfigurationError` at startup if a requested feature's dependencies are missing, rather than silently falling back.
+
 > The pipeline works without these binaries — a fallback RDKit-based PDBQT converter is used when they are absent.
 
 ## Usage
@@ -152,15 +168,43 @@ Runs a 10 ns explicit-solvent MD simulation (OpenMM) on top candidates and repor
 python -m autoantibiotic --use-explicit-solvent
 ```
 
-Replaces the default implicit-solvent (OBC2) MM-GB/SA rescoring with a more rigorous explicit-solvent calculation. The complex is solvated with TIP3P water (10 Å padding), energy-minimised, equilibrated, and ΔG_binding is averaged over multiple frames. Falls back gracefully to implicit MM-GB/SA if OpenMM or PDBFixer are unavailable.
+Replaces the default implicit-solvent (OBC2) MM-GB/SA rescoring with a more rigorous explicit-solvent calculation. The complex is solvated with TIP3P water (10 Å padding), energy-minimised, equilibrated, and ΔG_binding is averaged over multiple frames.
 
-### Mutation sampling (resistance profiling)
+> **Note:** The pipeline now validates that `openmm` and `pdbfixer` are installed before starting. If they are missing, a clear `ConfigurationError` is raised — no silent fallback.
+
+### FEP resistance profiling (requires OpenMM + openmmtools)
+
+Configure `use_fep_resistance=True` in `config.py` or set it programmatically:
+
+```python
+from autoantibiotic.config import CONFIG
+CONFIG.use_fep_resistance = True
+```
+
+This replaces the heuristic mutation-sampling approach with a rigorous Equilibrium FEP calculation:
+1. Builds explicit-solvent systems for WT and mutant receptor–ligand complexes.
+2. Creates alchemical systems using `openmmtools`' `AbsoluteAlchemicalFactory`.
+3. Runs 11 λ-windows (configurable via `fep_lambda_windows`) to decouple the ligand.
+4. Computes ΔG using MBAR (Multistate Bennett Acceptance Ratio).
+5. Returns ΔΔG = ΔG_mutant − ΔG_WT.
+
+A `ConfigurationError` is raised if `openmm` or `openmmtools` are not installed.
+
+### Mutation sampling / FEP resistance profiling
 
 ```bash
 python -m autoantibiotic --use-mutation-sampling
 ```
 
 Docks top candidates against mutant receptor variants and reports binding-energy variance as a resistance-risk indicator.
+
+For **rigorous Free Energy Perturbation (FEP)** resistance profiling, enable `use_fep_resistance` in the configuration:
+
+```bash
+python -c "from autoantibiotic.config import CONFIG; CONFIG.use_fep_resistance = True" && python -m autoantibiotic --use-mutation-sampling
+```
+
+This uses OpenMM + openmmtools to compute ΔΔG between wild-type and mutant receptor binding via alchemical free energy methods (see "FEP resistance profiling" above).
 
 ### Combining options
 
@@ -207,9 +251,17 @@ Key parameters are defined in the `PipelineConfig` dataclass (`autoantibiotic/co
 | `use_meta_scoring` | `True` | Enable MetaScorer stacking-regressor consensus |
 | `meta_scorer_model_path` | `"output/meta_scorer.joblib"` | Path to saved MetaScorer model |
 | `md_validation_duration_ns` | `10` | MD simulation length in nanoseconds |
-| `use_explicit_solvent_mmgbsa` | `False` | Enable explicit-solvent (TIP3P) MM-GB/SA rescoring |
+| `use_explicit_solvent_mmgbsa` | `True` | Enable explicit-solvent (TIP3P) MM-GB/SA rescoring |
 | `explicit_solvent_frames` | `10` | Number of trajectory frames for explicit MM-GB/SA averaging |
 | `max_stereoisomers` | `8` | Max stereoisomers per undefined-stereo molecule (strain-filtered) |
+| `use_fep_resistance` | `False` | Enable rigorous FEP resistance profiling (requires openmm + openmmtools) |
+| `fep_lambda_windows` | `11` | Number of λ-windows for the alchemical transformation |
+| `fep_time_step_ps` | `0.002` | Time step (ps) for FEP MD simulation |
+| `fep_n_steps` | `500` | Number of FEP steps per λ-window |
+| `fep_kT_kcal_per_mol` | `0.596` | kT value (kcal/mol) at 298.15 K for FEP |
+| `generative_mode` | `False` | Enable Graph-based GA generative design (BRICS-based) |
+| `generative_n_samples` | `100` | Number of novel scaffolds to generate per core |
+| `generative_temperature` | `0.8` | Sampling temperature (neural backend only) |
 
 ## Troubleshooting
 
@@ -252,6 +304,26 @@ Install OpenBabel. The pipeline uses an RDKit fallback for PDBQT conversion, but
 ```
 
 The SA Score filter is an optional enhancement. Install with `pip install sascore`. The pipeline continues without it.
+
+### "OpenMM is not installed" or "openmmtools is not installed"
+
+```text
+Configuration Error: Free Energy Perturbation (FEP) requested but OpenMM is not installed.
+```
+
+This error is raised when `use_fep_resistance=True` or `use_explicit_solvent_mmgbsa=True` but the required dependencies are missing. The pipeline no longer silently falls back — install the missing packages:
+
+```bash
+conda install -c conda-forge openmm openmmtools pdbfixer
+```
+
+If you do not need these features, disable them in the configuration:
+
+```python
+from autoantibiotic.config import CONFIG
+CONFIG.use_fep_resistance = False
+CONFIG.use_explicit_solvent_mmgbsa = False
+```
 
 ### Pipeline fails during PDB download
 

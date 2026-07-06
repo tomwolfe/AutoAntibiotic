@@ -16,11 +16,14 @@ torch>=2.0.0
 # gnina  # install separately from https://github.com/gnina/gnina
 # onnxruntime>=1.14.0  # for ONNX-based ADMET models
 
-# Optional: MM-GB/SA rescoring
+# Optional: MM-GB/SA rescoring & FEP
 # openmm>=8.0.0  # install via: conda install -c conda-forge openmm
 # pdbfixer>=1.9  # install via: conda install -c conda-forge pdbfixer
 # ambertools>=23.0  # install via: conda install -c conda-forge ambertools
 # parmed>=4.0.0  # for Amber topology handling
+
+# Optional: FEP resistance profiling
+# openmmtools>=1.0.0  # install via: conda install -c conda-forge openmmtools
 
 # Optional: water analysis
 # biopython>=1.83  # already required; used for PDB parsing in water_analysis.py

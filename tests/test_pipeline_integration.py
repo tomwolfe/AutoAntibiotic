@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 from rdkit import Chem
 
-from autoantibiotic.config import CONFIG
+from autoantibiotic.config import CONFIG, ConfigurationError, PipelineConfig
 from autoantibiotic.models import CompoundRecord
 from autoantibiotic.main import main
 from autoantibiotic.library_gen import generate_candidate_library, apply_filters
@@ -214,3 +214,72 @@ class TestLibraryLipinskiCompliance:
         for rec in passed:
             assert rec.max_similarity >= 0.0, "Similarity should be non-negative"
             assert rec.qed_score > 0.0, "QED score should be positive"
+
+
+class TestConfigValidation:
+    """Tests for PipelineConfig.validate_config()."""
+
+    def test_validate_config_passes_default(self):
+        """Default configuration (dry_run=False) should validate unless OpenMM is installed."""
+        cfg = PipelineConfig()
+        cfg.dry_run = True  # skip dependency checks
+        cfg.validate_config()  # should not raise
+
+    def test_validate_config_raises_no_openmm(self):
+        """validate_config raises when use_explicit_solvent_mmgbsa=True but no openmm."""
+        cfg = PipelineConfig()
+        cfg.dry_run = False
+        cfg.use_explicit_solvent_mmgbsa = True
+        cfg.use_fep_resistance = False
+        cfg.generative_mode = False
+        with patch("autoantibiotic.config.openmm", None, create=True) as mock_openmm:
+            import builtins
+            original_import = builtins.__import__
+            def mock_import(name, *args, **kwargs):
+                if name == 'openmm':
+                    raise ImportError("No module named openmm")
+                return original_import(name, *args, **kwargs)
+            with patch.object(builtins, '__import__', side_effect=mock_import):
+                with pytest.raises(ConfigurationError, match="OpenMM is not installed"):
+                    cfg.validate_config()
+
+    def test_validate_config_raises_no_openmmtools(self):
+        """validate_config raises when use_fep_resistance=True but no openmmtools."""
+        cfg = PipelineConfig()
+        cfg.dry_run = False
+        cfg.use_explicit_solvent_mmgbsa = False
+        cfg.use_fep_resistance = True
+        cfg.generative_mode = False
+        with patch("autoantibiotic.config.openmm", None, create=True) as mock_openmm:
+            with patch("autoantibiotic.config.openmmtools", None, create=True) as mock_omm:
+                import builtins
+                original_import = builtins.__import__
+                def mock_import(name, *args, **kwargs):
+                    if name == 'openmmtools':
+                        raise ImportError("No module named openmmtools")
+                    if name == 'openmm':
+                        return MagicMock()
+                    return original_import(name, *args, **kwargs)
+                with patch.object(builtins, '__import__', side_effect=mock_import):
+                    # openmm is importable but openmmtools is not
+                    with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True):
+                        with pytest.raises(ConfigurationError, match="openmmtools is not installed"):
+                            cfg.validate_config()
+
+    def test_validate_config_dry_run_skips_checks(self):
+        """validate_config skips dependency checks when dry_run=True."""
+        cfg = PipelineConfig()
+        cfg.dry_run = True
+        cfg.use_explicit_solvent_mmgbsa = True
+        cfg.use_fep_resistance = True
+        cfg.generative_mode = True
+        cfg.validate_config()  # should not raise even though deps may be missing
+
+    def test_validate_config_generative_mode(self):
+        """validate_config passes when generative_mode=True and RDKit is available."""
+        cfg = PipelineConfig()
+        cfg.dry_run = False
+        cfg.use_explicit_solvent_mmgbsa = False
+        cfg.use_fep_resistance = False
+        cfg.generative_mode = True
+        cfg.validate_config()  # RDKit is always available in tests
