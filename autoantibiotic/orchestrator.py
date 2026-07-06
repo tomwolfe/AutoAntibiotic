@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rdkit import Chem
+
 from .config import CONFIG, PipelineConfig
 from .models import CompoundRecord
 from .docking import run_redocking_validation, screen_library
@@ -92,6 +94,9 @@ class PipelineOrchestrator:
         # solvated complex from MD preparation for rigorous ΔG prediction.
         self.apply_explicit_solvent_rescoring()
         self.apply_meta_scoring()
+        # FEP resistance profiling — top-hit only, runs after rescoring
+        # so that only the most promising candidates are evaluated.
+        self.apply_fep_resistance()
         self.generate_reports()
         self._finalize()
 
@@ -196,6 +201,68 @@ class PipelineOrchestrator:
             self.deps, cache=self.cache, use_cache=self.use_cache,
         )
 
+    def apply_fep_resistance(self) -> None:
+        """Phase 4.8 — Top-hit only FEP resistance profiling.
+
+        Runs rigorous Free Energy Perturbation (FEP) only on the top
+        :attr:`CONFIG.fep_top_n` candidates after docking and MM-GB/SA
+        rescoring.  Skips candidates whose ligand has >50 heavy atoms
+        or whose SMILES exceeds 100 characters.
+
+        Configured via ``CONFIG.use_fep_resistance`` and
+        ``CONFIG.fep_top_n``.
+        """
+        if not self.config.use_fep_resistance:
+            return
+        if not self.top_candidates:
+            return
+        log.info("─── Phase 4.8: Top-Hit FEP Resistance Profiling ───")
+
+        pb2pa = self.targets.get("PBP2a", {})
+        receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
+        if not os.path.isfile(receptor_pdb):
+            log.warning("  Receptor PDB not found; skipping FEP.")
+            return
+
+        # Only run FEP on top N candidates
+        fep_top_n = getattr(self.config, "fep_top_n", 5)
+        candidates = self.top_candidates[:fep_top_n]
+        log.info(f"  FEP enabled: evaluating up to {len(candidates)} top candidates.")
+
+        from .fep_engine import FEPResistanceCalculator, ConfigurationError as FEPConfigError
+
+        for rec in candidates:
+            if rec.mol is None:
+                mol = Chem.MolFromSmiles(rec.smiles)
+                if mol is None:
+                    log.warning(f"  {rec.compound_id}: Cannot parse SMILES; skipping FEP.")
+                    continue
+                rec.mol = mol
+
+            # Heavy-atom check
+            if rec.mol.GetNumHeavyAtoms() > 50:
+                log.info(
+                    f"  {rec.compound_id}: {rec.mol.GetNumHeavyAtoms()} heavy atoms "
+                    "(>50) — skipping FEP."
+                )
+                continue
+
+            try:
+                calc = FEPResistanceCalculator(
+                    receptor_wt_pdb=receptor_pdb,
+                    receptor_mut_pdb=receptor_pdb,
+                    ligand_rdkit=rec.mol,
+                )
+                result = calc.calculate_ddg()
+                log.info(
+                    f"  {rec.compound_id}: FEP ΔΔG = {result.delta_delta_g:.3f} "
+                    f"kcal/mol (confidence={result.confidence:.2f})"
+                )
+            except FEPConfigError as exc:
+                log.warning(f"  {rec.compound_id}: FEP skipped — {exc}")
+            except Exception as exc:
+                log.warning(f"  {rec.compound_id}: FEP failed — {exc}")
+
     def apply_explicit_solvent_rescoring(self) -> None:
         """Phase 4.6 — Explicit-solvent MM-GB/SA rescoring (if enabled).
 
@@ -278,16 +345,18 @@ class PipelineOrchestrator:
                 )
 
     def apply_md_validation(self) -> None:
-        """Phase 4.7 — Optional MD validation of top candidates.
+        """Phase 4.7 — Optional MD validation of top candidates with
+        adaptive sampling.
 
-        Stores MD-derived dynamic features (*ligand_rmsd*, *pocket_rg_stability*)
-        in each ``CompoundRecord`` so they are available to the MetaScorer
-        (Phase 4.5) and for downstream analysis.
+        Uses :func:`run_short_md` with adaptive convergence checking.
+        Stores MD-derived dynamic features (*ligand_rmsd*, *pocket_rg_stability*,
+        *md_converged*) in each ``CompoundRecord`` so they are available to the
+        MetaScorer (Phase 4.5) and for downstream analysis.
         """
         md_duration = self.config.md_validation_duration_ns
         if not (md_duration > 0 and _HAVE_MD and self.top_candidates):
             return
-        log.info("─── Phase 4.7: MD Validation ───")
+        log.info("─── Phase 4.7: MD Validation (Adaptive Sampling) ───")
         pb2pa = self.targets.get("PBP2a", {})
         receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
         if not os.path.isfile(receptor_pdb):
@@ -305,14 +374,19 @@ class PipelineOrchestrator:
                     rec.mol,
                     receptor_pdb,
                     duration_ns=float(md_duration),
+                    max_duration_ns=float(self.config.md_max_duration_ns),
+                    convergence_window_chunks=int(self.config.md_convergence_window_chunks),
+                    rmsd_convergence_threshold=float(self.config.md_rmsd_convergence_threshold),
                 )
                 if result is not None:
                     rec.md_ligand_rmsd = result.get("ligand_rmsd_angstrom")
                     rec.md_pocket_rg_stability = result.get("pocket_rg_stability")
+                    rec.md_converged = result.get("converged", False)
                     log.info(
                         f"  {rec.compound_id}: MD ligand RMSD = "
                         f"{rec.md_ligand_rmsd:.2f} A, "
-                        f"pocket Rg stability = {rec.md_pocket_rg_stability:.3f}"
+                        f"pocket Rg stability = {rec.md_pocket_rg_stability:.3f}, "
+                        f"converged = {rec.md_converged}"
                     )
                 else:
                     log.info(f"  {rec.compound_id}: MD not available.")

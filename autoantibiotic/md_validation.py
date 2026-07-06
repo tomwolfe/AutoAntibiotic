@@ -85,33 +85,36 @@ def _compute_ligand_rmsd(
 # ── Radius of Gyration ──────────────────────────────────────────────
 
 
-def _check_rmsd_convergence(
-    rmsd_trajectory: List[float],
-    window_size: int = 5,
+def _check_convergence(
+    trajectory: List[float],
+    window_size: int = 3,
+    threshold: float = 0.1,
 ) -> bool:
-    """Check whether the RMSD has converged based on the last *window_size*
-    frames.
+    """Check whether a metric has converged based on the last *window_size*
+    measurements.
 
-    Convergence is defined as the standard deviation of the RMSD values
-    over the window being below 0.1 Å.
+    Convergence is defined as the standard deviation of the values
+    over the window being below *threshold*.
 
     Parameters
     ----------
-    rmsd_trajectory : list of float
-        RMSD values collected at each check interval.
+    trajectory : list of float
+        Values collected at each check interval.
     window_size : int
-        Number of most recent frames to consider (default 5).
+        Number of most recent frames to consider (default 3).
+    threshold : float
+        Standard deviation threshold (default 0.1).
 
     Returns
     -------
     bool
-        ``True`` if converged (std < 0.1 Å over the window),
+        ``True`` if converged (std < *threshold* over the window),
         ``False`` otherwise.
     """
-    if len(rmsd_trajectory) < window_size:
+    if len(trajectory) < window_size:
         return False
-    recent = rmsd_trajectory[-window_size:]
-    return float(np.std(recent, ddof=1)) < 0.1
+    recent = trajectory[-window_size:]
+    return float(np.std(recent, ddof=1)) < threshold
 
 
 def _compute_radius_of_gyration(positions: np.ndarray) -> float:
@@ -178,11 +181,14 @@ def run_short_md(
     output_dir: Optional[str] = None,
     relaxation_ns: Optional[float] = None,
     production_ns: Optional[float] = None,
+    max_duration_ns: Optional[float] = None,
     pocket_resnames: Optional[List[str]] = None,
     convergence_check_interval_ns: Optional[float] = None,
+    convergence_window_chunks: Optional[int] = None,
+    rmsd_convergence_threshold: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run a two-stage explicit-solvent MD simulation of a ligand-receptor
-    complex and return stability metrics.
+    complex with **adaptive sampling** and return stability metrics.
 
     Workflow
     --------
@@ -194,8 +200,15 @@ def run_short_md(
     5. Energy minimise (500 steps).
     6. **Relaxation**: Short NVT simulation (*relaxation_ns*) with strong
        position restraints on the protein backbone (10 kcal/mol/A^2).
-    7. **Production**: Longer NPT simulation (*production_ns*) with very
-       weak restraints (0.1 kcal/mol/A^2).
+    7. **Production (Adaptive Sampling)**: Longer NPT simulation with
+       very weak restraints (0.1 kcal/mol/A^2).  The production phase
+       runs in chunks of *convergence_check_interval_ns*.  After each
+       chunk, the ligand RMSD and pocket Radius of Gyration (Rg) are
+       computed.  If the standard deviation of both metrics over the
+       last *convergence_window_chunks* chunks is below
+       *rmsd_convergence_threshold*, the simulation is marked as
+       "Converged" and stops early to save compute.  Otherwise it
+       continues up to *max_duration_ns*.
     8. Compute the heavy-atom RMSD of the ligand relative to its
        initial position.
     9. Compute the Radius of Gyration (Rg) of pocket residues.  If the
@@ -226,14 +239,24 @@ def run_short_md(
     production_ns : float, optional
         Production duration in ns.  Defaults to
         ``CONFIG.md_production_duration_ns``.
+    max_duration_ns : float, optional
+        **Adaptive sampling** hard cap for production duration in ns.
+        If convergence is not reached by *production_ns*, the simulation
+        continues up to this cap.  Defaults to
+        ``CONFIG.md_max_duration_ns``.
     pocket_resnames : list of str, optional
         Residue names defining the binding pocket for Rg tracking.
         Defaults to allosteric + active site residues from CONFIG.
     convergence_check_interval_ns : float, optional
-        Check for RMSD convergence every *N* ns.  If the standard
-        deviation of the last 5 RMSD measurements is < 0.1 Å, the
-        simulation stops early.  Defaults to
+        Check for convergence every *N* ns.  Defaults to
         ``CONFIG.md_convergence_check_interval_ns``.
+    convergence_window_chunks : int, optional
+        Number of recent chunks used to assess convergence.
+        Defaults to ``CONFIG.md_convergence_window_chunks``.
+    rmsd_convergence_threshold : float, optional
+        RMSD standard deviation threshold (Å) for convergence.
+        The same threshold is applied to the pocket Rg standard
+        deviation.  Defaults to ``CONFIG.md_rmsd_convergence_threshold``.
 
     Returns
     -------
@@ -245,8 +268,9 @@ def run_short_md(
         - ``"temperature_k"``: float
         - ``"success"``: bool
         - ``"message"``: str
-        - ``"converged"``: bool — whether RMSD convergence was detected
-          (always ``False`` if the simulation ran to completion).
+        - ``"converged"``: bool — whether adaptive-sampling convergence
+          was detected (RMSD std + Rg std below threshold over the
+          convergence window).
         - ``"pocket_rg_stability"``: float — fractional change in pocket
           Rg (0.0 = unchanged, >0.1 = significant expansion/collapse).
 
@@ -283,6 +307,11 @@ def run_short_md(
     else:
         rel_ns = relaxation_ns if relaxation_ns is not None else float(CONFIG.md_relaxation_duration_ns)
         prod_ns = production_ns if production_ns is not None else float(CONFIG.md_production_duration_ns)
+
+    # Adaptive sampling parameters
+    max_dur = max_duration_ns if max_duration_ns is not None else float(CONFIG.md_max_duration_ns)
+    conv_window = convergence_window_chunks if convergence_window_chunks is not None else int(CONFIG.md_convergence_window_chunks)
+    rmsd_thresh = rmsd_convergence_threshold if rmsd_convergence_threshold is not None else float(CONFIG.md_rmsd_convergence_threshold)
 
     # Pocket residues for Rg tracking
     if pocket_resnames is None:
@@ -452,7 +481,7 @@ def run_short_md(
         ], dtype=np.float64)
 
         # ── 9. Production phase (weak restraints) ──────────────────
-        log.info(f"  MD: Starting production ({prod_ns} ns, weak restraints)...")
+        log.info(f"  MD: Starting production (adaptive, up to {max_dur:.0f} ns, weak restraints)...")
         # Remove the restraint force we added and re-add with weaker k
         # We need to remove the last force (the restraint)
         forces = list(system.getForces())
@@ -462,23 +491,26 @@ def run_short_md(
         # Re-add with weak spring constant
         _add_restraints(0.1)  # 0.1 kcal/mol/A^2 – very weak
 
-        # ── Chunked production with convergence checking ─────────
+        # ── Adaptive sampling with convergence checking ──────────
         check_interval_ns = (
             convergence_check_interval_ns
             if convergence_check_interval_ns is not None
             else float(CONFIG.md_convergence_check_interval_ns)
         )
         chunk_steps = max(1, int(check_interval_ns * 1000 / 0.002))
-        total_prod_steps = int(prod_ns * 1000 / 0.002)
-        steps_remaining = total_prod_steps
+        max_prod_steps = int(max_dur * 1000 / 0.002)
+        steps_taken = 0
         rmsd_trajectory: List[float] = []
+        rg_trajectory: List[float] = []
         converged: bool = False
         actual_ns = 0.0
 
-        while steps_remaining > 0:
-            steps_this_chunk = min(chunk_steps, steps_remaining)
+        while steps_taken < max_prod_steps:
+            steps_this_chunk = min(chunk_steps, max_prod_steps - steps_taken)
+            if steps_this_chunk <= 0:
+                break
             simulation.step(steps_this_chunk)
-            steps_remaining -= steps_this_chunk
+            steps_taken += steps_this_chunk
             chunk_ns = steps_this_chunk * 0.002 / 1000.0
             actual_ns += chunk_ns
 
@@ -493,20 +525,32 @@ def run_short_md(
             )
             rmsd_trajectory.append(chunk_rmsd)
 
-            # Check convergence
-            if _check_rmsd_convergence(rmsd_trajectory, window_size=5):
-                converged = True
-                log.info(
-                    f"  MD: Convergence reached at {actual_ns:.1f} ns "
-                    f"(RMSD std < 0.1 Å over last 5 checks). "
-                    "Stopping early to save compute."
-                )
-                break
+            # Compute pocket Rg for this chunk
+            chunk_pocket_positions = np.array([
+                chunk_positions[idx] for idx in pocket_atom_indices
+            ], dtype=np.float64)
+            chunk_rg = _compute_radius_of_gyration(chunk_pocket_positions)
+            rg_trajectory.append(chunk_rg)
+
+            # Check convergence for both metrics
+            if len(rmsd_trajectory) >= conv_window and len(rg_trajectory) >= conv_window:
+                rmsd_std = float(np.std(rmsd_trajectory[-conv_window:], ddof=1))
+                rg_std = float(np.std(rg_trajectory[-conv_window:], ddof=1))
+                if rmsd_std < rmsd_thresh and rg_std < rmsd_thresh:
+                    converged = True
+                    log.info(
+                        f"  MD: Convergence reached at {actual_ns:.1f} ns "
+                        f"(RMSD std = {rmsd_std:.3f} A, Rg std = {rg_std:.3f} A "
+                        f"over last {conv_window} chunks). "
+                        "Stopping early to save compute."
+                    )
+                    break
 
         if not converged:
             log.info(
-                f"  MD: Production completed ({actual_ns:.1f} ns) "
-                "without early convergence."
+                f"  MD: Production completed ({actual_ns:.1f} ns of "
+                f"{max_dur:.0f} ns allowed) without convergence "
+                f"(RMSD std={float(np.std(rmsd_trajectory[-min(conv_window, len(rmsd_trajectory)):], ddof=1)):.3f} A)."
             )
 
         # 10. Get final positions and compute metrics

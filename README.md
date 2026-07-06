@@ -13,7 +13,7 @@ A virtual screening pipeline for discovering novel MRSA PBP2a inhibitors. The pi
 - **Meta-Learner Consensus Scoring (Phase 4.5)** — Trains a stacking regressor on benchmark actives/inactives to predict activity from Vina energy, shape score, IFP, QED, and LogP features. If MD validation was run, **dynamic stability features** (ligand RMSD, pocket Rg stability) are automatically included in the feature vector.
 - **Selectivity Profiling (Phase 4)** — Docks top candidates against human trypsin (1UTN) and CES1 (3KJZ) off-targets; computes Selectivity Index and resistance-risk profile.
 - **Resistance Mutation Profiling (Phase 4)** — Optionally docks candidates against mutant receptor variants and computes binding-energy standard deviation as a resistance-risk metric.
-- **Free Energy Perturbation (FEP) Resistance Profiling (Phase 4)** — When enabled (`use_fep_resistance=True`), replaces heuristic resistance scoring with a rigorous Equilibrium FEP calculation using OpenMM and openmmtools. Uses 11 λ-windows, alchemical decoupling of the ligand, and MBAR free energy estimation to compute ΔΔG between wild-type and mutant receptor binding. Requires `openmm` and `openmmtools`.
+- **Free Energy Perturbation (FEP) Resistance Profiling (Phase 4.8)** — **Top-hit only.** When enabled (`use_fep_resistance=True`), replaces heuristic resistance scoring with a rigorous Equilibrium FEP calculation using OpenMM and openmmtools. FEP is only triggered for the top *N* candidates (default: 5, configurable via `fep_top_n`) after docking and MM-GB/SA rescoring. Candidates with >50 heavy atoms or SMILES length >100 are automatically skipped. Uses 11 λ-windows, alchemical decoupling of the ligand, and MBAR free energy estimation to compute ΔΔG between wild-type and mutant receptor binding. Requires `openmm` and `openmmtools`.
 - **Generative Design (Phase 2)** — When enabled (`generative_mode=True`), replaces BRICS recombination with a **Graph-based Genetic Algorithm** that evolves a population of molecules via BRICS crossover and mutation, optimized for QED and SA Score. Returns valid, sanitized RDKit Mol objects.
 - **MD Validation (Phase 4.7)** — Optional explicit-solvent MD simulation (OpenMM) of top candidates to assess ligand stability via RMSD and pocket Rg stability. Results are stored in `CompoundRecord` and consumed by the MetaScorer (Phase 4.5).
 - **Reporting (Phase 5)** — Generates a CSV report, 2D structure images (top 3), and an interactive HTML report with embedded matplotlib figures.
@@ -172,7 +172,7 @@ Replaces the default implicit-solvent (OBC2) MM-GB/SA rescoring with a more rigo
 
 > **Note:** The pipeline now validates that `openmm` and `pdbfixer` are installed before starting. If they are missing, a clear `ConfigurationError` is raised — no silent fallback.
 
-### FEP resistance profiling (requires OpenMM + openmmtools)
+### FEP resistance profiling — Top-Hit Only (requires OpenMM + openmmtools)
 
 Configure `use_fep_resistance=True` in `config.py` or set it programmatically:
 
@@ -181,7 +181,13 @@ from autoantibiotic.config import CONFIG
 CONFIG.use_fep_resistance = True
 ```
 
-This replaces the heuristic mutation-sampling approach with a rigorous Equilibrium FEP calculation:
+**FEP is now a top-hit only feature.** It is only triggered for the top *N* candidates (default: 5, configurable via `CONFIG.fep_top_n`) after initial docking and MM-GB/SA rescoring. This avoids computationally prohibitive simulations on less-promising compounds.
+
+Additionally, FEP is automatically skipped for molecules with:
+- **>50 heavy atoms** (excessive simulation time)
+- **SMILES length >100 characters** (ligand too large for practical alchemical decoupling)
+
+When triggered, this replaces the heuristic mutation-sampling approach with a rigorous Equilibrium FEP calculation:
 1. Builds explicit-solvent systems for WT and mutant receptor–ligand complexes.
 2. Creates alchemical systems using `openmmtools`' `AbsoluteAlchemicalFactory`.
 3. Runs 11 λ-windows (configurable via `fep_lambda_windows`) to decouple the ligand.
@@ -204,7 +210,7 @@ For **rigorous Free Energy Perturbation (FEP)** resistance profiling, enable `us
 python -c "from autoantibiotic.config import CONFIG; CONFIG.use_fep_resistance = True" && python -m autoantibiotic --use-mutation-sampling
 ```
 
-This uses OpenMM + openmmtools to compute ΔΔG between wild-type and mutant receptor binding via alchemical free energy methods (see "FEP resistance profiling" above).
+This uses OpenMM + openmmtools to compute ΔΔG between wild-type and mutant receptor binding via alchemical free energy methods (see "FEP resistance profiling — Top-Hit Only" above).
 
 ### Combining options
 

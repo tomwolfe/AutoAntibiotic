@@ -54,6 +54,9 @@ class CompoundRecord:
     """Ligand heavy-atom RMSD (Å) from MD simulation, mean across frames."""
     md_pocket_rg_stability: Optional[float] = None
     """Fractional pocket Rg change from MD simulation (0=stable)."""
+    md_converged: bool = False
+    """Whether the MD simulation reached convergence during adaptive
+    sampling (RMSD std + Rg std below threshold)."""
 
     water_displacement_energy: Optional[float] = None
     """Water displacement energy score from crystallographic water analysis."""

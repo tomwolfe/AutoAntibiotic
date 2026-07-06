@@ -9,6 +9,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, BRICS, Descriptors, QED
 from rdkit.DataStructs import TanimotoSimilarity
+from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
 
 from .config import CONFIG
 from .io_utils import log
@@ -237,6 +238,36 @@ class JTVAE:
             log.warning(f"  JT-VAE model load failed: {exc}. Using GA backend.")
             self._model = None
 
+    @staticmethod
+    def _maxmin_diverse_subset(
+        mols: List[Chem.Mol],
+        n_select: int,
+    ) -> List[Chem.Mol]:
+        """Select a diverse subset of *n_select* molecules using RDKit's
+        MaxMinPicker, maximising fingerprint diversity.
+
+        Parameters
+        ----------
+        mols : list of Chem.Mol
+            Input molecules.
+        n_select : int
+            Number of molecules to select.
+
+        Returns
+        -------
+        list of Chem.Mol
+            Diverse subset of molecules.
+        """
+        if len(mols) <= n_select:
+            return mols
+        fps = [_compute_fingerprint(m) for m in mols]
+        picker = MaxMinPicker()
+        def _dist(i: int, j: int) -> float:
+            return 1.0 - TanimotoSimilarity(fps[i], fps[j])
+        seed = CONFIG.random_seed
+        pick_indices = picker.LazyPick(_dist, len(mols), n_select, seed=seed)
+        return [mols[i] for i in pick_indices]
+
     def generate_novel_scaffolds(
         self,
         core_smiles: str,
@@ -253,6 +284,10 @@ class JTVAE:
         a population of molecules over multiple generations, optimizing
         for QED and SA Score.
 
+        After generation, a **MaxMinPicker** post-filter selects the
+        final *n_samples* scaffolds from the generated pool, ensuring
+        maximum fingerprint diversity among the returned results.
+
         If a JT-VAE model was successfully loaded, the neural backend is
         used instead.
 
@@ -267,7 +302,8 @@ class JTVAE:
         Returns
         -------
         List[Chem.Mol]
-            List of valid, sanitized RDKit Mol objects for generated analogs.
+            List of valid, sanitized RDKit Mol objects for generated analogs,
+            ordered by diversity (most diverse first).
 
         Examples
         --------
@@ -278,13 +314,15 @@ class JTVAE:
         Generated 10 novel analogs
         """
         if self._model is not None and _HAVE_TORCH:
-            return self._neural_generation(
+            mols = self._neural_generation(
                 core_smiles, n_samples, temperature, max_length, min_length
             )
+        else:
+            mols = self._genetic_algorithm_generation(
+                core_smiles, n_samples * 2, temperature, max_length, min_length
+            )
 
-        return self._genetic_algorithm_generation(
-            core_smiles, n_samples, temperature, max_length, min_length
-        )
+        return self._maxmin_diverse_subset(mols, n_samples)
 
     def _neural_generation(
         self,
@@ -420,8 +458,26 @@ class JTVAE:
                 fp = _compute_fingerprint(mol)
                 fps.append(fp)
                 base_fitness = _fitness(mol)
-                penalty = _diversity_penalty(mol, fps[:-1], weight=0.08)
+                penalty = _diversity_penalty(mol, fps[:-1], weight=0.25)
                 fitness_scores.append(max(0.0, base_fitness - penalty))
+
+            # ── Novelty injection every 5 generations ─────────
+            if generation > 0 and generation % 5 == 0:
+                n_replace = max(1, population_size // 10)
+                worst_indices = sorted(
+                    range(len(population)), key=lambda i: fitness_scores[i]
+                )[:n_replace]
+                for idx in worst_indices:
+                    bb = _random_fragment_from_smiles(building_blocks, rng)
+                    if bb is not None:
+                        smi = Chem.MolToSmiles(bb)
+                        if smi not in seen_smiles:
+                            seen_smiles.add(smi)
+                            population[idx] = bb
+                log.info(
+                    f"  GA generation {generation}: novelty injection — "
+                    f"replaced {n_replace} low-fitness members."
+                )
 
             next_population: List[Chem.Mol] = []
 
@@ -473,7 +529,7 @@ class JTVAE:
             fp = _compute_fingerprint(mol)
             final_fps.append(fp)
             base_fitness = _fitness(mol)
-            penalty = _diversity_penalty(mol, final_fps[:-1], weight=0.08)
+            penalty = _diversity_penalty(mol, final_fps[:-1], weight=0.25)
             final_fitness.append(max(0.0, base_fitness - penalty))
 
         sorted_indices = sorted(

@@ -742,33 +742,31 @@ class TestMDValidation:
         rmsd = _compute_ligand_rmsd(np.array([]), np.array([]))
         assert rmsd == pytest.approx(999.9)
 
-    def test_check_rmsd_convergence_insufficient_data(self) -> None:
-        """_check_rmsd_convergence with fewer than window_size frames."""
-        from autoantibiotic.md_validation import _check_rmsd_convergence
-        rmsd_traj = [0.5, 0.6, 0.55]
-        result = _check_rmsd_convergence(rmsd_traj, window_size=5)
+    def test_check_convergence_insufficient_data(self) -> None:
+        """_check_convergence with fewer than window_size frames."""
+        from autoantibiotic.md_validation import _check_convergence
+        traj = [0.5, 0.6, 0.55]
+        result = _check_convergence(traj, window_size=5)
         assert result is False
 
-    def test_check_rmsd_convergence_detected(self) -> None:
-        """_check_rmsd_convergence should return True when std < 0.1 Å."""
-        from autoantibiotic.md_validation import _check_rmsd_convergence
-        # All values within 0.05 Å of each other → std < 0.1
-        rmsd_traj = [0.50, 0.51, 0.49, 0.50, 0.51]
-        result = _check_rmsd_convergence(rmsd_traj, window_size=5)
+    def test_check_convergence_detected(self) -> None:
+        """_check_convergence should return True when std < threshold."""
+        from autoantibiotic.md_validation import _check_convergence
+        traj = [0.50, 0.51, 0.49, 0.50, 0.51]
+        result = _check_convergence(traj, window_size=5, threshold=0.1)
         assert result is True
 
-    def test_check_rmsd_convergence_not_detected(self) -> None:
-        """_check_rmsd_convergence should return False when std >= 0.1 Å."""
-        from autoantibiotic.md_validation import _check_rmsd_convergence
-        # Large variation → std > 0.1
-        rmsd_traj = [0.1, 0.5, 0.9, 1.3, 1.7]
-        result = _check_rmsd_convergence(rmsd_traj, window_size=5)
+    def test_check_convergence_not_detected(self) -> None:
+        """_check_convergence should return False when std >= threshold."""
+        from autoantibiotic.md_validation import _check_convergence
+        traj = [0.1, 0.5, 0.9, 1.3, 1.7]
+        result = _check_convergence(traj, window_size=5, threshold=0.1)
         assert result is False
 
-    def test_check_rmsd_convergence_empty_returns_false(self) -> None:
-        """_check_rmsd_convergence with empty list returns False."""
-        from autoantibiotic.md_validation import _check_rmsd_convergence
-        result = _check_rmsd_convergence([], window_size=5)
+    def test_check_convergence_empty_returns_false(self) -> None:
+        """_check_convergence with empty list returns False."""
+        from autoantibiotic.md_validation import _check_convergence
+        result = _check_convergence([], window_size=5)
         assert result is False
 
     def test_run_short_md_result_has_converged_key(self) -> None:

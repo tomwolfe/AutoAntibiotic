@@ -206,6 +206,23 @@ class FEPResistanceCalculator:
                 f"Mutant receptor PDB not found: {self.receptor_mut_pdb}"
             )
 
+        # Pre-check ligand size for FEP feasibility
+        if self.ligand_rdkit is not None:
+            num_heavy = self.ligand_rdkit.GetNumHeavyAtoms()
+            if num_heavy > 50:
+                raise ConfigurationError(
+                    f"Ligand has {num_heavy} heavy atoms (>50). "
+                    "Molecule too large for practical FEP calculation. "
+                    "Consider skipping FEP for this candidate."
+                )
+            smi = Chem.MolToSmiles(self.ligand_rdkit)
+            if len(smi) > 100:
+                raise ConfigurationError(
+                    f"Ligand SMILES length is {len(smi)} characters (>100). "
+                    "Molecule too large for practical FEP calculation. "
+                    "Consider skipping FEP for this candidate."
+                )
+
         return self._compute_fep_delta_ddg()
 
     def _compute_fep_delta_ddg(self) -> FEPResistanceResult:

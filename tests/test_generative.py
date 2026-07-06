@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from rdkit import Chem
+from rdkit.Chem import AllChem
+from rdkit.DataStructs import TanimotoSimilarity
 
 from autoantibiotic.generative_design import (
     JTVAE,
@@ -157,3 +159,35 @@ class TestValidateMol:
         # RDKit may return an empty mol; validate it has no atoms
         if mol is not None:
             assert mol.GetNumAtoms() == 0
+
+
+class TestDiversity:
+    """Tests for scaffold diversity improvements."""
+
+    def test_generated_scaffolds_have_low_pairwise_similarity(self):
+        """Verify that the MaxMinPicker post-filter produces a diverse
+        set of scaffolds with low average Tanimoto similarity."""
+        jtvae = JTVAE()
+        mols = jtvae.generate_novel_scaffolds(
+            core_smiles="CC1=CC=CC=C1",
+            n_samples=10,
+        )
+        assert len(mols) >= 3, "Need at least 3 scaffolds to compute diversity"
+
+        fps = [AllChem.GetMorganFingerprintAsBitVect(m, radius=2, nBits=2048) for m in mols]
+        avg_sim = 0.0
+        n_pairs = 0
+        for i in range(len(fps)):
+            for j in range(i + 1, len(fps)):
+                avg_sim += TanimotoSimilarity(fps[i], fps[j])
+                n_pairs += 1
+        avg_sim /= max(1, n_pairs)
+
+        # With the increased diversity penalty (0.25) and MaxMinPicker
+        # post-filter, the average pairwise Tanimoto similarity should
+        # be well below 0.7 for a set of 10+ molecules.
+        assert avg_sim < 0.7, (
+            f"Average pairwise Tanimoto similarity = {avg_sim:.3f}, "
+            "expected < 0.7 for a diverse set. "
+            "The diversity penalty or MaxMinPicker may not be working."
+        )

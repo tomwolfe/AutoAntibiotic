@@ -71,6 +71,16 @@ class PipelineConfig:
     """Interval (ns) for convergence checking during MD production.
     After each chunk, RMSD is evaluated; if stable (std < 0.1 Å over
     last *window_size* frames), the simulation stops early."""
+    md_max_duration_ns: int = 100
+    """Maximum MD production duration (ns) for adaptive sampling.
+    If convergence is not reached within *md_production_duration_ns*,
+    the simulation continues up to this hard cap.  Default 100 ns."""
+    md_convergence_window_chunks: int = 3
+    """Number of recent chunks used to assess convergence during
+    adaptive MD sampling.  Default 3."""
+    md_rmsd_convergence_threshold: float = 0.1
+    """RMSD standard deviation threshold (Å) for declaring convergence
+    during adaptive MD sampling.  Default 0.1 Å."""
 
     # Explicit-solvent MM-GB/SA rescoring
     use_explicit_solvent_mmgbsa: bool = True
@@ -233,7 +243,7 @@ class PipelineConfig:
     ml_admet_model_type: str = "chemberta_rf"
     """Model type for ML-ADMET: ``"rule_based"`` (no ML), ``"rf_legacy"``
     (fingerprint + RandomForest), or ``"chemberta_rf"`` (ChemBERTa
-    embeddings + RandomForest — falls back to ``rf_legacy`` if
+    embeddings + RandomForest -- falls back to ``rf_legacy`` if
     transformers/torch are unavailable)."""
 
     chemberta_model_name: str = "seyonec/ChemBERTa-zinc-base-v1"
@@ -265,6 +275,10 @@ class PipelineConfig:
     """Number of warm-up steps before production FEP sampling."""
     fep_warmup_min_iterations: int = 500
     """Minimum energy minimisation iterations before FEP production."""
+    fep_top_n: int = 5
+    """Maximum number of top candidates to run rigorous FEP on.
+    FEP is only triggered if the candidate is within this many top
+    compounds after docking and MM-GB/SA rescoring.  Default 5."""
 
     # ── Entropy estimation ──
     include_entropy: bool = False
