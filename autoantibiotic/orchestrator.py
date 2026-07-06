@@ -88,12 +88,12 @@ class PipelineOrchestrator:
         self.generate_and_filter_library()
         self.screen_candidates()
         self.analyze_selectivity()
-        # MD validation runs BEFORE meta-scoring so that dynamic features
-        # (ligand RMSD, pocket Rg stability) are available to the MetaScorer.
-        self.apply_md_validation()
         # Explicit-solvent MM-GB/SA rescoring (if enabled) — uses the
         # solvated complex from MD preparation for rigorous ΔG prediction.
         self.apply_explicit_solvent_rescoring()
+        # MD validation runs BEFORE meta-scoring so that dynamic features
+        # (ligand RMSD, pocket Rg stability) are available to the MetaScorer.
+        self.apply_md_validation()
         self.apply_meta_scoring()
         # FEP resistance profiling — top-hit only, runs after rescoring
         # so that only the most promising candidates are evaluated.
@@ -355,17 +355,35 @@ class PipelineOrchestrator:
         Stores MD-derived dynamic features (*ligand_rmsd*, *pocket_rg_stability*,
         *md_converged*) in each ``CompoundRecord`` so they are available to the
         MetaScorer (Phase 4.5) and for downstream analysis.
+
+        When ``CONFIG.force_md_for_meta_scoring`` is True and MD validation
+        fails for top candidates, a ``ConfigurationError`` is raised to
+        prevent meta-scoring from proceeding with incomplete data.
         """
+        from .config import ConfigurationError
+
         md_duration = self.config.md_validation_duration_ns
         if not (md_duration > 0 and _HAVE_MD and self.top_candidates):
+            # When force_md_for_meta_scoring is True, MD validation is mandatory
+            if self.config.force_md_for_meta_scoring and self.top_candidates:
+                raise ConfigurationError(
+                    "MD validation is required by force_md_for_meta_scoring=True, "
+                    f"but md_duration={md_duration} ns or MD module unavailable."
+                )
             return
         log.info("─── Phase 4.7: MD Validation (Adaptive Sampling) ───")
         pb2pa = self.targets.get("PBP2a", {})
         receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
         if not os.path.isfile(receptor_pdb):
+            if self.config.force_md_for_meta_scoring:
+                raise ConfigurationError(
+                    "MD validation is required by force_md_for_meta_scoring=True, "
+                    "but receptor PDB file is missing."
+                )
             log.warning("  Receptor PDB not found; skipping MD validation.")
             return
 
+        failed_any = False
         for rec in self.top_candidates[:3]:
             if rec.mol is None:
                 mol = Chem.MolFromSmiles(rec.smiles)
@@ -392,9 +410,29 @@ class PipelineOrchestrator:
                         f"converged = {rec.md_converged}"
                     )
                 else:
+                    if self.config.force_md_for_meta_scoring:
+                        raise ConfigurationError(
+                            f"  {rec.compound_id}: MD validation returned None — "
+                            "meta-scoring requires MD-derived dynamic features."
+                        )
                     log.info(f"  {rec.compound_id}: MD not available.")
+                    failed_any = True
+            except ConfigurationError:
+                raise
             except Exception as exc:
+                if self.config.force_md_for_meta_scoring:
+                    raise ConfigurationError(
+                        f"  MD validation failed for {rec.compound_id}: {exc}"
+                    ) from exc
                 log.warning(f"  MD validation failed for {rec.compound_id}: {exc}")
+                failed_any = True
+
+        if failed_any and self.config.force_md_for_meta_scoring:
+            raise ConfigurationError(
+                "MD validation failed for one or more top candidates. "
+                "Set force_md_for_meta_scoring=False to allow meta-scoring "
+                "without MD data."
+            )
 
     def generate_reports(self) -> None:
         """Phase 5: CSV, images, and HTML report generation."""

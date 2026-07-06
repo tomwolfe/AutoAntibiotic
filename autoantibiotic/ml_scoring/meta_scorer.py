@@ -52,6 +52,7 @@ class MetaScorer:
         )
         self._training_actives: List[str] = []
         self._training_inactives: List[str] = []
+        self.uses_dynamic_features: bool = False
 
     # ── public API ──────────────────────────────────────────────────
 
@@ -86,6 +87,8 @@ class MetaScorer:
         inactives_smiles: List[str],
         feature_fn: Optional[Any] = None,
         uncertainty_threshold: Optional[float] = None,
+        md_ligand_rmsd_values: Optional[List[float]] = None,
+        md_pocket_rg_stability_values: Optional[List[float]] = None,
     ) -> "MetaScorer":
         """Train the stacking regressor on benchmark actives / inactives.
 
@@ -103,6 +106,10 @@ class MetaScorer:
             predictions across all trees is compared to this threshold.
             When exceeded, ``record.needs_manual_review`` is set to
             ``True``, flagging the compound for manual inspection.
+        md_ligand_rmsd_values : list of float, optional
+            Per-sample MD ligand RMSD values for training data.
+        md_pocket_rg_stability_values : list of float, optional
+            Per-sample MD pocket Rg stability values for training data.
         """
         X_list: List[np.ndarray] = []
         y_list: List[float] = []
@@ -111,25 +118,45 @@ class MetaScorer:
         self._training_actives = list(actives_smiles)
         self._training_inactives = list(inactives_smiles)
 
+        # Track whether any training sample had non-zero MD features
+        md_values = md_ligand_rmsd_values or []
+        rg_values = md_pocket_rg_stability_values or []
+        has_nonzero_md = any(
+            v is not None and v != 0.0
+            for v in md_values + rg_values
+        )
+        self.uses_dynamic_features = has_nonzero_md
+
         feature_extractor = feature_fn or self._default_features
 
-        for smi in actives_smiles:
+        actives_md_rmsd = md_ligand_rmsd_values or []
+        actives_rg_stab = md_pocket_rg_stability_values or []
+
+        for i, smi in enumerate(actives_smiles):
             mol = Chem.MolFromSmiles(smi)
             if mol is None:
                 continue
             try:
-                X_list.append(feature_extractor(mol))
+                rmsd = actives_md_rmsd[i] if i < len(actives_md_rmsd) else None
+                rg = actives_rg_stab[i] if i < len(actives_rg_stab) else None
+                X_list.append(feature_extractor(mol, md_ligand_rmsd=rmsd, md_pocket_rg_stability=rg))
                 y_list.append(1.0)
                 smiles_for_scaffold.append(smi)
             except Exception:
                 continue
 
-        for smi in inactives_smiles:
+        inactives_md_rmsd = md_ligand_rmsd_values[len(actives_smiles):] if md_ligand_rmsd_values else []
+        inactives_rg_stab = md_pocket_rg_stability_values[len(actives_smiles):] if md_pocket_rg_stability_values else []
+
+        for i, smi in enumerate(inactives_smiles):
             mol = Chem.MolFromSmiles(smi)
             if mol is None:
                 continue
             try:
-                X_list.append(feature_extractor(mol))
+                idx = len(actives_smiles) + i
+                rmsd = md_ligand_rmsd_values[idx] if md_ligand_rmsd_values and idx < len(md_ligand_rmsd_values) else None
+                rg = md_pocket_rg_stability_values[idx] if md_pocket_rg_stability_values and idx < len(md_pocket_rg_stability_values) else None
+                X_list.append(feature_extractor(mol, md_ligand_rmsd=rmsd, md_pocket_rg_stability=rg))
                 y_list.append(0.0)
                 smiles_for_scaffold.append(smi)
             except Exception:
@@ -266,6 +293,16 @@ class MetaScorer:
             if mol is None:
                 return None
             record.mol = mol
+        # Warn if dynamic features are expected but missing
+        if (
+            self.uses_dynamic_features
+            and (record.md_ligand_rmsd is None or record.md_pocket_rg_stability is None)
+        ):
+            log.warning(
+                f"MetaScorer trained with dynamic features, but input lacks MD data. "
+                f"Prediction for {record.compound_id} may be less accurate."
+            )
+
         try:
             feats = self._default_features(
                 record.mol,
@@ -313,6 +350,7 @@ class MetaScorer:
             self._feature_names = obj.get("feature_names", [])
             self._training_actives = obj.get("training_actives", [])
             self._training_inactives = obj.get("training_inactives", [])
+            self.uses_dynamic_features = obj.get("uses_dynamic_features", False)
 
             # Backward compatibility: retrain if feature dimension has changed
             expected_dim = 13
@@ -464,6 +502,7 @@ class MetaScorer:
                     "feature_names": self._feature_names,
                     "training_actives": self._training_actives,
                     "training_inactives": self._training_inactives,
+                    "uses_dynamic_features": self.uses_dynamic_features,
                 },
                 self.model_path,
             )

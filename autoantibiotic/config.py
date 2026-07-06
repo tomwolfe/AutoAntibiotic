@@ -73,7 +73,7 @@ class PipelineConfig:
     last *window_size* frames), the simulation stops early."""
     md_max_duration_ns: int = 100
     """Maximum MD production duration (ns) for adaptive sampling.
-    If convergence is not reached within *md_production_duration_ns*,
+    If convergence is not reached within ``md_production_duration_ns``,
     the simulation continues up to this hard cap.  Default 100 ns."""
     md_convergence_window_chunks: int = 3
     """Number of recent chunks used to assess convergence during
@@ -81,6 +81,12 @@ class PipelineConfig:
     md_rmsd_convergence_threshold: float = 0.1
     """RMSD standard deviation threshold (Å) for declaring convergence
     during adaptive MD sampling.  Default 0.1 Å."""
+
+    # Force MD for meta-scoring
+    force_md_for_meta_scoring: bool = False
+    """When True, raise ConfigurationError if MD validation fails for
+    top candidates before meta-scoring.  This ensures that the MetaScorer
+    always receives MD-derived dynamic features for accurate predictions."""
 
     # Explicit-solvent MM-GB/SA rescoring
     use_explicit_solvent_mmgbsa: bool = True
