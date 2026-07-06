@@ -272,8 +272,21 @@ class PipelineConfig:
     ``'van_der_waals'``, or ``'electrostatics'``."""
     fep_time_step_ps: float = 0.002
     """Time step (ps) for FEP MD simulation."""
-    fep_n_steps: int = 500
+    fep_n_steps: int = 5000
     """Number of FEP steps per lambda window (equilibration + production)."""
+    fep_production_steps: int = 4500
+    """Number of production FEP steps per lambda window, distinct from
+    equilibration / warm-up steps.  Default 4500."""
+    fep_convergence_threshold: float = 0.1
+    """Convergence threshold (kcal/mol) for adaptive FEP sampling.  When
+    the cumulative ΔG estimate changes by less than this value over the
+    last 3 checks, the lambda window terminates early.  Default 0.1."""
+    fep_min_steps_per_window: int = 1000
+    """Minimum number of production steps per lambda window, regardless of
+    convergence.  Default 1000."""
+    fep_max_steps_per_window: int = 10000
+    """Maximum number of production steps per lambda window (hard cap).
+    Default 10000."""
     fep_kT_kcal_per_mol: float = 0.596
     """kT value (kcal/mol) at 298.15 K for FEP free-energy calculation."""
     fep_warmup_steps: int = 500

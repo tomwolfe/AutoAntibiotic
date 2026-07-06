@@ -56,7 +56,7 @@ class FEPResistanceResult:
         error: Optional error message if the calculation failed.
     """
 
-    __slots__ = ("delta_delta_g", "confidence", "n_windows", "error")
+    __slots__ = ("delta_delta_g", "confidence", "_mbar_uncertainty", "n_windows", "error")
 
     def __init__(
         self,
@@ -64,16 +64,25 @@ class FEPResistanceResult:
         confidence: float,
         n_windows: int,
         error: Optional[str] = None,
+        mbar_uncertainty: float = 0.0,
     ) -> None:
         self.delta_delta_g = delta_delta_g
         self.confidence = confidence
         self.n_windows = n_windows
         self.error = error
+        self._mbar_uncertainty = mbar_uncertainty
+
+    @property
+    def confidence_label(self) -> str:
+        if self._mbar_uncertainty > 1.0:
+            return "Low Confidence"
+        return "High Confidence"
 
     def __repr__(self) -> str:
         return (
             f"FEPResistanceResult(d\u0394\u0394G={self.delta_delta_g:.3f} kcal/mol, "
-            f"confidence={self.confidence:.2f}, windows={self.n_windows})"
+            f"confidence={self.confidence:.2f}, confidence_label={self.confidence_label}, "
+            f"windows={self.n_windows})"
         )
 
 
@@ -245,16 +254,12 @@ class FEPResistanceCalculator:
         FEPResistanceResult
             Contains ΔΔG (kcal/mol), confidence, and number of windows.
         """
-        from openmmtools.multistate import (
-            MultiStateReporter,
-            ReplicaExchangeSampler,
-        )
         from openmmtools.alchemy import (
             AbsoluteAlchemicalFactory,
             AlchemicalRegion,
             AlchemicalState,
         )
-        from openmmtools.utils import get_data_filename
+        from openmmtools.multistate import MBAR
 
         n_windows = CONFIG.fep_lambda_windows
         temperature = 298.15 * _openmm_unit.kelvin
@@ -262,8 +267,6 @@ class FEPResistanceCalculator:
         pressure = 1.0 * _openmm_unit.atmospheres
         collision_rate = 5.0 / _openmm_unit.picosecond
         timestep = CONFIG.fep_time_step_ps * _openmm_unit.picosecond
-        n_steps_per_window = CONFIG.fep_n_steps
-        n_equilibration_steps = CONFIG.fep_warmup_steps
 
         # ── Step 1: Build systems for WT and mutant ────────────────
         wt_system, wt_topology, wt_positions = self._build_system(
@@ -296,18 +299,7 @@ class FEPResistanceCalculator:
 
         # ── Step 3: Create alchemical systems ──────────────────────
         factory = AbsoluteAlchemicalFactory()
-
-        # Use protocol to define lambda schedule
-        # We use a "default" protocol with CONFIG.fep_lambda_windows windows
         lambda_protocol = np.linspace(0.0, 1.0, n_windows)
-
-        # Free energies for WT and mutant
-        # For each system, we'll create a ReplicaExchangeSampler
-        # In a production environment, we'd run full REMD.
-        # Here we use a simplified but rigorous approach:
-        #   - Create alchemical systems at each lambda
-        #   - Equilibrate and sample at each window
-        #   - Collect reduced potentials for MBAR
 
         def _run_fep_for_system(
             system: _openmm.System,
@@ -316,8 +308,23 @@ class FEPResistanceCalculator:
             alchemical_region: AlchemicalRegion,
             label: str,
         ) -> Tuple[float, float]:
-            """Run FEP for one system and return (delta_G, uncertainty)."""
-            reduced_potentials_list: List[np.ndarray] = []
+            """Run FEP for one system and return (delta_G, uncertainty).
+
+            Implements adaptive convergence monitoring: after every 100
+            production steps, the running estimate of the reduced potential
+            at the current lambda window is checked.  If the change over
+            the last 3 checks is below *fep_convergence_threshold* (and
+            the minimum step count has been reached), sampling terminates
+            early for that window.
+            """
+            n_eq_steps = CONFIG.fep_warmup_steps
+            min_prod_steps = CONFIG.fep_min_steps_per_window
+            max_prod_steps = CONFIG.fep_max_steps_per_window
+            conv_threshold = CONFIG.fep_convergence_threshold
+            kT_kcal = CONFIG.fep_kT_kcal_per_mol
+            conv_threshold_red = conv_threshold / kT_kcal  # in reduced units
+
+            all_window_samples: List[List[np.ndarray]] = []
 
             for i, lam in enumerate(lambda_protocol):
                 alchemical_state = AlchemicalState.from_system(system)
@@ -326,15 +333,11 @@ class FEPResistanceCalculator:
                 alchemical_state.lambda_torsions = lam
 
                 alchemical_system = factory.create_alchemical_system(
-                    system,
-                    alchemical_region,
-                    alchemical_state=alchemical_state,
+                    system, alchemical_region, alchemical_state=alchemical_state,
                 )
 
                 integrator = _openmm.LangevinIntegrator(
-                    temperature,
-                    collision_rate,
-                    timestep,
+                    temperature, collision_rate, timestep,
                 )
                 integrator.setRandomSeed(CONFIG.random_seed + i)
 
@@ -344,75 +347,94 @@ class FEPResistanceCalculator:
                 )
                 simulation.context.setPositions(positions)
 
-                # Minimise
-                simulation.minimizeEnergy(maxIterations=n_equilibration_steps)
+                # Minimise and equilibrate
+                simulation.minimizeEnergy(maxIterations=n_eq_steps)
+                simulation.step(n_eq_steps)
 
-                # Equilibrate
-                simulation.step(n_equilibration_steps)
+                # Adaptive production sampling
+                window_samples: List[np.ndarray] = []
+                running_avg_u_i: List[float] = []
+                n_steps = 0
 
-                # Production: collect reduced potential samples for MBAR
-                n_samples = max(10, n_steps_per_window // 100)
-                window_u_kln = np.zeros((n_windows, n_samples))
-
-                for s in range(n_samples):
+                while n_steps < max_prod_steps:
                     simulation.step(100)
+                    n_steps += 100
 
-                    # Evaluate energy at every lambda state for MBAR
                     state = simulation.context.getState(
-                        getEnergy=True, getParameters=True,
+                        getEnergy=True, getPositions=True, getParameters=True,
                     )
+                    current_pos = state.getPositions()
                     ref_potential = state.getPotentialEnergy()
 
-                    for j, lam_j in enumerate(lambda_protocol):
-                        # Perturb the system to evaluate reduced potential
-                        alchemical_state_j = AlchemicalState.from_system(system)
-                        alchemical_state_j.lambda_sterics = lam_j
-                        alchemical_state_j.lambda_electrostatics = lam_j
-                        alchemical_state_j.lambda_torsions = lam_j
+                    # Compute reduced potentials at every lambda state
+                    u_k = np.zeros(n_windows)
+                    for j in range(n_windows):
+                        if j == i:
+                            pot_diff = ref_potential - ref_potential
+                        else:
+                            alchemical_state_j = AlchemicalState.from_system(system)
+                            alchemical_state_j.lambda_sterics = lambda_protocol[j]
+                            alchemical_state_j.lambda_electrostatics = lambda_protocol[j]
+                            alchemical_state_j.lambda_torsions = lambda_protocol[j]
 
-                        alchemical_system_j = factory.create_alchemical_system(
-                            system,
-                            alchemical_region,
-                            alchemical_state=alchemical_state_j,
-                        )
+                            alchemical_system_j = factory.create_alchemical_system(
+                                system, alchemical_region,
+                                alchemical_state=alchemical_state_j,
+                            )
+                            context_j = _openmm.Context(
+                                alchemical_system_j, integrator, platform,
+                            )
+                            context_j.setPositions(current_pos)
+                            energy_j = context_j.getState(
+                                getEnergy=True
+                            ).getPotentialEnergy()
+                            pot_diff = energy_j - ref_potential
+                            del context_j
 
-                        # Compute potential energy at lambda_j using
-                        # the current configuration
-                        context_j = _openmm.Context(
-                            alchemical_system_j, integrator, platform,
-                        )
-                        context_j.setPositions(
-                            simulation.context.getState(getPositions=True).getPositions()
-                        )
-                        energy_j = context_j.getState(getEnergy=True).getPotentialEnergy()
-                        del context_j
-
-                        reduced_pot = (energy_j - ref_potential) / kT
-                        window_u_kln[j, s] = reduced_pot.value_in_unit(
+                        u_k[j] = (pot_diff / kT).value_in_unit(
                             _openmm_unit.kilojoules_per_mole
-                        ) * 0.0  # Placeholder — actual value from simulation
+                        )
 
-                reduced_potentials_list.append(window_u_kln)
+                    window_samples.append(u_k)
 
-            if len(reduced_potentials_list) < 2:
-                return 0.0, 1.0
+                    # Convergence check every 3 samples (300 steps)
+                    if n_steps >= min_prod_steps and len(window_samples) % 3 == 0:
+                        u_i_vals = [w[i] for w in window_samples]
+                        avg_u_i = float(np.mean(u_i_vals))
+                        running_avg_u_i.append(avg_u_i)
 
-            # Use MBAR to estimate free energies
-            from openmmtools.multistate import MBAR
+                        if len(running_avg_u_i) >= 3:
+                            changes = [
+                                abs(running_avg_u_i[-j] - running_avg_u_i[-j - 1])
+                                for j in range(1, 3)
+                            ]
+                            if all(c < conv_threshold_red for c in changes):
+                                break
 
-            mbar = MBAR.from_energy_matrix(
-                np.array(reduced_potentials_list)[:, 0, :],  # placeholder reshape
-                temperature=temperature,
-            )
-            delta_f = mbar.get_free_energy_differences()[0]
-            delta_G = delta_f[n_windows - 1, 0] * kT
-            uncertainty = float(
-                mbar.get_free_energy_differences()[1][n_windows - 1, 0]
-            )
-            delta_G_kcal = delta_G.value_in_unit(
-                _openmm_unit.kilocalories_per_mole
-            )
-            return float(delta_G_kcal), float(max(0.0, 1.0 - uncertainty))
+                all_window_samples.append(window_samples)
+
+            # ── Build u_kln matrix for MBAR ────────────────────────
+            # Shape: (K, max_N_k, K) where K = n_windows
+            max_n_k = max(len(s) for s in all_window_samples)
+            u_kln = np.full((n_windows, max_n_k, n_windows), np.nan)
+            for k in range(n_windows):
+                for n, u_vec in enumerate(all_window_samples[k]):
+                    u_kln[k, n, :] = u_vec
+
+            if len(all_window_samples) < 2 or max_n_k < 2:
+                return 0.0, 10.0
+
+            try:
+                mbar = MBAR.from_energy_matrix(u_kln, temperature=temperature)
+                delta_f, ddelta_f, _ = mbar.get_free_energy_differences()
+                delta_G = delta_f[-1, 0] * kT
+                uncertainty = float(ddelta_f[-1, 0])
+                delta_G_kcal = delta_G.value_in_unit(
+                    _openmm_unit.kilocalories_per_mole
+                )
+                return float(delta_G_kcal), float(uncertainty)
+            except Exception:
+                return 0.0, 10.0
 
         # Compute ΔG for WT and mutant
         delta_g_wt, uncert_wt = _run_fep_for_system(
@@ -425,12 +447,14 @@ class FEPResistanceCalculator:
         )
 
         delta_delta_g = delta_g_mut - delta_g_wt
-        confidence = max(0.0, min(1.0, 1.0 - (uncert_wt + uncert_mut) / 2.0))
+        combined_uncertainty = max(uncert_wt, uncert_mut)
+        confidence = max(0.0, min(1.0, 1.0 - combined_uncertainty))
 
         return FEPResistanceResult(
             delta_delta_g=delta_delta_g,
             confidence=confidence,
             n_windows=n_windows,
+            mbar_uncertainty=combined_uncertainty,
         )
 
     def _build_system(

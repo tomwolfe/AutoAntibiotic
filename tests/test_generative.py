@@ -12,6 +12,8 @@ from autoantibiotic.generative_design import (
     generate_novel_scaffolds,
     _validate_mol,
     _fitness,
+    _compute_fingerprint,
+    _load_reference_actives_fps,
 )
 
 
@@ -191,3 +193,73 @@ class TestDiversity:
             "expected < 0.7 for a diverse set. "
             "The diversity penalty or MaxMinPicker may not be working."
         )
+
+
+class TestNoveltyFiltering:
+    """Tests for the ChEMBL novelty filter on generated scaffolds."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        """Reset the reference actives cache before each test."""
+        import autoantibiotic.generative_design as gd
+        gd._REFERENCE_ACTIVES_FPS = None
+        yield
+        gd._REFERENCE_ACTIVES_FPS = None
+
+    def test_novelty_filtering_known_active(self):
+        """A molecule very similar to a reference active should be filtered."""
+        from rdkit.Chem import AllChem
+        jtvae = JTVAE()
+
+        # Ceftaroline is a known reference active
+        ceftaroline = Chem.MolFromSmiles(
+            "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)"
+            "C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O"
+        )
+        assert ceftaroline is not None
+
+        # Load reference fingerprints and check similarity
+        ref_fps = _load_reference_actives_fps()
+        fp = _compute_fingerprint(ceftaroline)
+        if ref_fps:
+            from rdkit.DataStructs import TanimotoSimilarity
+            max_sim = max(TanimotoSimilarity(fp, ref) for ref in ref_fps)
+            # Ceftaroline should match itself (or a close analog) in the reference set
+            assert max_sim >= 0.9, (
+                f"Ceftaroline similarity to reference actives is {max_sim:.3f}, "
+                "expected >= 0.9 since it is itself a reference active."
+            )
+
+        # check_chembl_novelty should return False with default threshold
+        assert not jtvae.check_chembl_novelty(ceftaroline, threshold=0.4), (
+            "Ceftaroline is a known reference active and should be flagged as non-novel."
+        )
+
+    def test_novelty_filtering_novel_molecule(self):
+        """A completely novel molecule (e.g. methane) should pass the filter."""
+        jtvae = JTVAE()
+        methane = Chem.MolFromSmiles("C")
+        assert methane is not None
+        assert jtvae.check_chembl_novelty(methane, threshold=0.4), (
+            "Methane is structurally unrelated to any reference active."
+        )
+
+    def test_novelty_filtering_generated_scaffolds(self):
+        """Generated scaffolds should pass the novelty check by default."""
+        jtvae = JTVAE()
+        mols = jtvae.generate_novel_scaffolds(
+            core_smiles="CC1=CC=CC=C1",
+            n_samples=5,
+        )
+        for mol in mols:
+            assert jtvae.check_chembl_novelty(mol, threshold=0.4), (
+                f"Generated scaffold {Chem.MolToSmiles(mol)} is too similar "
+                "to known reference actives."
+            )
+
+    def test_novelty_filtering_with_high_threshold(self):
+        """At a very high threshold (0.9), even similar molecules pass."""
+        jtvae = JTVAE()
+        methane = Chem.MolFromSmiles("C")
+        assert methane is not None
+        assert jtvae.check_chembl_novelty(methane, threshold=0.9)

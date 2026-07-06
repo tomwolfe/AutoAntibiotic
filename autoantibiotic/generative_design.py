@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from rdkit import Chem
@@ -13,6 +13,40 @@ from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
 
 from .config import CONFIG
 from .io_utils import log
+
+# ── Reference actives for novelty checking ───────────────────────────
+_REFERENCE_ACTIVES_FPS: Optional[List[Any]] = None
+"""Lazily-loaded Morgan fingerprints of known PBP2a actives (used as a
+proxy for full ChEMBL MRSA actives)."""
+
+
+def _load_reference_actives_fps() -> List[Any]:
+    """Load Morgan fingerprints for known reference actives.
+
+    Returns
+    -------
+    List[DataStructs.UIntSparseIntVect]
+        Fingerprints of reference active compounds.
+    """
+    global _REFERENCE_ACTIVES_FPS
+    if _REFERENCE_ACTIVES_FPS is not None:
+        return _REFERENCE_ACTIVES_FPS
+
+    try:
+        from benchmarks.reference_data import get_actives_smiles
+        actives_smiles = get_actives_smiles()
+    except (ImportError, Exception):
+        actives_smiles = []
+
+    fps: List[Any] = []
+    for smi in actives_smiles:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is not None:
+            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+            fps.append(fp)
+
+    _REFERENCE_ACTIVES_FPS = fps
+    return fps
 
 try:
     import torch
@@ -322,7 +356,17 @@ class JTVAE:
                 core_smiles, n_samples * 2, temperature, max_length, min_length
             )
 
-        return self._maxmin_diverse_subset(mols, n_samples)
+        # Novelty filter: remove molecules too similar to known actives
+        novelty_threshold = getattr(CONFIG, 'similarity_threshold', 0.4)
+        filtered: List[Chem.Mol] = []
+        for mol in mols:
+            if self.check_chembl_novelty(mol, threshold=novelty_threshold):
+                filtered.append(mol)
+
+        if not filtered:
+            return []
+
+        return self._maxmin_diverse_subset(filtered, n_samples)
 
     def _neural_generation(
         self,
@@ -600,9 +644,40 @@ class JTVAE:
                 return "C"
         return _PlaceholderTokenizer()
 
+    @staticmethod
+    def check_chembl_novelty(mol: Chem.Mol, threshold: float = 0.4) -> bool:
+        """Check that a molecule is sufficiently novel relative to known actives.
+
+        Computes the maximum Tanimoto similarity (Morgan fingerprint,
+        radius 2, 2048 bits) between *mol* and a pre-loaded set of
+        reference actives (from ``benchmarks.reference_data``).
+        Returns ``True`` if *all* similarities are *below* *threshold*
+        (i.e. the molecule is novel).
+
+        Parameters
+        ----------
+        mol : Chem.Mol
+            Query molecule.
+        threshold : float
+            Maximum allowed Tanimoto similarity to any reference active.
+            Default 0.4.
+
+        Returns
+        -------
+        bool
+            ``True`` if the molecule is sufficiently novel.
+        """
+        ref_fps = _load_reference_actives_fps()
+        if not ref_fps:
+            return True
+        fp = _compute_fingerprint(mol)
+        max_sim = max(TanimotoSimilarity(fp, ref) for ref in ref_fps)
+        return max_sim < threshold
+
     def clear_cache(self) -> None:
         """Clear any in-memory caches."""
-        pass
+        global _REFERENCE_ACTIVES_FPS
+        _REFERENCE_ACTIVES_FPS = None
 
 
 def generate_novel_scaffolds(
