@@ -9,6 +9,7 @@ from autoantibiotic.fep_engine import (
     FEPResistanceResult,
     ConfigurationError,
 )
+from autoantibiotic.config import CONFIG, ConfigurationError as ConfigConfigurationError
 
 
 class TestFEPResistanceResult:
@@ -98,8 +99,22 @@ class TestFEPResistanceCalculator:
             receptor_mut_pdb="mut.pdb",
         )
         with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True), \
-             patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True):
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", True):
             with pytest.raises(ConfigurationError, match="No ligand available"):
+                calc.calculate_ddg()
+
+    def test_calculate_ddg_raises_config_error_no_openmmforcefields(self):
+        """calculate_ddg raises ConfigurationError when openmmforcefields is unavailable."""
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_smiles="CC(=O)OC",
+        )
+        with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", False):
+            with pytest.raises(ConfigurationError, match="openmmforcefields is not installed"):
                 calc.calculate_ddg()
 
     def test_calculate_ddg_raises_config_error_missing_wt_pdb(self):
@@ -111,7 +126,8 @@ class TestFEPResistanceCalculator:
             ligand_rdkit=mol,
         )
         with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True), \
-             patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True):
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", True):
             with pytest.raises(ConfigurationError, match="not found"):
                 calc.calculate_ddg()
 
@@ -154,3 +170,61 @@ class TestConfigurationError:
             raise ConfigurationError("Test error message")
         except ConfigurationError as e:
             assert str(e) == "Test error message"
+
+
+class TestFEPConfigValidation:
+    """Tests for FEP-related config validation."""
+
+    @staticmethod
+    def _mock_modules(modules: dict[str, MagicMock]) -> dict:
+        """Insert mock modules into sys.modules, returning a restore dict."""
+        import sys
+        restore = {}
+        for name, mock in modules.items():
+            if name in sys.modules:
+                restore[name] = sys.modules[name]
+            sys.modules[name] = mock
+        return restore
+
+    @staticmethod
+    def _restore_modules(restore: dict) -> None:
+        import sys
+        for name in restore:
+            sys.modules[name] = restore[name]
+
+    def test_validate_config_raises_if_openmmforcefields_missing(self):
+        """validate_config raises ConfigurationError when use_fep_resistance=True
+        but openmmforcefields is not installed."""
+        original_fep = CONFIG.use_fep_resistance
+        original_mmgbsa = CONFIG.use_explicit_solvent_mmgbsa
+        CONFIG.use_fep_resistance = True
+        CONFIG.use_explicit_solvent_mmgbsa = False
+        try:
+            restore = self._mock_modules({
+                "openmm": MagicMock(),
+                "openmmtools": MagicMock(),
+            })
+            with pytest.raises(ConfigConfigurationError, match="openmmforcefields is not installed"):
+                CONFIG.validate_config()
+        finally:
+            self._restore_modules(restore)
+            CONFIG.use_fep_resistance = original_fep
+            CONFIG.use_explicit_solvent_mmgbsa = original_mmgbsa
+
+    def test_validate_config_passes_if_all_deps_available(self):
+        """validate_config passes when use_fep_resistance=True and all deps are importable."""
+        original_fep = CONFIG.use_fep_resistance
+        original_mmgbsa = CONFIG.use_explicit_solvent_mmgbsa
+        CONFIG.use_fep_resistance = True
+        CONFIG.use_explicit_solvent_mmgbsa = False
+        try:
+            restore = self._mock_modules({
+                "openmm": MagicMock(),
+                "openmmtools": MagicMock(),
+                "openmmforcefields": MagicMock(),
+            })
+            CONFIG.validate_config()
+        finally:
+            self._restore_modules(restore)
+            CONFIG.use_fep_resistance = original_fep
+            CONFIG.use_explicit_solvent_mmgbsa = original_mmgbsa

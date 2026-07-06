@@ -383,6 +383,16 @@ class PipelineConfig:
                     "alchemical factory and MBAR estimator. Please install via conda:\n"
                     "  conda install -c conda-forge openmmtools"
                 )
+            try:
+                import openmmforcefields  # noqa: F401
+            except ImportError:
+                raise ConfigurationError(
+                    "FEP resistance profiling requested (use_fep_resistance=True) "
+                    "but openmmforcefields is not installed. openmmforcefields is "
+                    "required for GAFF2 ligand parameterization and AM1-BCC charge "
+                    "assignment. Please install via conda:\n"
+                    "  conda install -c conda-forge openmmforcefields"
+                )
 
         if self.generative_mode:
             try:

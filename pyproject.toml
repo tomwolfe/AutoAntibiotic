@@ -26,6 +26,7 @@ fep = [
     "openmm>=8.0.0",
     "openmmtools>=1.0.0",
     "pdbfixer>=1.9",
+    "openmmforcefields>=0.9.0",
 ]
 generative = [
     "torch>=2.0.0",

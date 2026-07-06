@@ -32,6 +32,12 @@ try:
 except ImportError:
     _HAVE_RDKIT = False
 
+try:
+    from openmmforcefields.generators import SystemGenerator as _SystemGenerator
+    _HAVE_OPENMMFORCEFIELDS = True
+except ImportError:
+    _HAVE_OPENMMFORCEFIELDS = False
+
 
 class ConfigurationError(AutoAntibioticError):
     """Error raised when required dependencies or configuration are
@@ -173,6 +179,15 @@ class FEPResistanceCalculator:
                 "openmmtools provides the alchemical factory and MBAR estimator. "
                 "Please install via conda:\n"
                 "  conda install -c conda-forge openmmtools"
+            )
+
+        if not _HAVE_OPENMMFORCEFIELDS:
+            raise ConfigurationError(
+                "Free Energy Perturbation (FEP) requested but openmmforcefields is not installed. "
+                "openmmforcefields is required for GAFF2 ligand parameterization "
+                "and AM1-BCC charge assignment. "
+                "Please install via conda:\n"
+                "  conda install -c conda-forge openmmforcefields"
             )
 
         if self.ligand_rdkit is None:
@@ -408,7 +423,9 @@ class FEPResistanceCalculator:
     ) -> Tuple[_openmm.System, _openmm_app.Topology, _openmm_unit.Quantity]:
         """Build an OpenMM System, Topology, and positions from a PDB file.
 
-        Uses the Amber14 force field with explicit TIP3P solvent.
+        Uses the Amber14 force field with explicit TIP3P solvent and GAFF2
+        parameters for the ligand with AM1-BCC charges assigned via
+        ``openmmforcefields``.
 
         Parameters
         ----------
@@ -423,12 +440,41 @@ class FEPResistanceCalculator:
             OpenMM System, Topology, and atomic positions for the
             solvated receptor-ligand complex.
         """
+        from io import StringIO
         from openmm.app import PDBFile, ForceField, Modeller
 
         pdb = PDBFile(pdb_path)
         modeller = Modeller(pdb.topology, pdb.positions)
 
-        # Add missing hydrogens
+        # ── Prepare and add ligand ────────────────────────────────
+        ligand_mol = self.ligand_rdkit
+        if ligand_mol is not None:
+            mol = Chem.AddHs(ligand_mol)
+            # Generate 3D conformer if not already present
+            if mol.GetNumConformers() == 0:
+                params = _AllChem.ETKDGv3()
+                params.randomSeed = CONFIG.random_seed
+                result = _AllChem.EmbedMolecule(mol, params)
+                if result == -1:
+                    result = _AllChem.EmbedMolecule(mol, _AllChem.ETKDG())
+                if result != -1:
+                    _AllChem.MMFFOptimizeMolecule(mol)
+
+            # Convert RDKit Mol to PDB block for OpenMM
+            pdb_block = Chem.MolToPDBBlock(mol)
+            pdb_block = pdb_block.replace("HETATM", "ATOM  ")
+            # Rename the residue to "LIG" for consistent identification
+            lines = []
+            for ln in pdb_block.split("\n"):
+                if ln.startswith(("ATOM", "HETATM")):
+                    ln = ln[:17] + "LIG" + ln[20:]
+                lines.append(ln)
+            pdb_block = "\n".join(lines)
+
+            ligand_pdb = PDBFile(StringIO(pdb_block))
+            modeller.add(ligand_pdb.topology, ligand_pdb.positions)
+
+        # Add missing hydrogens to receptor (ligand already has explicit Hs)
         modeller.addHydrogens(forcefield=None)
 
         # Add explicit solvent (TIP3P)
@@ -440,17 +486,23 @@ class FEPResistanceCalculator:
             ionicStrength=0.15 * _openmm_unit.molar,
         )
 
-        # Create force field system
-        forcefield = ForceField(
-            "amber14-all.xml", "amber14/tip3p.xml",
+        # ── Create system with GAFF2 ligand parameters ────────────
+        from openmmforcefields.generators import SystemGenerator as _SystemGenerator
+
+        system_generator = _SystemGenerator(
+            forcefields=["amber14-all.xml", "amber14/tip3pfb.xml"],
+            small_molecule_forcefield="gaff-2.11",
+            molecules=[self.ligand_rdkit] if self.ligand_rdkit else [],
+            forcefield_kwargs={
+                "constraints": _openmm_app.HBonds,
+                "rigidWater": True,
+                "ewaldErrorTolerance": 0.0005,
+            },
         )
-        system = forcefield.createSystem(
+        system = system_generator.create_system(
             modeller.topology,
             nonbondedMethod=_openmm_app.PME,
             nonbondedCutoff=1.0 * _openmm_unit.nanometer,
-            constraints=_openmm_app.HBonds,
-            rigidWater=True,
-            ewaldErrorTolerance=0.0005,
         )
 
         # Add barostat

@@ -24,6 +24,7 @@ torch>=2.0.0
 
 # Optional: FEP resistance profiling
 # openmmtools>=1.0.0  # install via: conda install -c conda-forge openmmtools
+# openmmforcefields>=0.9.0  # required for GAFF2 ligand parameterization (FEP); install via: conda install -c conda-forge openmmforcefields
 
 # Optional: water analysis
 # biopython>=1.83  # already required; used for PDB parsing in water_analysis.py
