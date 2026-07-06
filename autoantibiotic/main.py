@@ -65,6 +65,14 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Run short explicit-solvent MD validation on top candidates.",
     )
     parser.add_argument(
+        "--strict-scoring", action="store_true",
+        help="Force explicit-solvent MM-GB/SA and increase explicit_solvent_frames to 20 for higher precision.",
+    )
+    parser.add_argument(
+        "--retrain-model", type=str,
+        help="Path to CSV file with {smiles, ic50} for active-learning retraining.",
+    )
+    parser.add_argument(
         "--use-mutation-sampling", action="store_true",
         help="Dock against mutant receptor variants to profile resistance risk.",
     )
@@ -96,9 +104,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.use_mutation_sampling:
         cfg.use_mutation_sampling = True
 
-    if args.use_mm_gbsa or args.use_mm_gbsa_rescoring:
-        cfg.use_mm_gbsa = True
-        cfg.use_mm_gbsa_rescoring = True
+    if args.strict_scoring:
+        cfg.use_strict_scoring = True
+        cfg.explicit_solvent_frames = 20
+
+    if args.retrain_model is not None:
+        cfg.retrain_model_path = args.retrain_model
 
     # ── Validate configuration ──
     try:

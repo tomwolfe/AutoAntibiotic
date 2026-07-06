@@ -715,6 +715,7 @@ def rescore_with_mmgbsa(
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
                         receptor_pdb=receptor_pdb,
+                        strict_mode=CONFIG.use_strict_scoring,
                     )
                     if penalty > 0.0:
                         binding_energy -= penalty
@@ -932,6 +933,7 @@ def rescore_with_explicit_mmgbsa(
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
                         receptor_pdb=receptor_pdb,
+                        strict_mode=CONFIG.use_strict_scoring,
                     )
                     if penalty > 0.0:
                         binding_energy -= penalty
@@ -1001,6 +1003,7 @@ def _compute_water_displacement_penalty(
     high_energy_waters: List[Any],
     seed: int,
     receptor_pdb: Optional[str] = None,
+    strict_mode: bool = False,
 ) -> float:
     """Compute the total water displacement penalty for a ligand.
 
@@ -1018,6 +1021,10 @@ def _compute_water_displacement_penalty(
         * Overlap < 10 % → no penalty (the water is not meaningfully
           displaced).
 
+    When *strict_mode* is True, the threshold for the 10–50 % linear
+    interpolation region is lowered to 5 %, making the penalty more
+    aggressive (useful for high-precision scoring).
+
     If *receptor_pdb* is provided, waters that form bridging H-bonds
     between the ligand and the protein (checked via
     :func:`_is_bridging_water`) are excluded from the penalty, as
@@ -1026,6 +1033,8 @@ def _compute_water_displacement_penalty(
     Returns the sum of scaled displacement energies of clashing waters
     (kcal/mol).
     """
+    total = 0.0
+
     try:
         mol_3d = Chem.RWMol(mol)
         mol_3d = Chem.AddHs(mol_3d)
@@ -1035,7 +1044,7 @@ def _compute_water_displacement_penalty(
             return 0.0
         AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
     except Exception:
-        return 0.0
+        return total
 
     # Pre-load protein heavy atoms if receptor PDB is provided
     protein_positions: Optional[np.ndarray] = None
@@ -1052,7 +1061,9 @@ def _compute_water_displacement_penalty(
         if mol_3d.GetAtomWithIdx(i).GetAtomicNum() > 1
     ], dtype=np.float64)
 
-    total = 0.0
+    # Determine overlap threshold based on strict mode
+    low_overlap_threshold = 0.05 if strict_mode else 0.1
+
     for w in high_energy_waters:
         # Skip bridging waters — they are structurally critical
         if protein_positions is not None and len(protein_positions) > 0:
@@ -1065,19 +1076,19 @@ def _compute_water_displacement_penalty(
                 )
                 continue
 
-        # Compute clash factor based on volume overlap
-        overlap_ratio = _compute_volume_overlap_ratio(mol_3d, w.position)
+            # Compute clash factor based on volume overlap
+            overlap_ratio = _compute_volume_overlap_ratio(mol_3d, w.position)
 
-        if overlap_ratio < 0.1:
-            continue
+            if overlap_ratio < low_overlap_threshold:
+                continue
 
-        if overlap_ratio >= 0.5:
-            clash_factor = 1.0
-        else:
-            clash_factor = (overlap_ratio - 0.1) / 0.4
+            if overlap_ratio >= 0.5:
+                clash_factor = 1.0
+            else:
+                clash_factor = (overlap_ratio - low_overlap_threshold) / (0.5 - low_overlap_threshold)
 
-        penalty = w.displacement_energy * clash_factor
-        total += penalty
+            penalty = w.displacement_energy * clash_factor
+            total += penalty
 
     return total
 

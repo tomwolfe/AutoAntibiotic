@@ -89,6 +89,12 @@ class PipelineConfig:
     explicit_solvent_frames: int = 10
     """Number of trajectory snapshots to average for explicit-solvent
     MM-GB/SA rescoring (default 10)."""
+    use_strict_scoring: bool = False
+    """When True, tightens the volume-overlap clash detection in water
+    displacement penalty scoring, lowering the low-overlap threshold from
+    10 % to 5 % for more aggressive penalty application.  When used in
+    combination with ``--strict-scoring`` CLI flag, ``explicit_solvent_frames``
+    is increased to 20 for higher precision."""
     """Relaxation MD duration (ns) with strong position restraints. Default 1 ns."""
 
     # Benchmark
@@ -293,10 +299,10 @@ class PipelineConfig:
     """Number of warm-up steps before production FEP sampling."""
     fep_warmup_min_iterations: int = 500
     """Minimum energy minimisation iterations before FEP production."""
-    fep_top_n: int = 5
+    fep_top_n: int = 20
     """Maximum number of top candidates to run rigorous FEP on.
     FEP is only triggered if the candidate is within this many top
-    compounds after docking and MM-GB/SA rescoring.  Default 5."""
+    compounds after docking and MM-GB/SA rescoring.  Default 20."""
 
     # ── Entropy estimation ──
     include_entropy: bool = False
@@ -333,6 +339,11 @@ class PipelineConfig:
     """Minimum confidence score to accept a synthetic route."""
     synthesis_api_max_routes: int = 3
     """Maximum number of synthesis routes to evaluate per compound."""
+
+    # ── Active learning parameters ──
+    retrain_model_path: Optional[str] = None
+    """Path to a CSV file ({smiles, ic50}) for active-learning retraining.
+    When set, the pipeline will retrain the MetaScorer with the new data."""
 
     # ── Reporting parameters ──
     csv_report_name: str = "top_candidates.csv"

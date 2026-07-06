@@ -23,6 +23,7 @@ Metrics
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -754,6 +755,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     print(f"  Total screened: {results['n_total']}")
     print("=" * 55)
     print()
+
+    results_dir = os.path.join("output", "benchmarks")
+    os.makedirs(results_dir, exist_ok=True)
+    results_path = os.path.join(results_dir, "enrichment_baseline.json")
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+    log.info(f"  Results saved to {results_path}")
 
 
 if __name__ == "__main__":

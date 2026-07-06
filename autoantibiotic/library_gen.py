@@ -1109,12 +1109,17 @@ def generate_grown_library(
                     if ring_info.NumRings() == 0:
                         continue
 
-                    # Ensure the core scaffold is preserved
-                    has_core_fragment = any(
-                        product.HasSubstructMatch(f) for f in core_frags
-                    )
-                    if not has_core_fragment:
-                        continue
+                    # Early pharmacophore pruning: discard fragments that
+                    # lack the minimum required Donor/Acceptor/Hydrophobe
+                    # features before attempting further growth.
+                    min_features = CONFIG.pharmacophore_min_matches
+                    if CONFIG.use_pharmacophore_filter:
+                        if not check_pharmacophore_match(
+                            product,
+                            min_matches=min_features,
+                            tolerance=CONFIG.pharmacophore_tolerance,
+                        ):
+                            continue
 
                     # Lipinski + QED filter
                     try:

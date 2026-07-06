@@ -241,3 +241,153 @@ class TestGetWatersToRemove:
         to_remove = get_waters_to_remove(result)
         ids = {w.identifier for w in to_remove}
         assert ids == {"A:HOH_1", "A:HOH_3"}
+
+
+# ── Volume overlap and strict mode ──────────────────────────────
+
+class TestVolumeOverlap:
+    """Tests for _compute_volume_overlap_ratio and strict_mode behavior."""
+
+    @pytest.fixture
+    def simple_mol(self):
+        """Create a simple ethanol molecule with a conformer."""
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+        mol = Chem.MolFromSmiles("CCO")
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, randomSeed=42)
+        AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+        return mol
+
+    def test_no_overlap_far_away(self, simple_mol):
+        """Water far from the ligand should have zero overlap."""
+        from autoantibiotic.ml_scoring.scoring import _compute_volume_overlap_ratio
+        water_pos = np.array([100.0, 100.0, 100.0])
+        ratio = _compute_volume_overlap_ratio(simple_mol, water_pos, water_radius=1.4)
+        assert ratio == 0.0
+
+    def test_partial_overlap_nearby(self, simple_mol):
+        """Water close to ligand should have non-zero overlap."""
+        from autoantibiotic.ml_scoring.scoring import _compute_volume_overlap_ratio
+        water_pos = np.array([0.5, 0.5, 0.5])
+        ratio = _compute_volume_overlap_ratio(simple_mol, water_pos, water_radius=1.4)
+        assert 0.0 <= ratio <= 1.0
+        assert ratio > 0.0
+
+    def test_overlap_clamped_to_one(self, simple_mol):
+        """Overlap ratio should never exceed 1.0."""
+        from autoantibiotic.ml_scoring.scoring import _compute_volume_overlap_ratio
+        water_pos = np.array([0.0, 0.0, 0.0])
+        ratio = _compute_volume_overlap_ratio(simple_mol, water_pos, water_radius=1.4)
+        assert ratio <= 1.0
+
+    def test_strict_mode_lowers_threshold(self):
+        """Strict mode should lower the overlap threshold from 10% to 5%."""
+        from autoantibiotic.ml_scoring.scoring import _compute_water_displacement_penalty
+        from autoantibiotic.water_analysis import WaterInfo
+
+        # Create a water with moderate displacement energy
+        water = WaterInfo(
+            chain="A", resseq=1,
+            displacement_energy=2.0,
+            position=np.array([0.5, 0.5, 0.5]),
+        )
+
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+        mol = Chem.MolFromSmiles("CCO")
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, randomSeed=42)
+        AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+
+        # Non-strict mode: threshold is 0.1
+        penalty_normal = _compute_water_displacement_penalty(
+            mol, [water], seed=42,
+            receptor_pdb=None,
+            strict_mode=False,
+        )
+
+        # Strict mode: threshold is 0.05
+        penalty_strict = _compute_water_displacement_penalty(
+            mol, [water], seed=42,
+            receptor_pdb=None,
+            strict_mode=True,
+        )
+
+        # Strict mode should produce equal or higher penalty
+        assert penalty_strict >= penalty_normal
+
+    def test_strict_mode_zero_overlap(self):
+        """Zero overlap should return zero penalty regardless of mode."""
+        from autoantibiotic.ml_scoring.scoring import _compute_water_displacement_penalty
+        from autoantibiotic.water_analysis import WaterInfo
+
+        water = WaterInfo(
+            chain="A", resseq=1,
+            displacement_energy=2.0,
+            position=np.array([100.0, 100.0, 100.0]),
+        )
+
+        from rdkit import Chem
+        mol = Chem.MolFromSmiles("CCO")
+        mol = Chem.AddHs(mol)
+
+        penalty = _compute_water_displacement_penalty(
+            mol, [water], seed=42,
+            receptor_pdb=None,
+            strict_mode=True,
+        )
+        assert penalty == 0.0
+
+
+# ── Config and CLI tests ──────────────────────────────────────
+
+class TestConfigDefaults:
+    """Verify default configuration values."""
+
+    def test_fep_top_n_default_is_20(self):
+        from autoantibiotic.config import CONFIG
+        assert CONFIG.fep_top_n == 20
+
+    def test_use_strict_scoring_default(self):
+        from autoantibiotic.config import CONFIG
+        assert CONFIG.use_strict_scoring is False
+
+    def test_use_explicit_solvent_mmgbsa_default(self):
+        from autoantibiotic.config import CONFIG
+        assert CONFIG.use_explicit_solvent_mmgbsa is True
+
+    def test_explicit_solvent_frames_default(self):
+        from autoantibiotic.config import CONFIG
+        assert CONFIG.explicit_solvent_frames == 10
+
+    def test_retrain_model_path_default(self):
+        from autoantibiotic.config import CONFIG
+        assert CONFIG.retrain_model_path is None
+
+
+class TestPipelineConfigOverride:
+    """Verify that CLI flags correctly override config defaults."""
+
+    def test_strict_scoring_increases_frames(self):
+        from autoantibiotic.config import CONFIG
+        original_frames = CONFIG.explicit_solvent_frames
+        original_strict = CONFIG.use_strict_scoring
+
+        try:
+            CONFIG.explicit_solvent_frames = 20
+            CONFIG.use_strict_scoring = True
+            assert CONFIG.explicit_solvent_frames == 20
+            assert CONFIG.use_strict_scoring is True
+        finally:
+            CONFIG.explicit_solvent_frames = original_frames
+            CONFIG.use_strict_scoring = original_strict
+
+    def test_retrain_model_path_setting(self):
+        from autoantibiotic.config import CONFIG
+        original = CONFIG.retrain_model_path
+        try:
+            CONFIG.retrain_model_path = "output/new_data.csv"
+            assert CONFIG.retrain_model_path == "output/new_data.csv"
+        finally:
+            CONFIG.retrain_model_path = original
