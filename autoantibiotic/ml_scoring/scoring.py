@@ -378,6 +378,68 @@ def _check_vdw_overlap(
     return False
 
 
+def _compute_volume_overlap_ratio(
+    mol: Chem.Mol,
+    water_position: np.ndarray,
+    water_radius: float = 1.4,
+) -> float:
+    """Compute fractional volume overlap between a ligand conformer and a water molecule.
+
+    The water is modelled as a sphere of *water_radius* Å.  For each ligand
+    heavy atom within overlap distance, the volume of intersection between
+    the atom's VDW sphere and the water sphere is computed analytically.
+    The sum of intersection volumes is divided by the water sphere volume
+    to give a clash ratio between 0.0 (no overlap) and 1.0 (water fully
+    buried in ligand atoms).
+
+    Parameters
+    ----------
+    mol : Chem.Mol
+        Ligand molecule with a 3-D conformer (must have been embedded).
+    water_position : np.ndarray, shape (3,)
+        Coordinates of the water oxygen.
+    water_radius : float
+        Radius of the water sphere in Å (default 1.4 ≈ oxygen VDW radius).
+
+    Returns
+    -------
+    float
+        Overlap ratio in [0, 1].
+    """
+    water_vol = 4.0 / 3.0 * np.pi * water_radius ** 3
+    conf = mol.GetConformer()
+    total_overlap = 0.0
+
+    for i in range(mol.GetNumAtoms()):
+        atom = mol.GetAtomWithIdx(i)
+        atomic_num = atom.GetAtomicNum()
+        if atomic_num <= 1:
+            continue
+        r_atom = _VDW_RADII.get(atomic_num, 1.70)
+        pt = conf.GetAtomPosition(i)
+        d = float(np.linalg.norm(
+            np.array([pt.x, pt.y, pt.z]) - water_position,
+        ))
+
+        if d >= water_radius + r_atom:
+            continue
+
+        if d <= abs(water_radius - r_atom):
+            total_overlap += min(
+                water_vol,
+                4.0 / 3.0 * np.pi * r_atom ** 3,
+            )
+        else:
+            r1, r2 = water_radius, r_atom
+            V = (np.pi * (r1 + r2 - d) ** 2 *
+                 (d ** 2 + 2.0 * d * r2 - 3.0 * r2 ** 2 +
+                  2.0 * d * r1 + 6.0 * r1 * r2 - 3.0 * r1 ** 2) /
+                 (12.0 * d))
+            total_overlap += max(V, 0.0)
+
+    return float(min(total_overlap / water_vol, 1.0))
+
+
 def _prepare_receptor_for_mmgbsa(
     receptor_pdb: str, work_dir_mm: str,
 ) -> Optional[Tuple[Any, Any, Any, float]]:
@@ -572,9 +634,11 @@ def rescore_with_mmgbsa(
     higher sensitivity to ligand conformation.
 
     **Water displacement correction**: high-energy waters that sterically
-    clash with the ligand (VDW overlap with *scaling* = 0.8) contribute
-    a favourable displacement penalty.  This uses a proper volume-overlap
-    check rather than a simple distance cutoff.
+    clash with the ligand contribute a favourable displacement penalty.
+    The penalty is the water's *displacement_energy* scaled by a
+    **volume-overlap clash factor** (see
+    :func:`_compute_water_displacement_penalty`).  Bridging waters
+    (those H-bonded to both protein and ligand) are excluded.
 
     Args:
         top_candidates: Docked candidates (uses SMILES for 3D generation).
@@ -646,7 +710,7 @@ def rescore_with_mmgbsa(
 
                 binding_energy = complex_energy - rec_energy - lig_energy
 
-                # ── Water displacement correction (VDW overlap) ──
+                # ── Water displacement correction (volume-overlap clash factor) ──
                 if water_results is not None and water_results.high_energy_waters:
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
@@ -941,16 +1005,26 @@ def _compute_water_displacement_penalty(
     """Compute the total water displacement penalty for a ligand.
 
     For each high-energy water, generates a 3D conformer of the ligand
-    (ETKDG + MMFF) and checks for VDW overlap using
-    :func:`_check_vdw_overlap`.  Only waters that sterically clash
-    with the ligand contribute their displacement energy.
+    (ETKDG + MMFF) and computes a **volume-overlap clash factor**
+    between the ligand atoms and the water sphere.  The displacement
+    energy of each water is scaled by this factor to give a
+    thermodynamically sound penalty.
+
+    Scaling rules (Clash Factor):
+        * Overlap ≥ 50 % of the water sphere volume → full penalty
+          (clash factor = 1.0).
+        * Overlap 10 – 50 % → linear interpolation
+          (factor = (overlap - 0.1) / 0.4).
+        * Overlap < 10 % → no penalty (the water is not meaningfully
+          displaced).
 
     If *receptor_pdb* is provided, waters that form bridging H-bonds
     between the ligand and the protein (checked via
     :func:`_is_bridging_water`) are excluded from the penalty, as
     these waters are structurally critical.
 
-    Returns the sum of displacement energies of clashing waters (kcal/mol).
+    Returns the sum of scaled displacement energies of clashing waters
+    (kcal/mol).
     """
     try:
         mol_3d = Chem.RWMol(mol)
@@ -982,14 +1056,29 @@ def _compute_water_displacement_penalty(
     for w in high_energy_waters:
         # Skip bridging waters — they are structurally critical
         if protein_positions is not None and len(protein_positions) > 0:
-            if _is_bridging_water(w.position, lig_heavy_positions, protein_positions):
+            if _is_bridging_water(
+                w.position, lig_heavy_positions, protein_positions,
+            ):
                 log.info(
                     f"      Water at {w.position} is a bridging water; "
                     "skipping displacement penalty."
                 )
                 continue
-        if _check_vdw_overlap(mol_3d, w.position):
-            total += w.displacement_energy
+
+        # Compute clash factor based on volume overlap
+        overlap_ratio = _compute_volume_overlap_ratio(mol_3d, w.position)
+
+        if overlap_ratio < 0.1:
+            continue
+
+        if overlap_ratio >= 0.5:
+            clash_factor = 1.0
+        else:
+            clash_factor = (overlap_ratio - 0.1) / 0.4
+
+        penalty = w.displacement_energy * clash_factor
+        total += penalty
+
     return total
 
 
