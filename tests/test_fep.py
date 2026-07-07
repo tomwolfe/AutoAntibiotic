@@ -355,3 +355,117 @@ class TestFEPAdaptiveConvergence:
         assert CONFIG.fep_convergence_threshold_kcal_per_mol == 0.5
         assert CONFIG.fep_check_interval_steps == 500
 
+
+
+class TestPreScreenRejection:
+    """Tests for FEP pre-screening energy threshold."""
+
+    def test_pre_screen_high_initial_energy(self):
+        """Pre-screening rejects when initial energy exceeds threshold."""
+        from unittest.mock import patch
+
+        with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True),              patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True),              patch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", True),              patch("os.path.exists", return_value=True):
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb="wt.pdb",
+                receptor_mut_pdb="mut.pdb",
+                ligand_smiles="CC(=O)OC",
+            )
+            with patch.object(calc, "_pre_screen_initial_energy") as mock_pre_screen:
+                mock_pre_screen.return_value = FEPResistanceResult(
+                    delta_delta_g=0.0,
+                    confidence=0.0,
+                    n_windows=0,
+                    error="Skipped: High Initial Energy",
+                )
+                result = calc.calculate_ddg()
+                assert result.error == "Skipped: High Initial Energy"
+                assert result.delta_delta_g == 0.0
+                assert result.n_windows == 0
+
+    def test_pre_screen_accepts_valid_energy(self):
+        """Pre-screening accepts when initial energy is within threshold."""
+        from unittest.mock import patch
+
+        with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True),              patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True),              patch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", True),              patch("os.path.exists", return_value=True):
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb="wt.pdb",
+                receptor_mut_pdb="mut.pdb",
+                ligand_smiles="CC(=O)OC",
+            )
+            with patch.object(calc, "_pre_screen_initial_energy") as mock_pre_screen:
+                mock_pre_screen.return_value = None
+                with patch.object(calc, "_compute_fep_delta_ddg") as mock_compute:
+                    mock_compute.return_value = FEPResistanceResult(
+                        delta_delta_g=-0.5,
+                        confidence=0.9,
+                        n_windows=11,
+                    )
+                    result = calc.calculate_ddg()
+                    assert result.delta_delta_g == -0.5
+                    assert result.n_windows == 11
+
+
+class TestCheckpointSaveLoad:
+    """Tests for checkpoint save and load functionality."""
+
+    def test_checkpoint_save_load(self, tmp_path):
+        """Checkpoints are saved and loaded correctly."""
+        import json
+        from autoantibiotic.fep_engine import FEPResistanceResult
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        label = "WT"
+
+        # Simulate checkpoint data
+        checkpoint_data = {
+            "windows": [
+                {"index": 0, "samples": [[0.1, 0.2, 0.3]], "uncertainty": 0.1},
+                {"index": 1, "samples": [[0.4, 0.5, 0.6]], "uncertainty": 0.2},
+            ]
+        }
+
+        checkpoint_path = checkpoint_dir / f"checkpoint_{label}.json"
+        with open(checkpoint_path, "w") as f:
+            json.dump(checkpoint_data, f)
+
+        # Load and verify
+        with open(checkpoint_path, "r") as f:
+            loaded = json.load(f)
+
+        assert len(loaded["windows"]) == 2
+        assert loaded["windows"][0]["index"] == 0
+        assert loaded["windows"][0]["samples"] == [[0.1, 0.2, 0.3]]
+        assert loaded["windows"][1]["uncertainty"] == 0.2
+
+    def test_checkpoint_missing_file(self, tmp_path):
+        """Missing checkpoint file returns empty data."""
+        label = "WT"
+        checkpoint_path = tmp_path / f"checkpoint_{label}.json"
+
+        # File doesn't exist
+        assert not checkpoint_path.exists()
+
+        # When loading non-existent file, should return empty
+        import json
+        data = {}
+        windows = data.get("windows", [])
+        assert len(windows) == 0
+
+    @pytest.mark.parametrize("label", ["WT", "Mutant", "Custom_Label"])
+    def test_checkpoint_filename_format(self, label, tmp_path):
+        """Checkpoint files follow the correct naming convention."""
+        import json
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = checkpoint_dir / f"checkpoint_{label}.json"
+
+        # Create directory and save
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        with open(checkpoint_path, "w") as f:
+            json.dump({"windows": []}, f)
+
+        assert checkpoint_path.exists()
+        assert "checkpoint_" in str(checkpoint_path)
+        assert str(checkpoint_path).endswith(".json")

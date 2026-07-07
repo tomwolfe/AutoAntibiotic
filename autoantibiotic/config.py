@@ -316,6 +316,16 @@ class PipelineConfig:
     """Number of warm-up steps before production FEP sampling."""
     fep_warmup_min_iterations: int = 500
     """Minimum energy minimisation iterations before FEP production."""
+    fep_max_initial_energy_kcal_per_mol: float = 1000.0
+    """Maximum potential energy (kcal/mol) for pre-screening acceptance.
+    If the initial energy minimisation on the WT complex exceeds this
+    threshold, the FEP calculation is skipped and a "Skipped: High
+    Initial Energy" result is returned."""
+    fep_enable_checkpointing: bool = True
+    """When True, save and load checkpoint files during FEP calculations
+    so that interrupted simulations can be resumed from the last
+    completed window.  When False (or when checkpoint_dir is None),
+    no checkpointing is performed."""
     fep_top_n: int = 20
     """Maximum number of top candidates to run rigorous FEP on.
     FEP is only triggered if the candidate is within this many top

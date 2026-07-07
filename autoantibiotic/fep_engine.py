@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -253,6 +254,13 @@ class FEPResistanceCalculator:
                     "Consider skipping FEP for this candidate."
                 )
 
+        # Pre-screen initial energy
+        initial_energy = self._pre_screen_initial_energy(
+            self.receptor_wt_pdb,
+        )
+        if initial_energy is not None:
+            return initial_energy
+
         return self._compute_fep_delta_ddg()
 
     def _compute_fep_delta_ddg(self) -> FEPResistanceResult:
@@ -328,6 +336,7 @@ class FEPResistanceCalculator:
             positions: _openmm_unit.Quantity,
             alchemical_region: AlchemicalRegion,
             label: str,
+            checkpoint_dir: Optional[str] = None,
         ) -> Tuple[float, List[float], float]:
             """Run FEP for one system and return (delta_G, per_window_uncertainties, total_time_ps).
 
@@ -349,7 +358,24 @@ class FEPResistanceCalculator:
             all_window_samples: List[List[np.ndarray]] = []
             per_window_uncertainties: List[float] = []
 
+            # Load checkpoint if available
+            if checkpoint_dir is not None:
+                checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{label}.json")
+                if os.path.exists(checkpoint_path):
+                    with open(checkpoint_path, "r") as f:
+                        checkpoint_data = json.load(f)
+                    for window_data in checkpoint_data.get("windows", []):
+                        samples = window_data.get("samples", [])
+                        all_window_samples.append(samples)
+                        per_window_uncertainties.append(window_data.get("uncertainty", 0.0))
+
+            # Skip already completed windows
+            completed_count = len(all_window_samples)
+            start_window = completed_count
+
             for i, lam in enumerate(lambda_protocol):
+                if i < start_window:
+                    continue
                 alchemical_state = AlchemicalState.from_system(system)
                 alchemical_state.lambda_sterics = lam
                 alchemical_state.lambda_electrostatics = lam
@@ -492,6 +518,25 @@ class FEPResistanceCalculator:
 
         all_uncertainties = per_window_unc_wt + per_window_unc_mut
         total_time_ps = total_time_wt + total_time_mut
+
+        # Save checkpoint if checkpoint_dir is provided
+        if checkpoint_dir is not None:
+            checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{label}.json")
+            checkpoint_data = {
+                "windows": [
+                    {
+                        "index": idx,
+                        "samples": samples,
+                        "uncertainty": unc,
+                    }
+                    for idx, (samples, unc) in enumerate(
+                        zip(all_window_samples, per_window_uncertainties)
+                    )
+                ]
+            }
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            with open(checkpoint_path, "w") as f:
+                json.dump(checkpoint_data, f, indent=2)
 
         return FEPResistanceResult(
             delta_delta_g=delta_delta_g,
@@ -651,3 +696,111 @@ class FEPResistanceCalculator:
             "Install OpenMM and openmmtools for rigorous FEP calculations, "
             "or set CONFIG.use_fep_resistance = False to skip FEP."
         )
+
+    def _pre_screen_initial_energy(
+        self,
+        pdb_path: str,
+    ) -> Optional[FEPResistanceResult]:
+        """Minimise the WT complex and check whether the initial energy
+        exceeds the configurable threshold.
+
+        Returns
+        -------
+        FEPResistanceResult | None
+            A result indicating the calculation was skipped (with ``error``
+            set), or ``None`` when the energy is within the acceptable
+            range and FEP should proceed.
+        """
+        from io import StringIO
+        from openmm.app import HBonds
+        from openmm.app import PDBFile, ForceField, Modeller
+
+        pdb = PDBFile(pdb_path)
+        modeller = Modeller(pdb.topology, pdb.positions)
+
+        ligand_mol = self.ligand_rdkit
+        if ligand_mol is not None:
+            mol = Chem.AddHs(ligand_mol)
+            if mol.GetNumConformers() == 0:
+                params = _AllChem.ETKDGv3()
+                params.randomSeed = CONFIG.random_seed
+                result = _AllChem.EmbedMolecule(mol, params)
+                if result == -1:
+                    result = _AllChem.EmbedMolecule(mol, _AllChem.ETKDG())
+                if result != -1:
+                    _AllChem.MMFFOptimizeMolecule(mol)
+
+            pdb_block = Chem.MolToPDBBlock(mol)
+            pdb_block = pdb_block.replace("HETATM", "ATOM  ")
+            lines = []
+            for ln in pdb_block.split("\n"):
+                if ln.startswith(("ATOM", "HETATM")):
+                    ln = ln[:17] + "LIG" + ln[20:]
+                lines.append(ln)
+            pdb_block = "\n".join(lines)
+
+            ligand_pdb = PDBFile(StringIO(pdb_block))
+            modeller.add(ligand_pdb.topology, ligand_pdb.positions)
+
+        modeller.addHydrogens(forcefield=None)
+
+        ff_solvent = ForceField("amber14/tip3p.xml")
+        modeller.addSolvent(
+            ff_solvent,
+            model="tip3p",
+            padding=1.0 * _openmm_unit.nanometer,
+            ionicStrength=0.15 * _openmm_unit.molar,
+        )
+
+        system_generator = _SystemGenerator(
+            forcefields=["amber14-all.xml", "amber14/tip3pfb.xml"],
+            small_molecule_forcefield="gaff-2.11",
+            molecules=[self.ligand_rdkit] if self.ligand_rdkit else [],
+            forcefield_kwargs={
+                "constraints": HBonds,
+                "rigidWater": True,
+                "ewaldErrorTolerance": 0.0005,
+            },
+        )
+        system = system_generator.create_system(
+            modeller.topology,
+            nonbondedMethod=_openmm_app.PME,
+            nonbondedCutoff=1.0 * _openmm_unit.nanometer,
+        )
+
+        barostat = _openmm.MonteCarloBarostat(
+            1.0 * _openmm_unit.atmospheres, 298.15 * _openmm_unit.kelvin,
+        )
+        system.addForce(barostat)
+
+        # Minimise energy and check threshold
+        integrator = _openmm.LangevinIntegrator(
+            298.15 * _openmm_unit.kelvin,
+            5.0 / _openmm_unit.picosecond,
+            0.002 * _openmm_unit.picosecond,
+        )
+        simulation = _openmm_app.Simulation(
+            modeller.topology, system, integrator,
+            _openmm.Platform.getPlatformByName("Reference"),
+        )
+        simulation.context.setPositions(modeller.positions)
+        simulation.minimizeEnergy(maxIterations=500)
+
+        state = simulation.context.getState(getEnergy=True)
+        energy_kcal = state.getPotentialEnergy().value_in_unit(
+            _openmm_unit.kilocalories_per_mole,
+        )
+
+        max_energy = CONFIG.fep_max_initial_energy_kcal_per_mol
+        if energy_kcal > max_energy:
+            log.warning(
+                "Pre-screen rejected: initial energy %.3f kcal/mol exceeds threshold %.3f",
+                energy_kcal, max_energy,
+            )
+            return FEPResistanceResult(
+                delta_delta_g=0.0,
+                confidence=0.0,
+                n_windows=0,
+                error="Skipped: High Initial Energy",
+            )
+        return None
