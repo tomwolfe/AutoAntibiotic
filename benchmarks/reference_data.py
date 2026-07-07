@@ -27,6 +27,14 @@ PBP2A_INACTIVES: List[Dict[str, str]] = _df_inactives.to_dict(orient="records")
 
 DECOY_COUNT: int = 100
 
+_herg_df: pd.DataFrame = pd.read_csv(_DATA_DIR / "herg_data.csv")
+_cyp_df: pd.DataFrame = pd.read_csv(_DATA_DIR / "cyp_data.csv")
+
+_HERG_BLOCKERS: List[str] = _herg_df.loc[_herg_df["label"] == 1, "smiles"].tolist()
+_SAFE_COMPOUNDS: List[str] = _herg_df.loc[_herg_df["label"] == 0, "smiles"].tolist()
+_CYP_INHIBITORS: List[str] = _cyp_df.loc[_cyp_df["label"] == 1, "smiles"].tolist()
+_NON_CYP_INHIBITORS: List[str] = _cyp_df.loc[_cyp_df["label"] == 0, "smiles"].tolist()
+
 def load_chembl_admet_subset() -> Dict[str, List[Dict[str, Any]]]:
     """Return an expanded training set for ML-ADMET models.
 
