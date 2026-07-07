@@ -21,7 +21,7 @@ from rdkit.DataStructs import TanimotoSimilarity
 
 from .config import CONFIG
 from .models import CompoundRecord
-from .io_utils import log
+from .io_utils import PipelineAudit, log
 
 try:
     from .analysis import _get_ml_admet_predictor, predict_herg_ml
@@ -907,6 +907,7 @@ def _filter_ml_admet(
 def apply_filters(
     records: Union[List[CompoundRecord], Iterator[CompoundRecord]],
     similarity_threshold: float = CONFIG.similarity_threshold,
+    audit: Optional[PipelineAudit] = None,
 ) -> List[CompoundRecord]:
     """Phase 2.2 — Apply structural, similarity, ADMET, PAINS, toxicity, and strain filters.
 
@@ -920,6 +921,9 @@ def apply_filters(
         7. Reactive group filter (BRENK catalog).
         8. 3D strain energy check (MMFF94 via ETKDGv3).
         9. Diversity check: if < 100 pass, relax similarity to 0.5.
+
+    When *audit* is provided, each dropped compound is recorded with the
+    filter name as the dropout reason.
 
     Returns filtered list of CompoundRecord.
     """
@@ -957,6 +961,8 @@ def apply_filters(
             ok, _ = filter_fn(record, mol)
             if not ok:
                 skipped[name] += 1
+                if audit is not None:
+                    audit.record_dropout(record.compound_id, f"Filter:{name}")
                 break
         else:
             passed.append(record)
@@ -989,7 +995,7 @@ def apply_filters(
             f"  Only {len(passed)} compounds passed strict filters (< {CONFIG.diversity_min_count}). "
             f"Relaxing similarity threshold to {CONFIG.similarity_threshold_relaxed} and re-running."
         )
-        return apply_filters(records, similarity_threshold=CONFIG.similarity_threshold_relaxed)
+        return apply_filters(records, similarity_threshold=CONFIG.similarity_threshold_relaxed, audit=audit)
 
     log.info("─── Phase 2 complete ───")
     return passed

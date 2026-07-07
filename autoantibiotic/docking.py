@@ -30,6 +30,7 @@ from .io_utils import (
     DockingParseError,
     DockingResultValidator,
     GninaError,
+    PipelineAudit,
     VinaError,
     OpenBabelError,
     log,
@@ -901,8 +902,13 @@ def _prepare_flexible_receptors(
 
 def _worker_dock_wrapper(
     args: Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int],
-) -> Tuple[str, Optional[float]]:
+) -> Tuple[str, Optional[float], Optional[str]]:
     """Module-level worker for :func:`_parallel_dock` (pool.map compatible).
+
+    Returns ``(cid, energy, error_reason)`` where *error_reason* is
+    ``"DockingFailure"`` when docking failed (energy is None) and
+    ``None`` otherwise.  Callers use the error reason to populate
+    :class:`~autoantibiotic.io_utils.PipelineAudit`.
 
     The per-job wall-clock timeout is enforced by :func:`run_tool` via
     ``subprocess.run(timeout=...)``, so no additional alarm mechanism is
@@ -915,16 +921,17 @@ def _worker_dock_wrapper(
 
     rng = np.random.default_rng(seed)
     if dry_run:
-        return cid, float(rng.uniform(-10.0, -5.0))
+        return cid, float(rng.uniform(-10.0, -5.0)), None
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        return cid, None
+        return cid, None, "DockingFailure"
     rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
     energy = dock_compound(
         rec, receptor_pdbqt, center, box_size,
         work_dir, tag, cache=None, use_cache=False,
     )
-    return cid, energy
+    error_reason = "DockingFailure" if energy is None else None
+    return cid, energy, error_reason
 
 
 def _parallel_dock(
@@ -938,16 +945,18 @@ def _parallel_dock(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
-) -> List[Tuple[str, Optional[float]]]:
+) -> List[Tuple[str, Optional[float], Optional[str]]]:
     """Dock a list of compounds in parallel with batched processing.
 
     Compounds are processed in batches (:attr:`CONFIG.batch_size_docking`,
     default 75) to allow periodic garbage collection and prevent memory
     bloat in worker processes.
 
-    Returns list of ``(compound_id, energy)`` tuples.
+    Returns list of ``(compound_id, energy, error_reason)`` tuples where
+    *error_reason* is ``"DockingFailure"`` when the compound could not be
+    docked and ``None`` otherwise.
     """
-    results: List[Tuple[str, Optional[float]]] = []
+    results: List[Tuple[str, Optional[float], Optional[str]]] = []
     to_dock: List[Tuple[str, str, str]] = []
 
     tool_name = "gnina" if CONFIG.use_gnina else "vina"
@@ -955,7 +964,7 @@ def _parallel_dock(
         cache_key = make_cache_key(smiles, tool_name)
         if use_cache and cache is not None and cache_key in cache:
             cached_val = cache[cache_key]
-            results.append((cid, cached_val))
+            results.append((cid, cached_val, None))
             log.debug(f"    Cache hit: {cid} ({tag})")
         else:
             to_dock.append((cid, smiles, cache_key))
@@ -986,8 +995,8 @@ def _parallel_dock(
                 )
             )
 
-        for (cid, _, cache_key), (_, energy) in zip(batch, mapped):
-            results.append((cid, energy))
+        for (cid, _, cache_key), (_, energy, err) in zip(batch, mapped):
+            results.append((cid, energy, err))
             if use_cache and cache is not None:
                 cache[cache_key] = energy
 
@@ -1189,6 +1198,7 @@ def _screen_ensemble(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
+    audit: Optional[PipelineAudit] = None,
 ) -> List[CompoundRecord]:
     """Ensemble docking against multiple receptor structures with consensus scoring.
 
@@ -1214,13 +1224,19 @@ def _screen_ensemble(
             work_dir, f"ens_alloc_{i}",
             cache=cache, use_cache=use_cache, dry_run=dry_run,
         )
-        receptor_energies.append([e for _, e in results])
+        receptor_energies.append([e for _, e, _ in results])
 
     # Phase 2: consensus scoring across receptors
     _apply_consensus_scoring(records, receptor_energies)
 
     n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
     log.info(f"  Ensemble allosteric docking complete: {n_scored}/{len(records)} scored.")
+
+    # Record compounds that failed on ALL receptors
+    if audit is not None:
+        for r in records:
+            if r.pb2pa_allosteric_energy is None:
+                audit.record_dropout(r.compound_id, "DockingFailure")
 
     scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
     scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
@@ -1236,7 +1252,7 @@ def _screen_ensemble(
                 work_dir, f"ens_act_{i}",
                 cache=cache, use_cache=use_cache, dry_run=dry_run,
             )
-            active_receptor_energies.append([e for _, e in results])
+            active_receptor_energies.append([e for _, e, _ in results])
         _apply_consensus_scoring(top50, active_receptor_energies, "pb2pa_active_energy")
 
     return scored[:CONFIG.top_n]
@@ -1329,6 +1345,7 @@ def _screen_standard(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
+    audit: Optional[PipelineAudit] = None,
 ) -> List[CompoundRecord]:
     """Standard Vina/GNINA docking: allosteric site → top 50 to active site."""
     pb2pa = targets["PBP2a"]
@@ -1345,9 +1362,11 @@ def _screen_standard(
     )
 
     cid_to_record = {r.compound_id: r for r in records}
-    for cid, energy in allosteric_results:
+    for cid, energy, err in allosteric_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_allosteric_energy = energy
+        if err is not None and audit is not None:
+            audit.record_dropout(cid, err)
 
     n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
     log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
@@ -1366,9 +1385,11 @@ def _screen_standard(
         cache=cache, use_cache=use_cache, dry_run=dry_run,
     )
 
-    for cid, energy in active_results:
+    for cid, energy, err in active_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_active_energy = energy
+        if err is not None and audit is not None:
+            audit.record_dropout(cid, err)
 
     return scored[:CONFIG.top_n]
 
@@ -1474,6 +1495,7 @@ def screen_library(
     use_cache: bool = False,
     water_results: Optional[WaterAnalysisResult] = None,
     dry_run: bool = CONFIG.dry_run,
+    audit: Optional[PipelineAudit] = None,
 ) -> List[CompoundRecord]:
     """Phase 3 — Virtual screening.
 
@@ -1488,6 +1510,8 @@ def screen_library(
 
     When *water_results* is provided, it is forwarded to the ML rescoring
     stage for water displacement correction in MM-GB/SA.
+
+    When *audit* is provided, docking failures are recorded as dropouts.
 
     Returns top 10 candidates.
     """
@@ -1506,6 +1530,7 @@ def screen_library(
             log.info(f"  Ensemble docking (method={CONFIG.consensus_scoring_method}) against {len(ensemble_targets)} structures…")
             top_candidates = _screen_ensemble(
                 records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run,
+                audit=audit,
             )
         elif CONFIG.flexible_docking and _HAVE_BIOPDB:
             top_candidates = _screen_flexible(
@@ -1514,6 +1539,7 @@ def screen_library(
         else:
             top_candidates = _screen_standard(
                 records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run,
+                audit=audit,
             )
 
         # ML rescoring on top N Vina hits

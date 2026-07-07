@@ -389,6 +389,18 @@ class PipelineConfig:
     When set, the pipeline will retrain the MetaScorer with the new data."""
 
     # ── Reporting parameters ──
+    # ── Audit / observability ──
+    audit_enabled: bool = True
+    """When True, track compound dropout reasons and enforce health
+    thresholds between pipeline phases."""
+    max_dropout_rate: float = 0.5
+    """Maximum allowed fraction of compounds lost in a single phase
+    before :class:`~autoantibiotic.io_utils.PipelineHealthError` is
+    raised.  Default 0.5 (50 %)."""
+    audit_output_name: str = "pipeline_audit.json"
+    """Filename for the audit summary JSON written during
+    :meth:`~autoantibiotic.orchestrator.PipelineOrchestrator._finalize`."""
+
     csv_report_name: str = "top_candidates.csv"
     html_report_name: str = "report.html"
     pipeline_log_name: str = "pipeline.log"

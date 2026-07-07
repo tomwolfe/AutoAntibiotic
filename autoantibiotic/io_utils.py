@@ -8,6 +8,7 @@ import os
 import random
 import re
 import subprocess
+import threading
 import time
 import warnings
 from pathlib import Path
@@ -48,6 +49,98 @@ class OpenBabelError(AutoAntibioticError):
 
 class DockingParseError(AutoAntibioticError):
     """Error raised when docking output cannot be parsed or validation fails."""
+
+
+class PipelineHealthError(AutoAntibioticError):
+    """Error raised when the dropout rate in a pipeline phase exceeds
+    :attr:`~autoantibiotic.config.PipelineConfig.max_dropout_rate`."""
+
+
+class PipelineAudit:
+    """Tracks compound dropout reasons and enforces health thresholds
+    between pipeline phases.
+
+    Each compound that fails a filter, docking run, or other pipeline
+    step is recorded with a human-readable reason string.  After a
+    phase completes, :meth:`check_health` compares the dropout rate
+    against :attr:`CONFIG.max_dropout_rate` and raises
+    :class:`PipelineHealthError` if the threshold is exceeded.
+
+    Thread-safe via :class:`threading.Lock`.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.dropouts: Dict[str, List[str]] = {}
+        self.total_processed: int = 0
+        self.total_dropped: int = 0
+
+    def record_dropout(self, compound_id: str, reason: str) -> None:
+        """Record that *compound_id* was dropped for *reason*.
+
+        Multiple reasons for the same compound (e.g. a filter fail
+        *and* a docking fail on a different path) are accumulated.
+        """
+        with self._lock:
+            if compound_id not in self.dropouts:
+                self.dropouts[compound_id] = []
+            self.dropouts[compound_id].append(reason)
+            self.total_dropped += 1
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Return a snapshot dict of audit statistics.
+
+        Keys include ``total_processed``, ``total_dropped``,
+        ``dropout_rate``, ``n_unique_compounds_dropped``, and
+        ``top_reasons`` (list of ``(reason, count)`` sorted descending).
+        """
+        from collections import Counter
+        reason_counts: Counter = Counter()
+        for reasons in self.dropouts.values():
+            for r in reasons:
+                reason_counts[r] += 1
+        top = reason_counts.most_common()
+        total = self.total_processed
+        rate = (self.total_dropped / total) if total > 0 else 0.0
+        return {
+            "total_processed": self.total_processed,
+            "total_dropped": self.total_dropped,
+            "dropout_rate": round(rate, 4),
+            "n_unique_compounds_dropped": len(self.dropouts),
+            "top_reasons": [{"reason": r, "count": c} for r, c in top],
+        }
+
+    def check_health(self, total_input: int, phase_name: str) -> None:
+        """Compare the current dropout tally against *total_input*.
+
+        If ``(total_dropped / total_input) > CONFIG.max_dropout_rate``,
+        raises :class:`PipelineHealthError` with an informative message.
+
+        Also updates ``self.total_processed``.
+        """
+        from .config import CONFIG
+        self.total_processed = total_input
+        rate = self.total_dropped / total_input if total_input > 0 else 0.0
+        threshold = CONFIG.max_dropout_rate
+        if rate > threshold:
+            summary = self.get_summary()
+            raise PipelineHealthError(
+                f"Pipeline health check FAILED in phase '{phase_name}': "
+                f"dropout rate {rate:.1%} exceeds threshold {threshold:.0%}. "
+                f"({self.total_dropped} dropped / {total_input} input). "
+                f"Top reasons: {summary['top_reasons'][:3]}"
+            )
+
+    def set_total_processed(self, n: int) -> None:
+        """Explicitly set the total number of compounds entering the phase."""
+        self.total_processed = n
+
+    def reset(self) -> None:
+        """Clear all accumulated state (for testing or re-use)."""
+        with self._lock:
+            self.dropouts.clear()
+            self.total_processed = 0
+            self.total_dropped = 0
 
 
 _TOOL_ERROR_MESSAGES: Dict[str, Dict[str, str]] = {

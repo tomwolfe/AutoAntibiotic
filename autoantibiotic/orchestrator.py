@@ -6,6 +6,7 @@ Encapsulates the full discovery pipeline as a class with phase-by-phase methods.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -23,6 +24,8 @@ from .io_utils import (
     ensure_output_dir,
     load_json_cache,
     log,
+    PipelineAudit,
+    PipelineHealthError,
     save_json_cache,
     set_global_seed,
     verify_dependencies,
@@ -73,6 +76,9 @@ class PipelineOrchestrator:
         self.redock_rmsd: Optional[float] = None
         self.n_total: int = 0
         self.n_filtered: int = 0
+        self.audit: Optional[PipelineAudit] = (
+            PipelineAudit() if self.config.audit_enabled else None
+        )
 
     def run(self) -> None:
         """Execute the full pipeline from preparation through reporting."""
@@ -187,8 +193,11 @@ class PipelineOrchestrator:
             )
         self.n_total = len(self.all_records)
 
-        self.filtered = apply_filters(self.all_records)
+        self.filtered = apply_filters(self.all_records, audit=self.audit)
         self.n_filtered = len(self.filtered)
+
+        if self.audit is not None:
+            self.audit.check_health(self.n_total, "Library Filtering")
 
         if self.n_filtered == 0:
             log.warning("  No compounds passed filters. Halting pipeline.")
@@ -200,7 +209,11 @@ class PipelineOrchestrator:
             self.filtered, self.targets, str(self.config.work_dir),
             self.deps, cache=self.cache, use_cache=self.use_cache,
             water_results=self.water_results, dry_run=self.config.dry_run,
+            audit=self.audit,
         )
+
+        if self.audit is not None:
+            self.audit.check_health(len(self.filtered), "Docking")
 
         if not self.top_candidates:
             log.warning("  No candidates after screening. Halting pipeline.")
@@ -620,11 +633,26 @@ class PipelineOrchestrator:
             log.warning(f"  Water analysis failed: {exc}")
 
     def _finalize(self) -> None:
-        """Save cache and print summary."""
+        """Save cache, audit summary, and print summary."""
         if self.use_cache:
             cache_path = self.config.output_dir / self.config.cache_name
             save_json_cache(cache_path, self.cache)
             log.info(f"  Cache saved ({len(self.cache)} entries).")
+
+        if self.audit is not None:
+            audit_path = self.config.output_dir / self.config.audit_output_name
+            try:
+                summary = self.audit.get_summary()
+                audit_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(audit_path, "w") as f:
+                    json.dump(summary, f, indent=2)
+                log.info(f"  Audit summary saved to {audit_path}")
+                dr = summary.get("dropout_rate", 0)
+                log.info(f"  Total processed: {summary['total_processed']} | "
+                         f"Dropped: {summary['total_dropped']} | "
+                         f"Rate: {dr:.1%}")
+            except Exception as exc:
+                log.warning(f"  Failed to save audit summary: {exc}")
 
         print_summary(
             self.n_total, self.n_filtered, self.top_candidates,

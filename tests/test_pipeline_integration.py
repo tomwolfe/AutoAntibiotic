@@ -200,6 +200,135 @@ class TestForceMDForMetaScoring:
         assert CONFIG.force_md_for_meta_scoring is False
 
 
+# ── PipelineAudit tests ──────────────────────────────────────────
+
+
+class TestPipelineAudit:
+    """Verify the PipelineAudit dropout tracking and health check."""
+
+    def test_audit_tracks_dropouts(self) -> None:
+        """Record dropouts and verify the audit log contains correct reasons."""
+        from autoantibiotic.io_utils import PipelineAudit
+
+        audit = PipelineAudit()
+        audit.set_total_processed(10)
+
+        audit.record_dropout("AA-001", "Filter:strain")
+        audit.record_dropout("AA-002", "Filter:admet")
+        audit.record_dropout("AA-003", "Filter:strain")
+        audit.record_dropout("AA-004", "DockingFailure")
+
+        summary = audit.get_summary()
+        assert summary["total_dropped"] == 4
+        assert summary["n_unique_compounds_dropped"] == 4
+        assert summary["total_processed"] == 10
+        assert summary["dropout_rate"] == 0.4
+
+        top_reasons = summary["top_reasons"]
+        assert top_reasons[0]["reason"] == "Filter:strain"
+        assert top_reasons[0]["count"] == 2
+
+    def test_audit_accumulates_multiple_reasons(self) -> None:
+        """A single compound may be dropped for multiple reasons."""
+        from autoantibiotic.io_utils import PipelineAudit
+
+        audit = PipelineAudit()
+        audit.set_total_processed(1)
+        audit.record_dropout("AA-001", "Filter:pains")
+        audit.record_dropout("AA-001", "DockingFailure")
+
+        summary = audit.get_summary()
+        assert summary["total_dropped"] == 2
+        assert summary["n_unique_compounds_dropped"] == 1
+        assert len(audit.dropouts["AA-001"]) == 2
+
+    def test_audit_no_dropouts(self) -> None:
+        """When no compounds are dropped, summary reflects zero dropouts."""
+        from autoantibiotic.io_utils import PipelineAudit
+
+        audit = PipelineAudit()
+        audit.set_total_processed(5)
+        summary = audit.get_summary()
+        assert summary["total_dropped"] == 0
+        assert summary["dropout_rate"] == 0.0
+        assert summary["top_reasons"] == []
+
+    def test_audit_reset(self) -> None:
+        """Reset clears all accumulated state."""
+        from autoantibiotic.io_utils import PipelineAudit
+
+        audit = PipelineAudit()
+        audit.record_dropout("AA-001", "Filter:strain")
+        audit.set_total_processed(1)
+        assert audit.total_dropped == 1
+        audit.reset()
+        assert audit.total_dropped == 0
+        assert audit.total_processed == 0
+        assert len(audit.dropouts) == 0
+
+    def test_health_check_raises_on_high_dropout(self) -> None:
+        """When dropout rate exceeds max_dropout_rate, raise PipelineHealthError."""
+        from autoantibiotic.io_utils import PipelineAudit, PipelineHealthError
+
+        # Temporarily lower the threshold
+        original = CONFIG.max_dropout_rate
+        try:
+            CONFIG.max_dropout_rate = 0.1
+            audit = PipelineAudit()
+
+            # 5 out of 10 dropped = 50% > 10% threshold
+            for i in range(5):
+                audit.record_dropout(f"CMP-{i:04d}", "Filter:test")
+
+            with pytest.raises(PipelineHealthError) as exc_info:
+                audit.check_health(total_input=10, phase_name="TestPhase")
+            assert "TestPhase" in str(exc_info.value)
+            assert "50" in str(exc_info.value)
+        finally:
+            CONFIG.max_dropout_rate = original
+
+    def test_health_check_passes_on_low_dropout(self) -> None:
+        """When dropout rate is below threshold, check_health does not raise."""
+        from autoantibiotic.io_utils import PipelineAudit, PipelineHealthError
+
+        original = CONFIG.max_dropout_rate
+        try:
+            CONFIG.max_dropout_rate = 0.5
+            audit = PipelineAudit()
+
+            # 1 out of 10 dropped = 10% < 50% threshold
+            audit.record_dropout("CMP-0001", "Filter:test")
+            audit.check_health(total_input=10, phase_name="TestPhase")
+        finally:
+            CONFIG.max_dropout_rate = original
+
+    def test_apply_filters_with_audit(self) -> None:
+        """Filters record dropouts in the audit when one is provided."""
+        from autoantibiotic.io_utils import PipelineAudit
+        from autoantibiotic.library_gen import apply_filters
+        from rdkit import Chem
+
+        # Build a record that will fail the β-lactam filter
+        mol = Chem.MolFromSmiles("CC1(C)SC2C(=O)NC21")  # fused-ring β-lactam
+        record = type("Record", (), {
+            "compound_id": "TEST-001",
+            "smiles": Chem.MolToSmiles(mol),
+            "mol": mol,
+            "passes_lipinski": False,
+            "qed_score": 0.0,
+            "passes_pains": False,
+            "max_similarity": 0.0,
+        })()
+
+        audit = PipelineAudit()
+        result = apply_filters([record], audit=audit)
+        # The compound should be filtered out; audit should have a reason
+        assert len(result) == 0
+        assert "TEST-001" in audit.dropouts
+        # The first filter applied is "structural" (β-lactam check)
+        assert any("Filter:structural" in r for r in audit.dropouts["TEST-001"])
+
+
 # ── Integration test: small pipeline run ─────────────────────────
 
 class TestSmallPipelineRun:
