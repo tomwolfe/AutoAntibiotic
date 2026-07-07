@@ -330,6 +330,58 @@ class FEPResistanceCalculator:
         factory = AbsoluteAlchemicalFactory()
         lambda_protocol = np.linspace(0.0, 1.0, n_windows)
 
+        # ── Adaptive lambda refinement (Stages 1 & 2) ────────────
+        if CONFIG.fep_adaptive_lambda_insertion and CONFIG.fep_initial_short_steps > 0:
+            try:
+                log.info(
+                    "Adaptive lambda: running diagnostic with %d steps "
+                    "on %d windows", CONFIG.fep_initial_short_steps,
+                    len(lambda_protocol),
+                )
+                u_kln_diag = self._run_diagnostic_u_kln(
+                    wt_system, wt_topology, wt_positions,
+                    alchemical_region_wt, lambda_protocol,
+                )
+                mbar = MBAR.from_energy_matrix(
+                    u_kln_diag, temperature=temperature,
+                )
+                poor_indices = self._check_overlap_matrix(
+                    mbar, lambda_protocol,
+                )
+                if poor_indices:
+                    overlap_matrix = mbar.getOverlapMatrix()
+                    log.info(
+                        "Adaptive lambda: %d poor-overlap pairs found, "
+                        "refining schedule.", len(poor_indices),
+                    )
+                    log.info(
+                        "Initial lambda schedule: %s",
+                        np.array_str(lambda_protocol, precision=4),
+                    )
+                    log.info(
+                        "Overlap matrix:\n%s",
+                        np.array_str(overlap_matrix, precision=4),
+                    )
+                    lambda_protocol = self._refine_lambda_schedule(
+                        lambda_protocol, poor_indices,
+                    )
+                    log.info(
+                        "Refined lambda schedule: %s",
+                        np.array_str(lambda_protocol, precision=4),
+                    )
+                else:
+                    log.info(
+                        "Adaptive lambda: all overlaps above threshold "
+                        "(%.3f), using initial schedule.",
+                        CONFIG.fep_overlap_threshold,
+                    )
+            except Exception as exc:
+                log.warning(
+                    "Adaptive lambda refinement failed: %s. "
+                    "Falling back to initial %d-window schedule.",
+                    exc, len(lambda_protocol),
+                )
+
         checkpoint_dir: Optional[str] = None
         if CONFIG.fep_enable_checkpointing:
             checkpoint_dir = str(CONFIG.output_dir / "fep_checkpoints")
@@ -736,6 +788,199 @@ class FEPResistanceCalculator:
             total = topology.getNumAtoms()
             indices = list(range(n_protein, min(n_protein + n_lig_heavy * 4, total)))
         return indices
+
+    @staticmethod
+    def _check_overlap_matrix(
+        mbar_instance: Any,
+        lambda_schedule: np.ndarray,
+    ) -> List[int]:
+        """Check the MBAR overlap matrix and return indices of adjacent
+        lambda windows where the overlap integral is below the threshold.
+
+        Parameters
+        ----------
+        mbar_instance
+            A fitted ``openmmtools.multistate.MBAR`` instance whose
+            ``getOverlapMatrix()`` returns an ``(n_windows, n_windows)``
+            overlap matrix.
+        lambda_schedule : np.ndarray
+            Array of lambda values for each window, used only to
+            determine the number of windows.
+
+        Returns
+        -------
+        List[int]
+            Indices *i* such that the overlap between window *i* and
+            *i+1* is below ``CONFIG.fep_overlap_threshold``.
+        """
+        overlap_matrix = mbar_instance.getOverlapMatrix()
+        n_windows = len(lambda_schedule)
+        poor: List[int] = []
+        for i in range(n_windows - 1):
+            overlap = overlap_matrix[i, i + 1]
+            if overlap < CONFIG.fep_overlap_threshold:
+                poor.append(i)
+        return poor
+
+    @staticmethod
+    def _refine_lambda_schedule(
+        lambda_schedule: np.ndarray,
+        poor_indices: List[int],
+    ) -> np.ndarray:
+        """Insert intermediate lambda windows at poor-overlap pairs.
+
+        Parameters
+        ----------
+        lambda_schedule : np.ndarray
+            Current lambda schedule (sorted, values in [0, 1]).
+        poor_indices : List[int]
+            Indices of windows where the overlap with the next window
+            is insufficient (from ``_check_overlap_matrix``).
+
+        Returns
+        -------
+        np.ndarray
+            Refined lambda schedule with intermediate windows inserted,
+            capped at ``CONFIG.fep_max_lambda_windows``.
+        """
+        new_schedule = list(float(v) for v in lambda_schedule)
+        inserted = 0
+        max_windows = CONFIG.fep_max_lambda_windows
+
+        for idx in sorted(poor_indices, reverse=True):
+            if len(new_schedule) >= max_windows:
+                log.warning(
+                    "Adaptive lambda: max windows (%d) reached, "
+                    "cannot insert more.", max_windows,
+                )
+                break
+            mid = (new_schedule[idx] + new_schedule[idx + 1]) * 0.5
+            new_schedule.insert(idx + 1, mid)
+            inserted += 1
+            log.info(
+                "Inserting intermediate lambda window at λ=%.4f "
+                "between windows %d (λ=%.4f) and %d (λ=%.4f)",
+                mid, idx, new_schedule[idx], idx + 2, new_schedule[idx + 2],
+            )
+
+        if inserted:
+            log.info(
+                "Refined lambda schedule: %d windows → %d windows",
+                len(lambda_schedule), len(new_schedule),
+            )
+        return np.array(sorted(new_schedule))
+
+    def _run_diagnostic_u_kln(
+        self,
+        system: _openmm.System,
+        topology: _openmm_app.Topology,
+        positions: _openmm_unit.Quantity,
+        alchemical_region: Any,
+        lambda_schedule: np.ndarray,
+    ) -> np.ndarray:
+        """Run a short diagnostic simulation and return the u_kln matrix.
+
+        Parameters
+        ----------
+        system : openmm.System
+            The OpenMM System to simulate.
+        topology : openmm.app.Topology
+            The corresponding Topology.
+        positions : openmm.unit.Quantity
+            Initial atomic positions.
+        alchemical_region : AlchemicalRegion
+            Region defining which atoms are alchemically modified.
+        lambda_schedule : np.ndarray
+            Lambda values for each window.
+
+        Returns
+        -------
+        np.ndarray
+            The ``(n_windows, max_n_frames, n_windows)`` reduced-potential
+            matrix suitable for ``MBAR.from_energy_matrix``.
+        """
+        from openmmtools.alchemy import (
+            AbsoluteAlchemicalFactory,
+            AlchemicalState,
+        )
+
+        n_windows = len(lambda_schedule)
+        temperature = 298.15 * _openmm_unit.kelvin
+        kT = _openmm_unit.MOLAR_GAS_CONSTANT_R * temperature
+        n_steps = CONFIG.fep_initial_short_steps
+        timestep = CONFIG.fep_time_step_ps * _openmm_unit.picosecond
+        collision_rate = 5.0 / _openmm_unit.picosecond
+
+        factory = AbsoluteAlchemicalFactory()
+        platform = _openmm.Platform.getPlatformByName("Reference")
+        all_samples: List[List[np.ndarray]] = [[] for _ in range(n_windows)]
+
+        for i, lam in enumerate(lambda_schedule):
+            alchemical_state = AlchemicalState.from_system(system)
+            alchemical_state.lambda_sterics = lam
+            alchemical_state.lambda_electrostatics = lam
+            alchemical_state.lambda_torsions = lam
+
+            alchemical_system = factory.create_alchemical_system(
+                system, alchemical_region,
+                alchemical_state=alchemical_state,
+            )
+
+            integrator = _openmm.LangevinIntegrator(
+                temperature, collision_rate, timestep,
+            )
+            integrator.setRandomSeed(CONFIG.random_seed + i)
+
+            simulation = _openmm_app.Simulation(
+                topology, alchemical_system, integrator, platform,
+            )
+            simulation.context.setPositions(positions)
+            simulation.minimizeEnergy(maxIterations=n_steps)
+            simulation.step(n_steps)
+
+            state = simulation.context.getState(
+                getEnergy=True, getPositions=True, getParameters=True,
+            )
+            current_pos = state.getPositions()
+            ref_potential = state.getPotentialEnergy()
+
+            u_k = np.zeros(n_windows)
+            for j in range(n_windows):
+                if j == i:
+                    pot_diff = ref_potential - ref_potential
+                else:
+                    alchemical_state_j = AlchemicalState.from_system(system)
+                    alchemical_state_j.lambda_sterics = lambda_schedule[j]
+                    alchemical_state_j.lambda_electrostatics = lambda_schedule[j]
+                    alchemical_state_j.lambda_torsions = lambda_schedule[j]
+
+                    alchemical_system_j = factory.create_alchemical_system(
+                        system, alchemical_region,
+                        alchemical_state=alchemical_state_j,
+                    )
+                    context_j = _openmm.Context(
+                        alchemical_system_j, integrator, platform,
+                    )
+                    context_j.setPositions(current_pos)
+                    energy_j = context_j.getState(
+                        getEnergy=True
+                    ).getPotentialEnergy()
+                    pot_diff = energy_j - ref_potential
+                    del context_j
+
+                u_k[j] = (pot_diff / kT).value_in_unit(
+                    _openmm_unit.kilojoules_per_mole,
+                )
+
+            all_samples[i].append(u_k)
+
+        max_n = max(len(s) for s in all_samples)
+        u_kln = np.full((n_windows, max_n, n_windows), np.nan)
+        for k in range(n_windows):
+            for n, u_vec in enumerate(all_samples[k]):
+                u_kln[k, n, :] = u_vec
+
+        return u_kln
 
     def _heuristic_fallback(self) -> FEPResistanceResult:
         """Deprecated / Heuristic Only — no longer used.

@@ -338,6 +338,24 @@ class PipelineConfig:
     so that interrupted simulations can be resumed from the last
     completed window.  When False (or when checkpoint_dir is None),
     no checkpointing is performed."""
+    fep_adaptive_lambda_insertion: bool = True
+    """When True, use adaptive lambda window refinement: run a short
+    diagnostic simulation, compute the MBAR overlap matrix, and insert
+    intermediate lambda windows where adjacent-window overlap is below
+    ``fep_overlap_threshold``.  Set to False to use the original fixed
+    lambda schedule."""
+    fep_overlap_threshold: float = 0.03
+    """Minimum acceptable MBAR overlap integral between adjacent lambda
+    windows.  If any adjacent pair has overlap below this threshold, an
+    intermediate lambda window is inserted at the midpoint.  Only used
+    when ``fep_adaptive_lambda_insertion`` is True."""
+    fep_max_lambda_windows: int = 21
+    """Hard cap on the number of lambda windows after adaptive insertion.
+    Prevents unbounded window proliferation."""
+    fep_initial_short_steps: int = 100
+    """Number of steps for the initial diagnostic run used to assess
+    phase-space overlap between adjacent lambda windows.  Only used
+    when ``fep_adaptive_lambda_insertion`` is True."""
     fep_top_n: int = 5
     """Maximum number of top candidates to run rigorous FEP on.
     FEP is only triggered if the candidate is within this many top

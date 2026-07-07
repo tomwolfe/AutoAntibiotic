@@ -660,3 +660,338 @@ class TestFEPConvergenceCheck:
         """Config has defaults for all checkpoint-related fields."""
         assert CONFIG.fep_enable_checkpointing is True
         assert CONFIG.fep_uncertainty_threshold == 1.0
+
+
+class TestFEPAdaptiveLambdaInsertion:
+    """Tests for adaptive lambda window insertion based on MBAR
+    overlap matrix analysis."""
+
+    def test_check_overlap_matrix_detects_poor_overlap(self):
+        """_check_overlap_matrix returns index of the pair with insufficient overlap.
+
+        Given an overlap matrix where window (2,3) has overlap 0.01,
+        the method should return [2].
+        """
+        n_windows = 5
+        overlap_matrix = np.ones((n_windows, n_windows)) * 0.5
+        overlap_matrix[2, 3] = 0.01
+        overlap_matrix[3, 2] = 0.01
+
+        mock_mbar = MagicMock()
+        mock_mbar.getOverlapMatrix.return_value = overlap_matrix
+
+        lambda_schedule = np.linspace(0.0, 1.0, n_windows)
+        poor = FEPResistanceCalculator._check_overlap_matrix(
+            mock_mbar, lambda_schedule,
+        )
+        assert poor == [2], f"Expected [2], got {poor}"
+
+    def test_check_overlap_matrix_all_good(self):
+        """When all overlaps are above threshold, returns empty list."""
+        n_windows = 5
+        overlap_matrix = np.ones((n_windows, n_windows)) * 0.5
+
+        mock_mbar = MagicMock()
+        mock_mbar.getOverlapMatrix.return_value = overlap_matrix
+
+        lambda_schedule = np.linspace(0.0, 1.0, n_windows)
+        poor = FEPResistanceCalculator._check_overlap_matrix(
+            mock_mbar, lambda_schedule,
+        )
+        assert poor == [], f"Expected [], got {poor}"
+
+    def test_check_overlap_matrix_threshold_boundary(self):
+        """Overlap exactly at threshold is NOT considered poor."""
+        n_windows = 3
+        overlap_matrix = np.ones((n_windows, n_windows)) * 0.03
+
+        mock_mbar = MagicMock()
+        mock_mbar.getOverlapMatrix.return_value = overlap_matrix
+
+        lambda_schedule = np.linspace(0.0, 1.0, n_windows)
+        poor = FEPResistanceCalculator._check_overlap_matrix(
+            mock_mbar, lambda_schedule,
+        )
+        assert poor == [], "Overlap at threshold should not trigger insertion"
+
+    def test_refine_lambda_schedule_inserts_midpoint(self):
+        """_refine_lambda_schedule inserts a window at the midpoint
+        between the poor-overlap pair."""
+        lambda_schedule = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+        poor_indices = [2]  # poor overlap between 0.5 and 0.75
+
+        refined = FEPResistanceCalculator._refine_lambda_schedule(
+            lambda_schedule, poor_indices,
+        )
+        assert len(refined) == 6, f"Expected 6 windows, got {len(refined)}"
+        assert 0.625 in refined, "Expected 0.625 (midpoint) in refined schedule"
+
+    def test_refine_lambda_schedule_multiple_pairs(self):
+        """Multiple poor-overlap pairs each get an inserted window."""
+        lambda_schedule = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+        poor_indices = [0, 2]
+
+        refined = FEPResistanceCalculator._refine_lambda_schedule(
+            lambda_schedule, poor_indices,
+        )
+        assert len(refined) == 7, f"Expected 7 windows, got {len(refined)}"
+        assert 0.125 in refined  # midpoint between 0.0 and 0.25
+        assert 0.625 in refined  # midpoint between 0.5 and 0.75
+
+    def test_refine_lambda_schedule_respects_max_windows(self):
+        """_refine_lambda_schedule stops inserting when max windows is reached."""
+        original_max = CONFIG.fep_max_lambda_windows
+        CONFIG.fep_max_lambda_windows = 6
+        try:
+            lambda_schedule = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+            poor_indices = [0, 1, 2, 3]
+
+            refined = FEPResistanceCalculator._refine_lambda_schedule(
+                lambda_schedule, poor_indices,
+            )
+            assert len(refined) == 6, (
+                f"Expected 6 (capped at max), got {len(refined)}"
+            )
+            assert sorted(refined) == list(refined), "Schedule must be sorted"
+        finally:
+            CONFIG.fep_max_lambda_windows = original_max
+
+    def test_refine_lambda_schedule_returns_sorted(self):
+        """Refined schedule is always monotonically increasing."""
+        lambda_schedule = np.array([0.0, 0.33, 0.67, 1.0])
+        poor_indices = [0, 2]
+
+        refined = FEPResistanceCalculator._refine_lambda_schedule(
+            lambda_schedule, poor_indices,
+        )
+        for i in range(len(refined) - 1):
+            assert refined[i] < refined[i + 1], (
+                f"Schedule not sorted at index {i}: {refined}"
+            )
+
+    def test_adaptive_lambda_integration(self):
+        """Full adaptive pipeline inserts window when overlap is poor."""
+        import openmmtools.multistate as _oms
+        import openmmtools.alchemy as _alchemy
+
+        original_adaptive = CONFIG.fep_adaptive_lambda_insertion
+        original_overlap = CONFIG.fep_overlap_threshold
+        original_short = CONFIG.fep_initial_short_steps
+        original_windows = CONFIG.fep_lambda_windows
+        original_checkpoint = CONFIG.fep_enable_checkpointing
+        CONFIG.fep_adaptive_lambda_insertion = True
+        CONFIG.fep_overlap_threshold = 0.03
+        CONFIG.fep_initial_short_steps = 10
+        CONFIG.fep_lambda_windows = 5
+        CONFIG.fep_enable_checkpointing = False
+
+        try:
+            n_windows = 5
+            overlap_matrix = np.ones((n_windows, n_windows)) * 0.5
+            overlap_matrix[2, 3] = 0.01
+            overlap_matrix[3, 2] = 0.01
+
+            mock_mbar_instance = MagicMock()
+            mock_mbar_instance.getOverlapMatrix.return_value = overlap_matrix
+
+            mock_mbar_class = MagicMock()
+            mock_mbar_class.from_energy_matrix.return_value = mock_mbar_instance
+
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb="wt.pdb",
+                receptor_mut_pdb="mut.pdb",
+                ligand_smiles="CC(=O)OC",
+            )
+
+            with patch.object(
+                _oms, "MBAR", mock_mbar_class, create=True,
+            ), patch.object(
+                calc, "_run_diagnostic_u_kln",
+                return_value=np.ones((5, 1, 5)),
+            ), patch.object(
+                calc, "_build_system",
+                return_value=(MagicMock(), MagicMock(), MagicMock()),
+            ), patch("autoantibiotic.fep_engine._openmm_unit.kelvin",
+                     MagicMock()), patch(
+                "autoantibiotic.fep_engine._openmm_unit.MOLAR_GAS_CONSTANT_R",
+                MagicMock(),
+            ), patch.object(
+                calc, "_get_ligand_atom_indices",
+                return_value=[0, 1, 2],
+            ), patch.object(
+                _alchemy, "AlchemicalRegion", MagicMock(), create=True,
+            ), patch.object(
+                _alchemy, "AbsoluteAlchemicalFactory", MagicMock(), create=True,
+            ), patch.object(
+                _alchemy, "AlchemicalState", MagicMock(), create=True,
+            ), patch(
+                "autoantibiotic.fep_engine._openmm",
+            ), patch(
+                "autoantibiotic.fep_engine._openmm_app",
+            ):
+                calc._compute_fep_delta_ddg()
+
+            assert mock_mbar_class.from_energy_matrix.called, (
+                "MBAR.from_energy_matrix should have been called"
+            )
+            assert mock_mbar_instance.getOverlapMatrix.called, (
+                "getOverlapMatrix should have been called"
+            )
+        finally:
+            CONFIG.fep_adaptive_lambda_insertion = original_adaptive
+            CONFIG.fep_overlap_threshold = original_overlap
+            CONFIG.fep_initial_short_steps = original_short
+            CONFIG.fep_lambda_windows = original_windows
+            CONFIG.fep_enable_checkpointing = original_checkpoint
+
+    def test_adaptive_lambda_skips_when_disabled(self):
+        """When fep_adaptive_lambda_insertion is False, the original
+        fixed-window schedule is used unchanged."""
+        original_adaptive = CONFIG.fep_adaptive_lambda_insertion
+        CONFIG.fep_adaptive_lambda_insertion = False
+        try:
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb="wt.pdb",
+                receptor_mut_pdb="mut.pdb",
+                ligand_smiles="CC(=O)OC",
+            )
+            assert calc is not None
+            assert not CONFIG.fep_adaptive_lambda_insertion
+        finally:
+            CONFIG.fep_adaptive_lambda_insertion = original_adaptive
+
+    def test_adaptive_lambda_all_good_skips_refinement(self, caplog):
+        """When all overlaps are above threshold, no windows are inserted
+        and a log message confirms no refinement needed."""
+        import logging
+        import openmmtools.multistate as _oms
+        import openmmtools.alchemy as _alchemy
+        caplog.set_level(logging.INFO)
+
+        n_windows = 5
+        overlap_matrix = np.ones((n_windows, n_windows)) * 0.5
+
+        mock_mbar_instance = MagicMock()
+        mock_mbar_instance.getOverlapMatrix.return_value = overlap_matrix
+
+        mock_mbar_class = MagicMock()
+        mock_mbar_class.from_energy_matrix.return_value = mock_mbar_instance
+
+        original_adaptive = CONFIG.fep_adaptive_lambda_insertion
+        original_short = CONFIG.fep_initial_short_steps
+        original_windows = CONFIG.fep_lambda_windows
+        original_checkpoint = CONFIG.fep_enable_checkpointing
+        CONFIG.fep_adaptive_lambda_insertion = True
+        CONFIG.fep_initial_short_steps = 10
+        CONFIG.fep_lambda_windows = 5
+        CONFIG.fep_enable_checkpointing = False
+
+        try:
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb="wt.pdb",
+                receptor_mut_pdb="mut.pdb",
+                ligand_smiles="CC(=O)OC",
+            )
+
+            with patch.object(
+                _oms, "MBAR", mock_mbar_class, create=True,
+            ), patch.object(
+                calc, "_run_diagnostic_u_kln",
+                return_value=np.ones((5, 1, 5)),
+            ), patch.object(
+                calc, "_build_system",
+                return_value=(MagicMock(), MagicMock(), MagicMock()),
+            ), patch("autoantibiotic.fep_engine._openmm_unit.kelvin",
+                     MagicMock()), patch(
+                "autoantibiotic.fep_engine._openmm_unit.MOLAR_GAS_CONSTANT_R",
+                MagicMock(),
+            ), patch.object(calc, "_get_ligand_atom_indices",
+                            return_value=[0, 1, 2]), patch.object(
+                _alchemy, "AlchemicalRegion", MagicMock(), create=True,
+            ), patch.object(
+                _alchemy, "AbsoluteAlchemicalFactory", MagicMock(), create=True,
+            ), patch.object(
+                _alchemy, "AlchemicalState", MagicMock(), create=True,
+            ), patch(
+                "autoantibiotic.fep_engine._openmm",
+            ), patch(
+                "autoantibiotic.fep_engine._openmm_app",
+            ):
+                calc._compute_fep_delta_ddg()
+
+            assert any(
+                "all overlaps above threshold" in msg
+                for msg in caplog.messages
+            ), "Expected log message about all overlaps being above threshold"
+        finally:
+            CONFIG.fep_adaptive_lambda_insertion = original_adaptive
+            CONFIG.fep_initial_short_steps = original_short
+            CONFIG.fep_lambda_windows = original_windows
+            CONFIG.fep_enable_checkpointing = original_checkpoint
+
+    def test_diagnostic_failure_falls_back_gracefully(self, caplog):
+        """When the diagnostic run raises an exception, the code falls
+        back to the initial fixed lambda schedule."""
+        import logging
+        import openmmtools.multistate as _oms
+        import openmmtools.alchemy as _alchemy
+        caplog.set_level(logging.WARNING)
+
+        original_adaptive = CONFIG.fep_adaptive_lambda_insertion
+        original_short = CONFIG.fep_initial_short_steps
+        original_windows = CONFIG.fep_lambda_windows
+        original_checkpoint = CONFIG.fep_enable_checkpointing
+        CONFIG.fep_adaptive_lambda_insertion = True
+        CONFIG.fep_initial_short_steps = 10
+        CONFIG.fep_lambda_windows = 5
+        CONFIG.fep_enable_checkpointing = False
+
+        try:
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb="wt.pdb",
+                receptor_mut_pdb="mut.pdb",
+                ligand_smiles="CC(=O)OC",
+            )
+
+            with patch.object(
+                _oms, "MBAR", MagicMock(), create=True,
+            ), patch.object(
+                calc, "_run_diagnostic_u_kln",
+                side_effect=RuntimeError("Diagnostic failed"),
+            ), patch.object(
+                calc, "_build_system",
+                return_value=(MagicMock(), MagicMock(), MagicMock()),
+            ), patch("autoantibiotic.fep_engine._openmm_unit.kelvin",
+                     MagicMock()), patch(
+                "autoantibiotic.fep_engine._openmm_unit.MOLAR_GAS_CONSTANT_R",
+                MagicMock(),
+            ), patch.object(calc, "_get_ligand_atom_indices",
+                            return_value=[0, 1, 2]), patch.object(
+                _alchemy, "AlchemicalRegion", MagicMock(), create=True,
+            ), patch.object(
+                _alchemy, "AbsoluteAlchemicalFactory", MagicMock(), create=True,
+            ), patch.object(
+                _alchemy, "AlchemicalState", MagicMock(), create=True,
+            ), patch(
+                "autoantibiotic.fep_engine._openmm",
+            ), patch(
+                "autoantibiotic.fep_engine._openmm_app",
+            ):
+                calc._compute_fep_delta_ddg()
+
+            assert any(
+                "Adaptive lambda refinement failed" in msg
+                for msg in caplog.messages
+            ), "Expected warning about adaptive lambda failure"
+        finally:
+            CONFIG.fep_adaptive_lambda_insertion = original_adaptive
+            CONFIG.fep_initial_short_steps = original_short
+            CONFIG.fep_lambda_windows = original_windows
+            CONFIG.fep_enable_checkpointing = original_checkpoint
+
+    def test_config_has_adaptive_defaults(self):
+        """Config has sensible defaults for adaptive lambda parameters."""
+        assert CONFIG.fep_adaptive_lambda_insertion is True
+        assert CONFIG.fep_overlap_threshold == 0.03
+        assert CONFIG.fep_max_lambda_windows == 21
+        assert CONFIG.fep_initial_short_steps == 100
