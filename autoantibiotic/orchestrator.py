@@ -145,6 +145,13 @@ class PipelineOrchestrator:
         work_dir = str(self.config.work_dir)
         self.targets = prepare_targets(pdb_dir, work_dir, self.deps, water_results=self.water_results)
 
+        pb2pa = self.targets.get("PBP2a", {})
+        validated_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
+        if validated_pdb and os.path.isfile(validated_pdb):
+            log.info(f"  Receptor integrity validated for PBP2a: {validated_pdb}")
+        else:
+            log.warning("  PBP2a receptor PDB not found after target preparation.")
+
         if (
             self.config.use_water_analysis
             and _HAVE_WATER

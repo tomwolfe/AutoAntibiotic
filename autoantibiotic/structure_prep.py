@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from .config import CONFIG
+from .config import CONFIG, ConfigurationError
 from .io_utils import (
     AutoAntibioticError,
     OpenBabelError,
@@ -18,6 +18,23 @@ from .io_utils import (
     run_tool,
 )
 from .water_analysis import get_waters_to_remove
+
+try:
+    import pdbfixer  # noqa: F401
+    _HAVE_PDBFIXER = True
+except ImportError:
+    _HAVE_PDBFIXER = False
+
+# Required atoms for critical binding-site residues.
+# Backbone atoms are mandatory; side-chain atoms trigger PDBFixer repair if missing.
+BACKBONE_ATOMS: Set[str] = {"N", "CA", "C", "O"}
+
+CRITICAL_RESIDUE_ATOMS: Dict[str, Set[str]] = {
+    "ASN": {"N", "CA", "C", "O", "CB", "CG", "OD1", "ND2"},
+    "GLU": {"N", "CA", "C", "O", "CB", "CG", "CD", "OE1", "OE2"},
+    "ARG": {"N", "CA", "C", "O", "CB", "CG", "CD", "NE", "CZ", "NH1", "NH2"},
+    "SER": {"N", "CA", "C", "O", "CB", "OG"},
+}
 
 
 def calculate_adaptive_box_size(
@@ -364,6 +381,220 @@ def _build_ensemble_targets(
     return ensemble_targets
 
 
+def validate_receptor_integrity(pdb_path: str, work_dir: str, deps: Dict[str, Any]) -> str:
+    """Validate and optionally repair a prepared receptor PDB file.
+
+    Checks that every residue listed in ``CONFIG.allosteric_residues`` and
+    ``CONFIG.active_site_residues`` is present with complete backbone atoms
+    (N, CA, C, O).  If key side-chain atoms are missing and PDBFixer is
+    available, the structure is automatically repaired.
+
+    Args:
+        pdb_path: Path to the prepared PDB file.
+        work_dir: Working directory for intermediate / repaired files.
+        deps: Dependency dictionary (used for PDBQT conversion).
+
+    Returns:
+        Path to the validated (and potentially repaired) PDB file.
+
+    Raises:
+        ConfigurationError:
+            - If Bio.PDB is not installed and validation was requested.
+            - If any critical residue is entirely missing.
+            - If backbone atoms are missing from a critical residue.
+            - If PDBFixer repair fails and ``CONFIG.strict_receptor_validation`` is True.
+    """
+    log.info("  ── Receptor integrity check ──")
+
+    # Combine all critical residue specifiers
+    critical_specs: List[str] = list(CONFIG.allosteric_residues) + list(CONFIG.active_site_residues)
+    # Build (resname_upper, seqnum) lookup
+    target_residues: List[Tuple[str, int]] = []
+    for spec in critical_specs:
+        resname = "".join(ch for ch in spec if ch.isalpha()).upper()
+        seqnum = int("".join(ch for ch in spec if ch.isdigit()))
+        target_residues.append((resname, seqnum))
+
+    try:
+        from Bio.PDB import PDBParser
+    except ImportError:
+        log.warning("  Bio.PDB not available — skipping receptor integrity validation.")
+        return pdb_path
+
+    parser = PDBParser(QUIET=True)
+    struct = parser.get_structure("receptor", pdb_path)
+    chain_id = None
+
+    # Locate the chain containing critical residues
+    for model in struct:
+        for chain in model:
+            for residue in chain:
+                rid = residue.get_id()
+                if rid[0] != " ":
+                    continue
+                key = (residue.get_resname().strip().upper(), rid[1])
+                if key in target_residues:
+                    chain_id = chain.get_id()
+                    break
+            if chain_id is not None:
+                break
+        if chain_id is not None:
+            break
+
+    if chain_id is None:
+        raise ConfigurationError(
+            f"None of the critical residues {critical_specs} were found in {pdb_path}. "
+            "Receptor structure is invalid for docking."
+        )
+
+    # Scan residues and collect repair info
+    residues_found: Dict[Tuple[str, int], Dict[str, List[str]]] = {}
+    for model in struct:
+        for chain in model:
+            if chain.get_id() != chain_id:
+                continue
+            for residue in chain:
+                rid = residue.get_id()
+                if rid[0] != " ":
+                    continue
+                resname = residue.get_resname().strip().upper()
+                seqnum = rid[1]
+                key = (resname, seqnum)
+                if key not in target_residues:
+                    continue
+                atom_names = {atom.get_id() for atom in residue.get_atoms()}
+                expected = CRITICAL_RESIDUE_ATOMS.get(resname, BACKBONE_ATOMS)
+                missing = sorted(expected - atom_names)
+                residues_found[key] = {"resname": resname, "missing": missing, "present_atoms": atom_names}
+
+    # Check for entirely missing residues
+    missing_residues = [r for r in target_residues if r not in residues_found]
+    if missing_residues:
+        raise ConfigurationError(
+            f"Critical residues entirely missing from structure: "
+            f"{[f'{r[0]}{r[1]}' for r in missing_residues]}. "
+            "Cannot proceed with docking."
+        )
+
+    # Categorise issues
+    backbone_missing: List[str] = []
+    sidechain_missing: List[str] = []
+    repair_needed: List[str] = []
+
+    for key, info in residues_found.items():
+        resname, seqnum = key
+        label = f"{resname}{seqnum}"
+        missing = info["missing"]
+        expected = CRITICAL_RESIDUE_ATOMS.get(resname, BACKBONE_ATOMS)
+        total_expected = len(expected)
+
+        missing_backbone = [a for a in missing if a in BACKBONE_ATOMS]
+        missing_sidechain = [a for a in missing if a not in BACKBONE_ATOMS]
+
+        if missing_backbone:
+            backbone_missing.append(f"{label} (missing {missing_backbone})")
+
+        if missing_sidechain:
+            sidechain_missing.append(label)
+            ratio = len(missing_sidechain) / len(expected - BACKBONE_ATOMS)
+            if ratio > 0.5:
+                repair_needed.append(label)
+
+    # Backbone completeness is mandatory
+    if backbone_missing:
+        raise ConfigurationError(
+            f"Critical backbone atoms are missing from residues: {backbone_missing}. "
+            "Receptor structure is not valid for docking."
+        )
+
+    # Log warnings for all incomplete residues
+    for label in sidechain_missing:
+        log.warning(f"  ⚠  {label} has missing side-chain atoms (will be repaired if PDBFixer available).")
+
+    # Attempt repair via PDBFixer
+    if repair_needed:
+        if not _HAVE_PDBFIXER:
+            msg = (
+                f"Residues {repair_needed} are missing >50% of side-chain atoms, "
+                "but PDBFixer is not installed. Install with:\n"
+                "  conda install -c conda-forge pdbfixer"
+            )
+            if CONFIG.strict_receptor_validation:
+                raise ConfigurationError(msg)
+            log.warning(f"  ⚠  {msg}")
+            log.warning("  Continuing with incomplete structure (strict_receptor_validation=False).")
+        else:
+            log.info(f"  Repairing residues {repair_needed} with PDBFixer…")
+            try:
+                from pdbfixer import PDBFixer
+
+                fixer = PDBFixer(filename=pdb_path)
+                fixer.findMissingResidues()
+                fixer.findMissingAtoms()
+                fixer.addMissingAtoms()
+                fixer.addMissingHydrogens(7.0)
+
+                stem = os.path.splitext(os.path.basename(pdb_path))[0]
+                repaired_path = os.path.join(work_dir, f"{stem}_validated.pdb")
+                with open(repaired_path, "w") as f:
+                    from openmm.app import PDBFile
+                    PDBFile.writeFile(fixer.topology, fixer.positions, f)
+
+                log.info(f"  Repaired structure saved to {repaired_path}")
+
+                # Re-validate the repaired structure
+                # PDBFixer renumbers residues sequentially (starting at 1),
+                # so we match by residue name and position order instead of number.
+                repaired_struct = parser.get_structure("repaired", repaired_path)
+                repair_ok = True
+                expected_order = [(r[0], i) for i, r in enumerate(target_residues)]
+                found_pos = 0
+                for model in repaired_struct:
+                    for chain in model:
+                        for residue in chain:
+                            rid = residue.get_id()
+                            if rid[0] != " ":
+                                continue
+                            resname = residue.get_resname().strip().upper()
+                            if found_pos < len(expected_order) and resname == expected_order[found_pos][0]:
+                                expected_atoms = CRITICAL_RESIDUE_ATOMS.get(resname, BACKBONE_ATOMS)
+                                atom_names = {atom.get_id() for atom in residue.get_atoms()}
+                                heavy_only = {a for a in atom_names if not a.startswith("H")}
+                                still_missing = expected_atoms - heavy_only
+                                if still_missing:
+                                    log.warning(f"  ⚠  Repair incomplete for {resname}: still missing {sorted(still_missing)}")
+                                    if still_missing & BACKBONE_ATOMS:
+                                        raise ConfigurationError(
+                                            f"PDBFixer repair failed: backbone atoms still missing from {resname}."
+                                        )
+                                    repair_ok = False
+                                found_pos += 1
+
+                if found_pos < len(expected_order):
+                    log.warning(
+                        f"  ⚠  PDBFixer repair may not have covered all residues "
+                        f"(found {found_pos}/{len(expected_order)})"
+                    )
+                    repair_ok = False
+
+                if repair_ok:
+                    log.info("  Receptor integrity validated after PDBFixer repair.")
+                else:
+                    log.warning("  Receptor integrity partially restored after repair.")
+
+                pdb_path = repaired_path
+
+            except Exception as exc:
+                raise ConfigurationError(
+                    f"PDBFixer repair failed for {pdb_path}: {exc}"
+                ) from exc
+    else:
+        log.info("  All critical residues are complete. No repair needed.")
+
+    log.info("  ── Receptor integrity check complete ──")
+    return pdb_path
+
+
 def prepare_targets(
     pdb_dir: str, work_dir: str, deps: Dict[str, Any],
     water_results: Any = None,
@@ -439,6 +670,28 @@ def prepare_targets(
     )
 
     cleaned_pdb = pbp2a_pdbqt.replace(".pdbqt", ".pdb")
+
+    # ── Receptor integrity validation ──
+    validated_pdb = validate_receptor_integrity(cleaned_pdb, work_dir, deps)
+    if validated_pdb != cleaned_pdb:
+        cleaned_pdb = validated_pdb
+        # Regenerate PDBQT from the validated structure
+        validated_pdbqt = validated_pdb.replace(".pdb", ".pdbqt")
+        if not os.path.exists(validated_pdbqt):
+            log.info("  Converting validated PDB to PDBQT …")
+            try:
+                from rdkit import Chem
+                mol = Chem.MolFromPDBFile(validated_pdb, removeHs=False)
+                if mol is not None:
+                    mol = Chem.AddHs(mol, addCoords=True)
+                    Chem.MolToPDBFile(mol, validated_pdb)
+            except Exception:
+                pass
+            _pdb_to_pdbqt_via_rdkit(validated_pdb, validated_pdbqt)
+            if os.path.exists(validated_pdbqt):
+                pbp2a_pdbqt = validated_pdbqt
+                log.info(f"  Validated PDBQT: {validated_pdbqt}")
+
     log.info("  Computing allosteric site centroid (ASN159, GLU237, ARG241)…")
     allosteric_center = compute_residue_centroid(cleaned_pdb, CONFIG.allosteric_residues)
     log.info(f"    Allosteric site center: {allosteric_center}")

@@ -118,6 +118,10 @@ class PipelineConfig:
     conserved_residues: set = field(default_factory=lambda: {"SER403", "KYS406", "TYR446"})
     mutable_residues: set = field(default_factory=lambda: {"G246", "N146", "E150", "H351", "E644", "A601", "F241", "N104", "G298", "S403", "N159", "R241"})
     use_pharmacophore_filter: bool = True
+    strict_receptor_validation: bool = True
+    """When True, raised ConfigurationError if PDBFixer repair fails or
+    critical backbone atoms are missing during receptor integrity check.
+    Set to False to continue with incomplete structures (logged as warnings)."""
 
     pdb_ids: Dict[str, str] = field(default_factory=lambda: {
         "PBP2a_apo": "1VQQ",
