@@ -53,6 +53,9 @@ class MetaScorer:
         self._training_actives: List[str] = []
         self._training_inactives: List[str] = []
         self.uses_dynamic_features: bool = False
+        self._required_record_features: set = set()
+        """Set of CompoundRecord field names that must be non-None
+        during prediction because they were present in training."""
 
     # ── public API ──────────────────────────────────────────────────
 
@@ -330,6 +333,19 @@ class MetaScorer:
         except ImportError:
             pass
 
+        # Store the set of CompoundRecord fields that must be
+        # present during predict() because they were used in training.
+        self._required_record_features = set()
+        if self.uses_dynamic_features:
+            self._required_record_features.add("md_ligand_rmsd")
+            self._required_record_features.add("md_pocket_rg_stability")
+        # Check if shape_score was present in training data
+        if any(
+            docking_features.get(smi, {}).get("shape_score") is not None
+            for smi in actives_smiles + inactives_smiles
+        ):
+            self._required_record_features.add("shape_score")
+
         self._save()
         return self
 
@@ -358,14 +374,18 @@ class MetaScorer:
             if mol is None:
                 return None
             record.mol = mol
-        # Warn if dynamic features are expected but missing
-        if (
-            self.uses_dynamic_features
-            and (record.md_ligand_rmsd is None or record.md_pocket_rg_stability is None)
-        ):
-            log.warning(
-                f"MetaScorer trained with dynamic features, but input lacks MD data. "
-                f"Prediction for {record.compound_id} may be less accurate."
+
+        # Check that all features used in training are present in the record
+        missing_features = []
+        for feat_name in sorted(self._required_record_features):
+            val = getattr(record, feat_name, None)
+            if val is None:
+                missing_features.append(feat_name)
+        if missing_features:
+            raise ConfigurationError(
+                f"MetaScorer: {record.compound_id} is missing required features: "
+                f"{', '.join(missing_features)}. "
+                "Run MD/Water analysis first."
             )
 
         try:
@@ -416,6 +436,18 @@ class MetaScorer:
                 raise ValueError(f"Cannot parse SMILES for {record.compound_id}")
             record.mol = mol
 
+        missing_features = []
+        for feat_name in sorted(self._required_record_features):
+            val = getattr(record, feat_name, None)
+            if val is None:
+                missing_features.append(feat_name)
+        if missing_features:
+            raise ConfigurationError(
+                f"MetaScorer: {record.compound_id} is missing required features: "
+                f"{', '.join(missing_features)}. "
+                "Run MD/Water analysis first."
+            )
+
         try:
             feats = self._default_features(
                 record.mol,
@@ -461,6 +493,9 @@ class MetaScorer:
             self._training_actives = obj.get("training_actives", [])
             self._training_inactives = obj.get("training_inactives", [])
             self.uses_dynamic_features = obj.get("uses_dynamic_features", False)
+            self._required_record_features = set(
+                obj.get("required_record_features", [])
+            )
 
             # Backward compatibility: retrain if feature dimension has changed
             expected_dim = 13
@@ -496,6 +531,20 @@ class MetaScorer:
         for record in records:
             if record.needs_manual_review:
                 continue
+
+            # Check required features before calling _default_features
+            missing_features = []
+            for feat_name in sorted(self._required_record_features):
+                val = getattr(record, feat_name, None)
+                if val is None:
+                    missing_features.append(feat_name)
+            if missing_features:
+                log.warning(
+                    f"MetaScorer: {record.compound_id} missing required features "
+                    f"({', '.join(missing_features)}) — skipping uncertainty check."
+                )
+                continue
+
             mol = record.mol
             if mol is None:
                 mol = Chem.MolFromSmiles(record.smiles)
@@ -675,6 +724,7 @@ class MetaScorer:
                     "training_actives": self._training_actives,
                     "training_inactives": self._training_inactives,
                     "uses_dynamic_features": self.uses_dynamic_features,
+                    "required_record_features": list(self._required_record_features),
                 },
                 self.model_path,
             )

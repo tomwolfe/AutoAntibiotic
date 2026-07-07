@@ -174,7 +174,7 @@ def profile_resistance_mutation_sensitivity(
     for i, mut_pdbqt in enumerate(mutant_pdbqts):
         from .docking import dock_compound
 
-        e = dock_compound(
+        e, _ = dock_compound(
             record, mut_pdbqt, center, box_size,
             work_dir, f"mut_{i}",
         )

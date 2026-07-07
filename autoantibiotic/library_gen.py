@@ -18,10 +18,12 @@ from rdkit.Chem import (
 )
 from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.DataStructs import TanimotoSimilarity
+from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
 
 from .config import CONFIG
 from .models import CompoundRecord
 from .io_utils import PipelineAudit, log
+from .utils.brics_utils import decompose_molecule, recombine_fragments
 
 try:
     from .analysis import _get_ml_admet_predictor, predict_herg_ml
@@ -135,11 +137,10 @@ def _brics_recombination(
 ) -> Tuple[List[CompoundRecord], set]:
     """Recombine BRICS fragments using BRICSBuild, then pick a diverse subset via MaxMin.
 
-    Uses RDKit's BRICSBuild to enumerate recombination products from the
-    provided fragment pool.  Duplicate products (by canonical SMILES) and
-    acyclic molecules are discarded.  If the resulting pool exceeds the
-    requested count, MaxMin diversity picking selects the most diverse
-    subset based on Morgan fingerprints.
+    Uses :func:`recombine_fragments` from ``brics_utils`` for core
+    recombination and diversity picking, then wraps the resulting
+    molecules into ``CompoundRecord`` objects with stereoisomer
+    enumeration.
 
     Args:
         frag_mols: RDKit Mol objects representing BRICS-compatible fragments.
@@ -153,100 +154,73 @@ def _brics_recombination(
         the list of selected ``CompoundRecord`` objects and
         *updated_seen_smiles* includes the newly generated SMILES.
     """
-    rng = np.random.default_rng(seed)
-
     pool_mult = CONFIG.diversity_pool_multiplier
-    max_products = target_count * pool_mult * 4
     target_pool = target_count * pool_mult
+    max_products = target_count * pool_mult * 4
 
-    shuffled = list(frag_mols)
-    rng.shuffle(shuffled)
-
-    builder = BRICS.BRICSBuild(shuffled)
-
-    # Generator-based pool building — yields records one at a time
-    def _product_generator():
-        n_produced = 0
-        for product in itertools.islice(builder, max_products):
-            if product is None:
-                continue
-            try:
-                Chem.SanitizeMol(product)
-                smi = Chem.MolToSmiles(product)
-            except Exception:
-                continue
-            if smi in seen_smiles:
-                continue
-            ring_info = product.GetRingInfo()
-            if ring_info.NumRings() == 0:
-                continue
-            seen_smiles.add(smi)
-            has_undefined = _check_undefined_stereo(product)
-            base_id = f"AA-{n_produced:04d}"
-            if has_undefined:
-                isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
-                if isomers:
-                    for j, iso in enumerate(isomers):
-                        iso_smi = Chem.MolToSmiles(iso)
-                        suf = chr(ord("a") + j)
-                        rec = CompoundRecord(
-                            compound_id=f"{base_id}-{suf}",
-                            smiles=iso_smi,
-                            mol=iso,
-                            has_undefined_stereo=False,
-                            parent_id=base_id,
-                        )
-                        n_produced += 1
-                        yield rec
-                    continue
-                log.debug(f"  All stereoisomers of {base_id} exceeded strain threshold; keeping undefined.")
-            rec = CompoundRecord(
-                compound_id=base_id,
-                smiles=smi,
-                mol=product,
-                has_undefined_stereo=has_undefined,
-            )
-            n_produced += 1
-            yield rec
-            if n_produced >= target_pool:
-                break
-
-    iterator = _tqdm(
-        _product_generator(),
-        desc="  BRICS recombination",
-        total=target_pool,
-        disable=not _HAVE_TQDM,
+    pool_mols, seen_smiles = recombine_fragments(
+        frag_mols, target_pool, seen_smiles, seed=seed,
+        max_products=max_products,
     )
 
-    pool_records: List[CompoundRecord] = list(iterator)
-
-    if not pool_records:
+    if not pool_mols:
         return [], seen_smiles
 
-    log.info(f"  BRICS pool size: {len(pool_records)}")
+    log.info(f"  BRICS pool size: {len(pool_mols)}")
 
-    if len(pool_records) <= target_count:
-        return pool_records, seen_smiles
+    # Convert Mols to CompoundRecords with stereoisomer handling
+    records: List[CompoundRecord] = []
+    n_produced = 0
+    for product in pool_mols:
+        has_undefined = _check_undefined_stereo(product)
+        base_id = f"AA-{n_produced:04d}"
+        if has_undefined:
+            isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
+            if isomers:
+                for j, iso in enumerate(isomers):
+                    iso_smi = Chem.MolToSmiles(iso)
+                    suf = chr(ord("a") + j)
+                    rec = CompoundRecord(
+                        compound_id=f"{base_id}-{suf}",
+                        smiles=iso_smi,
+                        mol=iso,
+                        has_undefined_stereo=False,
+                        parent_id=base_id,
+                    )
+                    n_produced += 1
+                    records.append(rec)
+                continue
+            log.debug(f"  All stereoisomers of {base_id} exceeded strain threshold; keeping undefined.")
+        rec = CompoundRecord(
+            compound_id=base_id,
+            smiles=Chem.MolToSmiles(product),
+            mol=product,
+            has_undefined_stereo=has_undefined,
+        )
+        n_produced += 1
+        records.append(rec)
+
+    if len(records) <= target_count:
+        return records, seen_smiles
 
     fps = [
         AllChem.GetMorganFingerprintAsBitVect(
             r.mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
         )
-        for r in pool_records
+        for r in records
     ]
 
-    from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
     picker = MaxMinPicker()
     pick_ids = picker.LazyBitVectorPick(
         fps, len(fps), target_count, seed=seed,
     )
 
-    records = [pool_records[i] for i in pick_ids]
+    selected = [records[i] for i in pick_ids]
     log.info(
-        f"  MaxMin selected {len(records)} diverse compounds "
-        f"from pool of {len(pool_records)}."
+        f"  MaxMin selected {len(selected)} diverse compounds "
+        f"from pool of {len(records)}."
     )
-    return records, seen_smiles
+    return selected, seen_smiles
 
 
 def _generate_records(
@@ -273,14 +247,11 @@ def _generate_records(
 
     decomposed_frags: set = set()
     for mol in scaffold_mols:
-        try:
-            fragments = BRICS.BRICSDecompose(mol, minFragmentSize=CONFIG.brics_min_fragment_size)
-            for frag_smi in fragments:
-                frag_mol = _validate_mol(frag_smi)
-                if frag_mol is not None and _count_atoms(frag_mol) >= CONFIG.brics_min_fragment_size:
-                    decomposed_frags.add(frag_smi)
-        except Exception:
-            continue
+        fragments = decompose_molecule(mol, min_size=CONFIG.brics_min_fragment_size)
+        for frag_smi in fragments:
+            frag_mol = _validate_mol(frag_smi)
+            if frag_mol is not None and _count_atoms(frag_mol) >= CONFIG.brics_min_fragment_size:
+                decomposed_frags.add(frag_smi)
 
     log.info(f"  Decomposed {len(decomposed_frags)} unique BRICS fragments from scaffolds.")
 
@@ -1018,7 +989,8 @@ def generate_grown_library(
        using RDKit's :func:`BRICS.BRICSBuild`.
     3. Filter intermediate products by Lipinski Rule-of-5 and QED
        at each growth step to prevent combinatorial explosion.
-    4. Yield each valid product as a ``CompoundRecord``.
+    4. Apply MaxMin diversity picking on the final pool.
+    5. Yield each valid product as a ``CompoundRecord``.
 
     Only products that contain at least one core fragment as a
     substructure are retained, ensuring that the core scaffold is
@@ -1053,6 +1025,8 @@ def generate_grown_library(
     compound_counter: int = 0
     rng = np.random.default_rng(CONFIG.random_seed)
 
+    all_records: List[CompoundRecord] = []
+
     for core_rec in core_records:
         core_mol = core_rec.mol
         if core_mol is None:
@@ -1063,9 +1037,7 @@ def generate_grown_library(
         seen_smiles.add(core_smi)
 
         # Decompose core to expose BRICS reactive sites
-        core_frag_smiles: List[str] = list(
-            BRICS.BRICSDecompose(core_mol, minFragmentSize=CONFIG.brics_min_fragment_size)
-        )
+        core_frag_smiles = decompose_molecule(core_mol, min_size=CONFIG.brics_min_fragment_size)
         if not core_frag_smiles:
             continue
 
@@ -1081,10 +1053,10 @@ def generate_grown_library(
         for step in range(max_growth_steps):
             next_gen: List[Chem.Mol] = []
             for parent in growth_mols:
+                parent_frag_smiles = decompose_molecule(parent, min_size=CONFIG.brics_min_fragment_size)
                 parent_frags: List[Chem.Mol] = [
-                    m for m in (Chem.MolFromSmiles(s) for s in list(
-                        BRICS.BRICSDecompose(parent, minFragmentSize=CONFIG.brics_min_fragment_size)
-                    )) if m is not None
+                    m for m in (Chem.MolFromSmiles(s) for s in parent_frag_smiles)
+                    if m is not None
                 ]
                 if not parent_frags:
                     parent_frags = core_frags
@@ -1182,7 +1154,7 @@ def generate_grown_library(
                                 )
                                 compound_counter += 1
                                 next_gen.append(iso)
-                                yield rec
+                                all_records.append(rec)
                             continue
                         log.debug(f"  All stereoisomers of {base_id} exceeded strain threshold; keeping undefined.")
                     rec = CompoundRecord(
@@ -1195,16 +1167,37 @@ def generate_grown_library(
                     )
                     compound_counter += 1
                     next_gen.append(product)
-                    yield rec
+                    all_records.append(rec)
 
                     if compound_counter >= target_per_core * max(1, len(core_records)):
-                        return
+                        break
 
             growth_mols = next_gen
             if not growth_mols:
                 break
 
+    # MaxMin diversity picking on the final pool
+    if len(all_records) > target_per_core:
+        fps = [
+            AllChem.GetMorganFingerprintAsBitVect(
+                r.mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+            )
+            for r in all_records
+        ]
+        picker = MaxMinPicker()
+        pick_ids = picker.LazyBitVectorPick(
+            fps, len(fps), target_per_core, seed=CONFIG.random_seed,
+        )
+        all_records = [all_records[i] for i in pick_ids]
+        log.info(
+            f"  MaxMin selected {len(all_records)} diverse grown compounds "
+            f"from pool of {len(fps)}."
+        )
+
+    for rec in all_records:
+        yield rec
+
     log.info(
-        f"  generate_grown_library: {compound_counter} compounds "
+        f"  generate_grown_library: {len(all_records)} compounds "
         f"generated from {len(core_records)} cores."
     )

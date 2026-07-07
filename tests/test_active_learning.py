@@ -21,6 +21,10 @@ from autoantibiotic.analysis import MetaScorer, _get_meta_scorer
 from autoantibiotic.config import CONFIG
 from autoantibiotic.models import CompoundRecord
 
+# Lower the minimum training threshold so test datasets (2-4 samples)
+# continue to work.
+CONFIG.min_training_samples = 4
+
 
 def _make_record(
     compound_id: str = "TEST-001",

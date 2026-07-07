@@ -13,6 +13,7 @@ from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
 
 from .config import CONFIG
 from .io_utils import log
+from .utils.brics_utils import decompose_molecule
 
 # ── Reference actives for novelty checking ───────────────────────────
 _REFERENCE_ACTIVES_FPS: Optional[List[Any]] = None
@@ -114,8 +115,8 @@ def _brics_crossover(
     building_blocks: List[str],
     rng: np.random.Generator,
 ) -> Optional[Chem.Mol]:
-    frags_a = list(BRICS.BRICSDecompose(parent_a, minFragmentSize=4))
-    frags_b = list(BRICS.BRICSDecompose(parent_b, minFragmentSize=4))
+    frags_a = decompose_molecule(parent_a, min_size=4)
+    frags_b = decompose_molecule(parent_b, min_size=4)
     all_frags = frags_a + frags_b
     if not all_frags:
         bb = _random_fragment_from_smiles(building_blocks, rng)
@@ -159,7 +160,7 @@ def _brics_mutate(
     building_blocks: List[str],
     rng: np.random.Generator,
 ) -> Optional[Chem.Mol]:
-    frags = list(BRICS.BRICSDecompose(mol, minFragmentSize=4))
+    frags = decompose_molecule(mol, min_size=4)
     if not frags:
         return None
 
@@ -447,7 +448,7 @@ class JTVAE:
             return []
 
         population: List[Chem.Mol] = [core_mol]
-        core_frags = list(BRICS.BRICSDecompose(core_mol, minFragmentSize=4))
+        core_frags = decompose_molecule(core_mol, min_size=4)
         seen_smiles: set = {Chem.MolToSmiles(core_mol)}
 
         # Initialise population via BRICS recombination

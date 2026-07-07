@@ -10,7 +10,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
 from rdkit.Chem import rdMolTransforms
 
-from ..config import CONFIG
+from ..config import CONFIG, ConfigurationError
 from ..models import CompoundRecord
 from ..io_utils import log
 
@@ -795,7 +795,12 @@ def rescore_with_mmgbsa(
         MM-GB/SA \\u0394G (more negative = stronger predicted binding).
     """
     n_to_rescore = min(len(top_candidates), CONFIG.mm_gbsa_top_n)
-    log.info(f"  Rescoring top {n_to_rescore}/{len(top_candidates)} with MM-GB/SA…")
+
+    solvent_model = CONFIG.mmgbsa_solvent_model
+    log.info(
+        f"  Rescoring top {n_to_rescore}/{len(top_candidates)} with MM-GB/SA "
+        f"(solvent model: {solvent_model})…"
+    )
 
     if not _HAVE_OPENMM:
         log.warning("  OpenMM not installed — skipping MM-GB/SA rescoring.")
@@ -805,26 +810,38 @@ def rescore_with_mmgbsa(
         log.warning(f"  Receptor PDB not found: {receptor_pdb}. Skipping MM-GB/SA.")
         return top_candidates
 
-    use_ensemble = CONFIG.use_expensive_ml_features
-    n_conf = CONFIG.mmgbsa_n_conformers if use_ensemble else 1
-    use_explicit = CONFIG.use_explicit_solvent_mmgbsa and _HAVE_PDBFIXER
-
-    work_dir_mm = os.path.join(work_dir, "mmgbsa")
-    os.makedirs(work_dir_mm, exist_ok=True)
-
-    # ── Explicit-solvent path (pose relaxation + TIP3P) ──────────
-    if use_explicit:
+    # ── Strictly follow the configured solvent model ──────────────
+    if solvent_model == "explicit":
+        if not _HAVE_PDBFIXER:
+            raise ConfigurationError(
+                f"MM-GB/SA solvent model is set to '{solvent_model}' but "
+                "pdbfixer is not installed.  Install pdbfixer with:\n"
+                "  conda install -c conda-forge pdbfixer\n"
+                "or set mmgbsa_solvent_model='implicit'."
+            )
+        use_ensemble = CONFIG.use_expensive_ml_features
+        n_conf = CONFIG.mmgbsa_n_conformers if use_ensemble else 1
+        work_dir_mm = os.path.join(work_dir, "mmgbsa")
+        os.makedirs(work_dir_mm, exist_ok=True)
+        log.info(f"  Using explicit solvent model for MM-GB/SA rescoring (TIP3P + pose relaxation).")
         return _rescore_explicit_solvent_loop(
             top_candidates, receptor_pdb, work_dir_mm, water_results,
             n_to_rescore, n_conf, use_ensemble,
         )
 
-    # ── Implicit OBC2 path (fallback) ────────────────────────────
-    if CONFIG.use_explicit_solvent_mmgbsa and not _HAVE_PDBFIXER:
-        log.warning(
-            "  PDBFixer not installed — falling back to implicit OBC2 MM-GB/SA. "
-            "Install pdbfixer (conda install -c conda-forge pdbfixer) for "
-            "explicit-solvent rescoring."
+    # ── Implicit OBC2 path ───────────────────────────────────────
+    log.info(f"  Using implicit solvent model for MM-GB/SA rescoring (OBC2).")
+    use_ensemble = CONFIG.use_expensive_ml_features
+    n_conf = CONFIG.mmgbsa_n_conformers if use_ensemble else 1
+    work_dir_mm = os.path.join(work_dir, "mmgbsa")
+    os.makedirs(work_dir_mm, exist_ok=True)
+
+    # Log a deprecation hint if the old flag is True but mmgbsa_solvent_model is implicit
+    if CONFIG.use_explicit_solvent_mmgbsa and solvent_model == "implicit":
+        log.info(
+            "  Note: use_explicit_solvent_mmgbsa=True is superseded by "
+            "mmgbsa_solvent_model='implicit'.  Set mmgbsa_solvent_model='explicit' "
+            "to use the explicit-solvent path."
         )
 
     rec_prep = _prepare_receptor_for_mmgbsa(receptor_pdb, work_dir_mm)
@@ -1152,14 +1169,14 @@ def rescore_with_explicit_mmgbsa(
         Updated candidates with ``ml_score`` set to the frame-averaged
         MM-GB/SA ΔG (more negative = stronger predicted binding).
     """
-    saved = CONFIG.use_explicit_solvent_mmgbsa
-    CONFIG.use_explicit_solvent_mmgbsa = True
+    saved = CONFIG.mmgbsa_solvent_model
+    CONFIG.mmgbsa_solvent_model = "explicit"
     try:
         return rescore_with_mmgbsa(
             top_candidates, receptor_pdb, work_dir, water_results=water_results,
         )
     finally:
-        CONFIG.use_explicit_solvent_mmgbsa = saved
+        CONFIG.mmgbsa_solvent_model = saved
 
 
 def _load_protein_heavy_atoms(

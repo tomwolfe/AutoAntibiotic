@@ -94,7 +94,11 @@ class PipelineConfig:
     top candidates before meta-scoring.  This ensures that the MetaScorer
     always receives MD-derived dynamic features for accurate predictions."""
 
-    # Explicit-solvent MM-GB/SA rescoring
+    # MM-GB/SA rescoring solvent model
+    mmgbsa_solvent_model: str = "implicit"
+    """Solvent model for MM-GB/SA rescoring.  Options: ``"implicit"``
+    (OBC2, default) or ``"explicit"`` (TIP3P with pose relaxation).
+    When set to ``"explicit"``, ``pdbfixer`` must be installed."""
     use_explicit_solvent_mmgbsa: bool = True
     """When True, use explicit-solvent (TIP3P) MM-GB/SA for rescoring top
     candidates instead of the implicit-solvent (OBC2) heuristic."""
@@ -483,12 +487,12 @@ class PipelineConfig:
         if self.dry_run:
             return
 
-        if self.use_explicit_solvent_mmgbsa:
+        if self.mmgbsa_solvent_model == "explicit" or self.use_explicit_solvent_mmgbsa:
             try:
                 import openmm  # noqa: F401
             except ImportError:
                 raise ConfigurationError(
-                    "Explicit solvent MM-GB/SA requested (use_explicit_solvent_mmgbsa=True) "
+                    "Explicit solvent MM-GB/SA requested (mmgbsa_solvent_model='explicit') "
                     "but OpenMM is not installed. Please install via conda:\n"
                     "  conda install -c conda-forge openmm"
                 )
@@ -496,7 +500,7 @@ class PipelineConfig:
                 import pdbfixer  # noqa: F401
             except ImportError:
                 raise ConfigurationError(
-                    "Explicit solvent MM-GB/SA requested (use_explicit_solvent_mmgbsa=True) "
+                    "Explicit solvent MM-GB/SA requested (mmgbsa_solvent_model='explicit') "
                     "but pdbfixer is not installed. Please install via conda:\n"
                     "  conda install -c conda-forge pdbfixer"
                 )

@@ -30,7 +30,13 @@ from .io_utils import (
     set_global_seed,
     verify_dependencies,
 )
-from .library_gen import apply_filters, generate_candidate_library, generate_pharmacophore_aware_library
+from .library_gen import (
+    apply_filters,
+    check_pharmacophore_match,
+    generate_candidate_library,
+    generate_pharmacophore_aware_library,
+)
+from .library_gen import _build_allosteric_pharmacophore as _build_pharmacophore
 from .ml_scoring.scoring import rescore_with_explicit_mmgbsa
 from .reporting import generate_csv_report, generate_html_report, generate_images, print_summary
 from .structure_prep import prepare_targets
@@ -256,12 +262,15 @@ class PipelineOrchestrator:
             log.warning("  Receptor PDB not found; skipping FEP.")
             return
 
-        # Pre-screen: expand pool and filter by IFP similarity
+        # Pre-screen: expand pool and filter by pharmacophore and IFP similarity
         fep_top_n = getattr(self.config, "fep_top_n", 5)
         pool_size = getattr(self.config, "fep_pre_screen_pool_size", 20)
         ifp_threshold = getattr(self.config, "fep_ifp_threshold", 0.5)
 
         candidates_pool = self.top_candidates[:pool_size]
+
+        # Build allosteric pharmacophore for pre-screening
+        pharmacophore_query = _build_pharmacophore()
 
         # Parse reference ligand (Ceftaroline) for IFP comparison
         ref_smiles = CONFIG.reference_antibiotics.get("Ceftaroline", "")
@@ -269,6 +278,19 @@ class PipelineOrchestrator:
 
         fep_candidates: List[CompoundRecord] = []
         for rec in candidates_pool:
+            # Pharmacophore pre-screening: require at least 2 of 3 key features
+            if rec.mol is not None and pharmacophore_query is not None:
+                if not check_pharmacophore_match(
+                    rec.mol,
+                    query=pharmacophore_query,
+                    min_matches=CONFIG.pharmacophore_min_matches,
+                    tolerance=CONFIG.pharmacophore_tolerance,
+                ):
+                    log.info(
+                        f"  {rec.compound_id}: Failed pharmacophore match — "
+                        "Skipped FEP pre-screen."
+                    )
+                    continue
             pose_path = rec.docked_pose_path
             if (pose_path and os.path.isfile(pose_path)
                     and ref_mol is not None and rec.mol is not None):
@@ -326,6 +348,19 @@ class PipelineOrchestrator:
                 log.info(
                     f"  {rec.compound_id}: {rec.mol.GetNumHeavyAtoms()} heavy atoms "
                     "(>50) — skipping FEP."
+                )
+                continue
+
+            # Pharmacophore pre-screening before FEP
+            if pharmacophore_query is not None and not check_pharmacophore_match(
+                rec.mol,
+                query=pharmacophore_query,
+                min_matches=CONFIG.pharmacophore_min_matches,
+                tolerance=CONFIG.pharmacophore_tolerance,
+            ):
+                log.info(
+                    f"  {rec.compound_id}: Failed pharmacophore match — "
+                    "Skipped FEP."
                 )
                 continue
 
