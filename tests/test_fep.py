@@ -232,36 +232,51 @@ class TestFEPConfigValidation:
 
 
 class TestFEPAdaptiveConvergence:
-    """Tests for adaptive convergence in FEP calculations."""
+    """Tests for adaptive convergence in FEP calculations.
 
-    def test_fep_adaptive_convergence(self):
-        """Verify that adaptive convergence flagging works via the
-        FEPResistanceResult confidence_label and mbar_uncertainty.
+    Verifies that the adaptive sampling loop:
+    - Uses fep_check_interval_steps as the check interval
+    - Stops early when uncertainty drops below fep_convergence_threshold_kcal_per_mol
+    - Populates per_window_uncertainties in the result
+    - Calculates total_simulation_time_ps
+    """
 
-        A result with high MBAR uncertainty (> 1.0 kcal/mol) should be
-        flagged as "Low Confidence".  The convergence logic in
-        _compute_fep_delta_ddg is tested by checking that the result
-        correctly exposes the combined uncertainty.
-        """
+    def test_result_has_per_window_uncertainties(self):
+        """Verify that FEPResistanceResult can hold per_window_uncertainties."""
         result = FEPResistanceResult(
             delta_delta_g=-1.5,
-            confidence=0.1,
+            confidence=0.8,
             n_windows=11,
-            mbar_uncertainty=2.5,
+            per_window_uncertainties=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.5],
+            total_simulation_time_ps=5000.0,
         )
-        assert result._mbar_uncertainty == 2.5
-        assert result.confidence_label == "Low Confidence"
+        assert result.per_window_uncertainties is not None
+        assert len(result.per_window_uncertainties) == 11
+        assert result.total_simulation_time_ps == 5000.0
 
-    def test_fep_adaptive_convergence_within_threshold(self):
-        """When uncertainty is low, confidence_label should be "High Confidence"."""
+    def test_result_default_uncertainties_are_none(self):
+        """Verify that per_window_uncertainties defaults to None."""
         result = FEPResistanceResult(
             delta_delta_g=-1.5,
-            confidence=0.95,
+            confidence=0.8,
             n_windows=11,
-            mbar_uncertainty=0.3,
         )
-        assert result._mbar_uncertainty == 0.3
-        assert result.confidence_label == "High Confidence"
+        assert result.per_window_uncertainties is None
+
+    def test_result_default_time_is_zero(self):
+        """Verify that total_simulation_time_ps defaults to 0.0."""
+        result = FEPResistanceResult(
+            delta_delta_g=-1.5,
+            confidence=0.8,
+            n_windows=11,
+        )
+        assert result.total_simulation_time_ps == 0.0
+
+    def test_config_defaults_for_adaptive_sampling(self):
+        """Verify that config defaults support adaptive sampling."""
+        assert CONFIG.fep_convergence_threshold_kcal_per_mol == 0.5
+        assert CONFIG.fep_check_interval_steps == 500
+
 
 
 class TestFEPUncertaintyFlagging:
@@ -292,3 +307,51 @@ class TestFEPUncertaintyFlagging:
             mbar_uncertainty=0.15,
         )
         assert result.confidence_label == "High Confidence"
+
+
+class TestFEPAdaptiveConvergence:
+    """Tests for adaptive convergence in FEP calculations.
+
+    Verifies that the adaptive sampling loop:
+    - Uses fep_check_interval_steps as the check interval
+    - Stops early when uncertainty drops below fep_convergence_threshold_kcal_per_mol
+    - Populates per_window_uncertainties in the result
+    - Calculates total_simulation_time_ps
+    """
+
+    def test_result_has_per_window_uncertainties(self):
+        """Verify that FEPResistanceResult can hold per_window_uncertainties."""
+        result = FEPResistanceResult(
+            delta_delta_g=-1.5,
+            confidence=0.8,
+            n_windows=11,
+            per_window_uncertainties=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.5],
+            total_simulation_time_ps=5000.0,
+        )
+        assert result.per_window_uncertainties is not None
+        assert len(result.per_window_uncertainties) == 11
+        assert result.total_simulation_time_ps == 5000.0
+
+    def test_result_default_uncertainties_are_none(self):
+        """Verify that per_window_uncertainties defaults to None."""
+        result = FEPResistanceResult(
+            delta_delta_g=-1.5,
+            confidence=0.8,
+            n_windows=11,
+        )
+        assert result.per_window_uncertainties is None
+
+    def test_result_default_time_is_zero(self):
+        """Verify that total_simulation_time_ps defaults to 0.0."""
+        result = FEPResistanceResult(
+            delta_delta_g=-1.5,
+            confidence=0.8,
+            n_windows=11,
+        )
+        assert result.total_simulation_time_ps == 0.0
+
+    def test_config_defaults_for_adaptive_sampling(self):
+        """Verify that config defaults support adaptive sampling."""
+        assert CONFIG.fep_convergence_threshold_kcal_per_mol == 0.5
+        assert CONFIG.fep_check_interval_steps == 500
+

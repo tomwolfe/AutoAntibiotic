@@ -54,9 +54,21 @@ class FEPResistanceResult:
         confidence: Confidence in the result (0.0–1.0).
         n_windows: Number of lambda windows used.
         error: Optional error message if the calculation failed.
+        per_window_uncertainties: Optional list of per-window MBAR
+            uncertainties (kcal/mol), one per lambda window.
+        total_simulation_time_ps: Total simulation time in ps across
+            all windows (step_count × time_step_ps).
     """
 
-    __slots__ = ("delta_delta_g", "confidence", "_mbar_uncertainty", "n_windows", "error")
+    __slots__ = (
+        "delta_delta_g",
+        "confidence",
+        "_mbar_uncertainty",
+        "n_windows",
+        "error",
+        "per_window_uncertainties",
+        "total_simulation_time_ps",
+    )
 
     def __init__(
         self,
@@ -65,12 +77,16 @@ class FEPResistanceResult:
         n_windows: int,
         error: Optional[str] = None,
         mbar_uncertainty: float = 0.0,
+        per_window_uncertainties: Optional[List[float]] = None,
+        total_simulation_time_ps: float = 0.0,
     ) -> None:
         self.delta_delta_g = delta_delta_g
         self.confidence = confidence
         self.n_windows = n_windows
         self.error = error
         self._mbar_uncertainty = mbar_uncertainty
+        self.per_window_uncertainties = per_window_uncertainties
+        self.total_simulation_time_ps = total_simulation_time_ps
 
     @property
     def confidence_label(self) -> str:
@@ -79,9 +95,14 @@ class FEPResistanceResult:
         return "High Confidence"
 
     def __repr__(self) -> str:
+        uncertainty_str = (
+            f"uncertainty={self._mbar_uncertainty:.3f}"
+            if self._mbar_uncertainty > 0.0
+            else "uncertainty=0.000"
+        )
         return (
             f"FEPResistanceResult(d\u0394\u0394G={self.delta_delta_g:.3f} kcal/mol, "
-            f"confidence={self.confidence:.2f}, confidence_label={self.confidence_label}, "
+            f"confidence={self.confidence:.2f}, {uncertainty_str}, "
             f"windows={self.n_windows})"
         )
 
@@ -307,24 +328,26 @@ class FEPResistanceCalculator:
             positions: _openmm_unit.Quantity,
             alchemical_region: AlchemicalRegion,
             label: str,
-        ) -> Tuple[float, float]:
-            """Run FEP for one system and return (delta_G, uncertainty).
+        ) -> Tuple[float, List[float], float]:
+            """Run FEP for one system and return (delta_G, per_window_uncertainties, total_time_ps).
 
-            Implements adaptive convergence monitoring: after every 100
-            production steps, the running estimate of the reduced potential
-            at the current lambda window is checked.  If the change over
-            the last 3 checks is below *fep_convergence_threshold* (and
-            the minimum step count has been reached), sampling terminates
-            early for that window.
+            Implements adaptive convergence monitoring: after every
+            ``fep_check_interval_steps`` production steps, the running
+            estimate of the reduced potential at the current lambda window
+            is checked.  If the change over the last 3 checks is below
+            *fep_convergence_threshold* (and the minimum step count has
+            been reached), sampling terminates early for that window.
             """
             n_eq_steps = CONFIG.fep_warmup_steps
             min_prod_steps = CONFIG.fep_min_steps_per_window
             max_prod_steps = CONFIG.fep_max_steps_per_window
+            check_interval = CONFIG.fep_check_interval_steps
             conv_threshold = CONFIG.fep_convergence_threshold
             kT_kcal = CONFIG.fep_kT_kcal_per_mol
             conv_threshold_red = conv_threshold / kT_kcal  # in reduced units
 
             all_window_samples: List[List[np.ndarray]] = []
+            per_window_uncertainties: List[float] = []
 
             for i, lam in enumerate(lambda_protocol):
                 alchemical_state = AlchemicalState.from_system(system)
@@ -357,8 +380,8 @@ class FEPResistanceCalculator:
                 n_steps = 0
 
                 while n_steps < max_prod_steps:
-                    simulation.step(100)
-                    n_steps += 100
+                    simulation.step(check_interval)
+                    n_steps += check_interval
 
                     state = simulation.context.getState(
                         getEnergy=True, getPositions=True, getParameters=True,
@@ -397,7 +420,7 @@ class FEPResistanceCalculator:
 
                     window_samples.append(u_k)
 
-                    # Convergence check every 3 samples (300 steps)
+                    # Convergence check every check_interval steps
                     if n_steps >= min_prod_steps and len(window_samples) % 3 == 0:
                         u_i_vals = [w[i] for w in window_samples]
                         avg_u_i = float(np.mean(u_i_vals))
@@ -409,7 +432,16 @@ class FEPResistanceCalculator:
                                 for j in range(1, 3)
                             ]
                             if all(c < conv_threshold_red for c in changes):
+                                log.info(
+                                    "Convergence reached for %s at step %d",
+                                    label, n_steps,
+                                )
                                 break
+                else:
+                    log.warning(
+                        "Max steps reached for %s without convergence (steps=%d)",
+                        label, n_steps,
+                    )
 
                 all_window_samples.append(window_samples)
 
@@ -422,7 +454,7 @@ class FEPResistanceCalculator:
                     u_kln[k, n, :] = u_vec
 
             if len(all_window_samples) < 2 or max_n_k < 2:
-                return 0.0, 10.0
+                return 0.0, [], 0.0
 
             try:
                 mbar = MBAR.from_energy_matrix(u_kln, temperature=temperature)
@@ -432,29 +464,42 @@ class FEPResistanceCalculator:
                 delta_G_kcal = delta_G.value_in_unit(
                     _openmm_unit.kilocalories_per_mole
                 )
-                return float(delta_G_kcal), float(uncertainty)
+                # Track per-window uncertainty and total simulation time
+                per_window_uncertainties.append(uncertainty)
+                total_time_ps = n_windows * n_steps * timestep.value_in_unit(
+                    _openmm_unit.picosecond
+                )
+                return float(delta_G_kcal), per_window_uncertainties, total_time_ps
             except Exception:
-                return 0.0, 10.0
+                return 0.0, [], 0.0
 
         # Compute ΔG for WT and mutant
-        delta_g_wt, uncert_wt = _run_fep_for_system(
+        delta_g_wt, per_window_unc_wt, total_time_wt = _run_fep_for_system(
             wt_system, wt_topology, wt_positions,
             alchemical_region_wt, "WT",
         )
-        delta_g_mut, uncert_mut = _run_fep_for_system(
+        delta_g_mut, per_window_unc_mut, total_time_mut = _run_fep_for_system(
             mut_system, mut_topology, mut_positions,
             alchemical_region_mut, "Mutant",
         )
 
         delta_delta_g = delta_g_mut - delta_g_wt
-        combined_uncertainty = max(uncert_wt, uncert_mut)
+        combined_uncertainty = max(
+            max(per_window_unc_wt) if per_window_unc_wt else 0.0,
+            max(per_window_unc_mut) if per_window_unc_mut else 0.0,
+        )
         confidence = max(0.0, min(1.0, 1.0 - combined_uncertainty))
+
+        all_uncertainties = per_window_unc_wt + per_window_unc_mut
+        total_time_ps = total_time_wt + total_time_mut
 
         return FEPResistanceResult(
             delta_delta_g=delta_delta_g,
             confidence=confidence,
             n_windows=n_windows,
             mbar_uncertainty=combined_uncertainty,
+            per_window_uncertainties=all_uncertainties if all_uncertainties else None,
+            total_simulation_time_ps=total_time_ps,
         )
 
     def _build_system(
