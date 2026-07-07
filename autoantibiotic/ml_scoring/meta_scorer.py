@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
 from sklearn.model_selection import train_test_split
 
-from ..config import CONFIG
+from ..config import CONFIG, ConfigurationError
 from ..io_utils import log
 from ..models import CompoundRecord
 
@@ -59,6 +59,31 @@ class MetaScorer:
     @property
     def available(self) -> bool:
         return self._fitted and self._model is not None
+
+    def validate_input_features(self, record: CompoundRecord) -> bool:
+        """Validate that required input features are present before prediction.
+
+        When ``CONFIG.force_md_for_meta_scoring`` is ``True``, this method
+        verifies that MD-derived dynamic features (``md_ligand_rmsd`` and
+        ``md_pocket_rg_stability``) are not ``None``.  If they are missing,
+        a :class:`~autoantibiotic.config.ConfigurationError` is raised.
+
+        Returns ``True`` when validation passes.
+        """
+        if CONFIG.force_md_for_meta_scoring:
+            missing = []
+            if record.md_ligand_rmsd is None:
+                missing.append("md_ligand_rmsd")
+            if record.md_pocket_rg_stability is None:
+                missing.append("md_pocket_rg_stability")
+            if missing:
+                raise ConfigurationError(
+                    f"MetaScorer: {record.compound_id} is missing required MD "
+                    f"features: {', '.join(missing)}. "
+                    "Set CONFIG.force_md_for_meta_scoring=False or run MD "
+                    "validation first."
+                )
+        return True
 
     @staticmethod
     def _scaffold_groups(smiles_list: List[str]) -> Dict[str, List[int]]:
@@ -111,6 +136,14 @@ class MetaScorer:
         md_pocket_rg_stability_values : list of float, optional
             Per-sample MD pocket Rg stability values for training data.
         """
+        total_samples = len(actives_smiles) + len(inactives_smiles)
+        if total_samples < CONFIG.min_training_samples:
+            raise ConfigurationError(
+                f"Insufficient training data for MetaScorer "
+                f"(found {total_samples}). Please ensure ChEMBL API "
+                f"access or expand reference data."
+            )
+
         X_list: List[np.ndarray] = []
         y_list: List[float] = []
         smiles_for_scaffold: List[str] = []
@@ -319,6 +352,7 @@ class MetaScorer:
         """
         if not self.available:
             return None
+        self.validate_input_features(record)
         if record.mol is None:
             mol = Chem.MolFromSmiles(record.smiles)
             if mol is None:

@@ -17,8 +17,13 @@ from autoantibiotic.analysis import (
     predict_meta_score,
     _get_meta_scorer,
 )
-from autoantibiotic.config import CONFIG
+from autoantibiotic.config import CONFIG, ConfigurationError
 from autoantibiotic.models import CompoundRecord
+
+# Lower the minimum training threshold so existing tests (which use
+# 4 samples) continue to work.  Individual tests that need the production
+# default override it locally.
+CONFIG.min_training_samples = 4
 
 
 def _make_record(smiles: str = "c1ccccc1O") -> CompoundRecord:
@@ -432,3 +437,58 @@ def test_metascorer_with_real_docking_features() -> None:
     score = scorer.predict(_make_record(actives[0]))
     assert score is not None
     assert 0.0 <= score <= 1.0
+
+
+# ── Minimum training data enforcement ───────────────────────────
+
+
+def test_fit_raises_on_small_dataset() -> None:
+    """MetaScorer.fit() must raise ConfigurationError when fewer than
+    CONFIG.min_training_samples samples are provided."""
+    original = CONFIG.min_training_samples
+    CONFIG.min_training_samples = 20
+    try:
+        actives = ["c1ccccc1O"]
+        inactives = ["c1ccccc1N"]
+
+        scorer = MetaScorer()
+        with pytest.raises(ConfigurationError, match="Insufficient training data"):
+            scorer.fit(actives, inactives)
+
+        assert scorer.available is False
+    finally:
+        CONFIG.min_training_samples = original
+
+
+# ── MD feature validation ────────────────────────────────────────
+
+
+def test_predict_validates_md_features() -> None:
+    """When CONFIG.force_md_for_meta_scoring is True, predict() must
+    raise ConfigurationError if MD features are missing."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+    assert scorer.available is True
+
+    original_value = CONFIG.force_md_for_meta_scoring
+    try:
+        CONFIG.force_md_for_meta_scoring = True
+
+        rec = _make_record(actives[0])
+        rec.md_ligand_rmsd = None
+        rec.md_pocket_rg_stability = None
+
+        with pytest.raises(ConfigurationError, match="missing required MD"):
+            scorer.predict(rec)
+    finally:
+        CONFIG.force_md_for_meta_scoring = original_value

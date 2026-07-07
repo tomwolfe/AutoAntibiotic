@@ -82,6 +82,12 @@ class PipelineConfig:
     """RMSD standard deviation threshold (Å) for declaring convergence
     during adaptive MD sampling.  Default 0.1 Å."""
 
+    # MetaScorer training constraints
+    min_training_samples: int = 20
+    """Minimum number of actives + inactives required to train the
+    MetaScorer.  If fewer samples are available, a ConfigurationError
+    is raised to prevent fitting on noise."""
+
     # Force MD for meta-scoring
     force_md_for_meta_scoring: bool = False
     """When True, raise ConfigurationError if MD validation fails for
