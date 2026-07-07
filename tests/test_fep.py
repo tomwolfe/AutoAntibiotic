@@ -356,6 +356,89 @@ class TestPreScreenRejection:
                     assert result.n_windows == 11
 
 
+class TestFEPEmptyLargeMolecule:
+    """Tests for pre-screening of large molecules in FEP."""
+
+    def test_pre_screen_rejects_heavy_atoms(self):
+        """Pre-screen raises ConfigurationError when heavy atom count > 50."""
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_smiles="CC(=O)OC1=CC=C(C=C1)C2=CC(=O)C3=C(C=C(C=C3O2)O)O" * 5,
+        )
+        with pytest.raises(ConfigurationError, match="heavy atoms"):
+            calc.pre_screen_ligand()
+
+    def test_pre_screen_rejects_long_smiles(self):
+        """Pre-screen raises ConfigurationError when SMILES length > 100."""
+        from rdkit import Chem
+        mol = Chem.MolFromSmiles("CC(=O)OC")
+        assert mol is not None
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_rdkit=mol,
+        )
+        with patch("autoantibiotic.fep_engine.Chem.MolToSmiles",
+                   return_value="A" * 101):
+            with pytest.raises(ConfigurationError, match="SMILES length"):
+                calc.pre_screen_ligand()
+
+    def test_pre_screen_accepts_valid_ligand(self):
+        """Pre-screen passes for a valid small ligand."""
+        from rdkit import Chem
+        mol = Chem.MolFromSmiles("CC(=O)OC")
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_rdkit=mol,
+        )
+        calc.pre_screen_ligand()
+
+    def test_pre_screen_accepts_no_ligand(self):
+        """Pre-screen passes when ligand is None."""
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+        )
+        calc.pre_screen_ligand()
+
+    def test_calculate_ddg_rejects_large_ligand(self):
+        """calculate_ddg raises ConfigurationError for large ligands via pre_screen_ligand."""
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_smiles="CC(=O)OC1=CC=C(C=C1)C2=CC(=O)C3=C(C=C(C=C3O2)O)O" * 5,
+        )
+        with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", True):
+            with pytest.raises(ConfigurationError, match="heavy atoms|SMILES length"):
+                calc.calculate_ddg()
+
+    def test_calculate_ddg_accepts_valid_ligand(self):
+        """calculate_ddg passes pre-screen for a valid small ligand."""
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_smiles="CC(=O)OC",
+        )
+        with patch("autoantibiotic.fep_engine._HAVE_OPENMM", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", True), \
+             patch("os.path.exists", return_value=True):
+            with patch.object(calc, "_pre_screen_initial_energy") as mock_pre:
+                mock_pre.return_value = None
+                with patch.object(calc, "_compute_fep_delta_ddg") as mock_compute:
+                    mock_compute.return_value = FEPResistanceResult(
+                        delta_delta_g=-0.5,
+                        confidence=0.9,
+                        n_windows=11,
+                    )
+                    result = calc.calculate_ddg()
+                    assert result.delta_delta_g == -0.5
+
+
 class TestCheckpointSaveLoad:
     """Tests for checkpoint save and load functionality."""
 

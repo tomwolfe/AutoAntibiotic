@@ -162,6 +162,35 @@ class FEPResistanceCalculator:
         elif ligand_rdkit is not None:
             self.ligand_rdkit = ligand_rdkit
 
+    def pre_screen_ligand(self) -> None:
+        """Pre-screen the ligand for FEP feasibility.
+
+        Checks:
+        - Heavy atom count <= 50.
+        - SMILES length <= 100.
+
+        Raises
+        ------
+        ConfigurationError
+            If the ligand exceeds any of the pre-screen thresholds.
+        """
+        if self.ligand_rdkit is None:
+            return
+        num_heavy = self.ligand_rdkit.GetNumHeavyAtoms()
+        if num_heavy > 50:
+            raise ConfigurationError(
+                f"Ligand has {num_heavy} heavy atoms (>50). "
+                "Molecule too large for practical FEP calculation. "
+                "Consider skipping FEP for this candidate."
+            )
+        smi = Chem.MolToSmiles(self.ligand_rdkit)
+        if len(smi) > 100:
+            raise ConfigurationError(
+                f"Ligand SMILES length is {len(smi)} characters (>100). "
+                "Molecule too large for practical FEP calculation. "
+                "Consider skipping FEP for this candidate."
+            )
+
     def calculate_ddg(self) -> FEPResistanceResult:
         """Calculate the binding free energy difference ΔΔG between
         wild-type and mutant receptor binding the same ligand.
@@ -196,6 +225,8 @@ class FEPResistanceCalculator:
         >>> print(f"ΔΔG = {result.delta_delta_g:.2f} kcal/mol")
         ΔΔG = -1.23 kcal/mol
         """
+        self.pre_screen_ligand()
+
         if not _HAVE_OPENMM:
             raise ConfigurationError(
                 "Free Energy Perturbation (FEP) requested but OpenMM is not installed. "
@@ -236,23 +267,6 @@ class FEPResistanceCalculator:
             raise ConfigurationError(
                 f"Mutant receptor PDB not found: {self.receptor_mut_pdb}"
             )
-
-        # Pre-check ligand size for FEP feasibility
-        if self.ligand_rdkit is not None:
-            num_heavy = self.ligand_rdkit.GetNumHeavyAtoms()
-            if num_heavy > 50:
-                raise ConfigurationError(
-                    f"Ligand has {num_heavy} heavy atoms (>50). "
-                    "Molecule too large for practical FEP calculation. "
-                    "Consider skipping FEP for this candidate."
-                )
-            smi = Chem.MolToSmiles(self.ligand_rdkit)
-            if len(smi) > 100:
-                raise ConfigurationError(
-                    f"Ligand SMILES length is {len(smi)} characters (>100). "
-                    "Molecule too large for practical FEP calculation. "
-                    "Consider skipping FEP for this candidate."
-                )
 
         # Pre-screen initial energy
         initial_energy = self._pre_screen_initial_energy(
@@ -382,10 +396,13 @@ class FEPResistanceCalculator:
                     exc, len(lambda_protocol),
                 )
 
-        checkpoint_dir: Optional[str] = None
+        checkpoint_path_wt: Optional[str] = None
+        checkpoint_path_mut: Optional[str] = None
         if CONFIG.fep_enable_checkpointing:
-            checkpoint_dir = str(CONFIG.output_dir / "fep_checkpoints")
-            os.makedirs(checkpoint_dir, exist_ok=True)
+            ckpt_dir = str(CONFIG.output_dir / "fep_checkpoints")
+            os.makedirs(ckpt_dir, exist_ok=True)
+            checkpoint_path_wt = os.path.join(ckpt_dir, "checkpoint_WT.json")
+            checkpoint_path_mut = os.path.join(ckpt_dir, "checkpoint_Mutant.json")
 
         def _run_fep_for_system(
             system: _openmm.System,
@@ -393,7 +410,7 @@ class FEPResistanceCalculator:
             positions: _openmm_unit.Quantity,
             alchemical_region: AlchemicalRegion,
             label: str,
-            chk_dir: Optional[str] = None,
+            checkpoint_path: Optional[str] = None,
         ) -> Tuple[float, List[float], float]:
             n_eq_steps = CONFIG.fep_warmup_steps
             min_prod_steps = CONFIG.fep_min_steps_per_window
@@ -408,31 +425,29 @@ class FEPResistanceCalculator:
 
             # ── Load checkpoint if available ───────────────────────
             start_window = 0
-            if chk_dir is not None:
-                checkpoint_path = os.path.join(chk_dir, f"checkpoint_{label}.json")
-                if os.path.exists(checkpoint_path):
-                    try:
-                        with open(checkpoint_path, "r") as f:
-                            checkpoint_data = json.load(f)
-                        for window_data in checkpoint_data.get("windows", []):
-                            samples_list = window_data.get("samples", [])
-                            converted = [np.array(s) for s in samples_list]
-                            all_window_samples.append(converted)
-                            per_window_uncertainties.append(
-                                window_data.get("uncertainty", 0.0)
-                            )
-                        start_window = len(all_window_samples)
-                        log.info(
-                            "Loaded checkpoint for %s: %d windows completed",
-                            label, start_window,
+            if checkpoint_path is not None and os.path.exists(checkpoint_path):
+                try:
+                    with open(checkpoint_path, "r") as f:
+                        checkpoint_data = json.load(f)
+                    for window_data in checkpoint_data.get("windows", []):
+                        samples_list = window_data.get("samples", [])
+                        converted = [np.array(s) for s in samples_list]
+                        all_window_samples.append(converted)
+                        per_window_uncertainties.append(
+                            window_data.get("uncertainty", 0.0)
                         )
-                    except Exception as e:
-                        log.warning(
-                            "Failed to load checkpoint for %s: %s. "
-                            "Restarting from scratch.", label, e,
-                        )
-                        all_window_samples = []
-                        per_window_uncertainties = []
+                    start_window = len(all_window_samples)
+                    log.info(
+                        "Loaded checkpoint for %s: %d windows completed",
+                        label, start_window,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "Failed to load checkpoint for %s: %s. "
+                        "Restarting from scratch.", label, e,
+                    )
+                    all_window_samples = []
+                    per_window_uncertainties = []
 
             running_delta_g: List[float] = []
 
@@ -573,8 +588,7 @@ class FEPResistanceCalculator:
                 all_window_samples.append(window_samples)
 
                 # ── Save checkpoint after each window ─────────────
-                if chk_dir is not None:
-                    ckpt_path = os.path.join(chk_dir, f"checkpoint_{label}.json")
+                if checkpoint_path is not None:
                     try:
                         ckpt_data: Dict[str, Any] = {
                             "label": label,
@@ -587,7 +601,7 @@ class FEPResistanceCalculator:
                             ],
                             "per_window_uncertainties": per_window_uncertainties,
                         }
-                        with open(ckpt_path, "w") as f:
+                        with open(checkpoint_path, "w") as f:
                             json.dump(ckpt_data, f, indent=2)
                     except Exception as e:
                         log.warning(
@@ -627,11 +641,11 @@ class FEPResistanceCalculator:
         # Compute ΔG for WT and mutant
         delta_g_wt, per_window_unc_wt, total_time_wt = _run_fep_for_system(
             wt_system, wt_topology, wt_positions,
-            alchemical_region_wt, "WT", checkpoint_dir,
+            alchemical_region_wt, "WT", checkpoint_path_wt,
         )
         delta_g_mut, per_window_unc_mut, total_time_mut = _run_fep_for_system(
             mut_system, mut_topology, mut_positions,
-            alchemical_region_mut, "Mutant", checkpoint_dir,
+            alchemical_region_mut, "Mutant", checkpoint_path_mut,
         )
 
         delta_delta_g = delta_g_mut - delta_g_wt
@@ -639,6 +653,13 @@ class FEPResistanceCalculator:
             max(per_window_unc_wt) if per_window_unc_wt else 0.0,
             max(per_window_unc_mut) if per_window_unc_mut else 0.0,
         )
+        if combined_uncertainty > 1.0:
+            log.warning(
+                "MBAR uncertainty %.3f kcal/mol exceeds 1.0 kcal/mol threshold. "
+                "Result marked as Low Confidence.",
+                combined_uncertainty,
+            )
+
         confidence = max(0.0, min(1.0, 1.0 - combined_uncertainty))
 
         all_uncertainties = per_window_unc_wt + per_window_unc_mut
