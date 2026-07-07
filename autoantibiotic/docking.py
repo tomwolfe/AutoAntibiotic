@@ -23,10 +23,12 @@ if not hasattr(rdkit, "six"):
     rdkit.six = _six_mod
     del _sys, _io, _six_mod
 
-from .config import CONFIG
+from .config import CONFIG, ConfigurationError
 from .models import CompoundRecord
 from .io_utils import (
     AutoAntibioticError,
+    DockingParseError,
+    DockingResultValidator,
     GninaError,
     VinaError,
     OpenBabelError,
@@ -70,6 +72,9 @@ try:
 except ImportError:
     _HAVE_TQDM = False
     _tqdm = lambda x, **kw: x
+
+_DOCKING_BINARY_VALIDATED: bool = False
+"""Tracking sentinel so binary health check runs at most once per session."""
 
 
 def _extract_native_ligand_from_holo(
@@ -444,23 +449,66 @@ def _run_docking_tool(
         "--num_modes", str(CONFIG.vina_num_modes),
     ]
 
+    validator = DockingResultValidator()
+
+    # One-time binary health check at startup
+    global _DOCKING_BINARY_VALIDATED
+    if (
+        CONFIG.validate_docking_binaries_on_startup
+        and not _DOCKING_BINARY_VALIDATED
+    ):
+        try:
+            version_result = run_tool(
+                [binary, "--version"], timeout=10, check=False,
+            )
+            version_out = version_result.stdout or version_result.stderr
+            if not validator.validate_binary_health(tool_name, version_out):
+                raise ConfigurationError(
+                    f"{binary} version check failed. "
+                    f"Expected Vina 1.2.x or GNINA 1.x, got: "
+                    f"{version_out.strip()!r}"
+                )
+            log.info(f"  ✓  {binary} binary health validated.")
+        except (RuntimeError, OSError, AutoAntibioticError) as exc:
+            raise ConfigurationError(
+                f"Cannot run {binary} for version check: {exc}"
+            )
+        _DOCKING_BINARY_VALIDATED = True
+
     try:
         result = run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
         if result.returncode != 0:
             log.warning(f"  {binary} error: {result.stderr.strip()}")
-            return None
+            raise DockingParseError(
+                f"{binary} returned non-zero exit code {result.returncode}. "
+                f"stderr: {result.stderr.strip()}"
+            )
         if tool_name == "gnina":
-            score = parse_gnina_energy(result.stdout)
+            score = validator.parse_gnina(result.stdout)
             if score is not None:
                 return score
-            return parse_gnina_energy(result.stderr)
+            score = validator.parse_gnina(result.stderr)
+            if score is not None:
+                return score
+            raise DockingParseError(
+                f"{binary} output did not contain a valid CNNscore/CNNaffinity."
+            )
         else:
-            energy = parse_vina_energy(result.stdout)
+            energy = validator.parse_vina(result.stdout)
             if energy is not None:
                 return energy
-            return parse_vina_energy(result.stderr)
+            energy = validator.parse_vina(result.stderr)
+            if energy is not None:
+                return energy
+            raise DockingParseError(
+                f"{binary} output did not contain a valid binding energy."
+            )
     except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
         log.warning(f"  {binary} execution failed: {exc}")
+        if isinstance(exc, DockingParseError):
+            raise
+        if isinstance(exc, (VinaError, GninaError)):
+            raise DockingParseError(str(exc)) from exc
         return None
 
 
@@ -493,10 +541,17 @@ def dock_compound(
     if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
         return None
 
-    energy = _run_docking_tool(tool_name, receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+    try:
+        energy = _run_docking_tool(tool_name, receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+    except DockingParseError:
+        energy = None
+
     if energy is None and CONFIG.use_gnina:
         log.warning("  GNINA docking failed, falling back to Vina.")
-        energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+        try:
+            energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+        except DockingParseError:
+            energy = None
 
     # Keep out_pdbqt on disk for downstream IFP analysis.
     for f in (lig_pdbqt,):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -43,6 +44,10 @@ class GninaError(AutoAntibioticError):
 
 class OpenBabelError(AutoAntibioticError):
     """Error raised when OpenBabel fails with a recognised pattern."""
+
+
+class DockingParseError(AutoAntibioticError):
+    """Error raised when docking output cannot be parsed or validation fails."""
 
 
 _TOOL_ERROR_MESSAGES: Dict[str, Dict[str, str]] = {
@@ -243,52 +248,210 @@ def run_tool(
 
 
 def parse_vina_energy(vina_stdout: str) -> Optional[float]:
-    """Extract the best (lowest) binding energy from Vina stdout."""
-    for line in vina_stdout.splitlines():
-        stripped = line.strip()
-        m = re.match(r"^\s*1\s+(-?\d+\.?\d*)", stripped)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                continue
-    for line in vina_stdout.splitlines():
-        m = re.search(r"Affinity:\s*(-?\d+\.?\d*)\s*\(?kcal/mol\)?", line)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                continue
-    return None
+    """Extract the best (lowest) binding energy from Vina stdout.
+
+    Delegates to :class:`DockingResultValidator` for parsing.
+    """
+    return DockingResultValidator().parse_vina(vina_stdout)
 
 
 def parse_gnina_energy(gnina_stdout: str) -> Optional[float]:
     """Extract the best CNNscore from GNINA stdout.
 
-    GNINA output contains lines like::
-
-        CNNscore    :   0.8567
-        CNNaffinity :   7.2345
-
-    Returns CNNscore (0-1, higher = better) or None if parsing fails.
+    Delegates to :class:`DockingResultValidator` for parsing.
     """
-    for line in gnina_stdout.splitlines():
-        stripped = line.strip()
-        m = re.search(r"CNNscore\s*:\s*(\d+\.?\d*)", stripped)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
+    return DockingResultValidator().parse_gnina(gnina_stdout)
+
+
+# ── DockingResultValidator ──────────────────────────────────────────
+
+
+class DockingResultValidator:
+    """Structured validator for docking tool output.
+
+    Parses and validates raw stdout/stderr from Vina and GNINA,
+    handling version-agnostic output formats and known error patterns.
+    """
+
+    _VINA_ERROR_KEYWORDS = frozenset({
+        "Fatal Error", "Segmentation fault", "std::bad_alloc",
+        "Could not open", "Error parsing",
+    })
+    _GNINA_ERROR_KEYWORDS = frozenset({
+        "Fatal Error", "Segmentation fault", "CUDA", "cudaError",
+        "Could not open", "Error parsing",
+    })
+    _VINA_TABLE_HEADER_RE = re.compile(
+        r"mode\s*\|?\s*affinity", re.IGNORECASE,
+    )
+    _VINA_MODE_LINE_RE = re.compile(
+        r"^\s*(?P<mode>\d+)\s+(?P<affinity>-?\d+\.?\d*)",
+    )
+    _VINA_AFFINITY_LINE_RE = re.compile(
+        r"Affinity:\s*(?P<affinity>-?\d+\.?\d*)",
+    )
+    _GNINA_CNNSCORE_RE = re.compile(
+        r"CNNscore\s*:\s*(?P<score>\d+\.?\d*)",
+    )
+    _GNINA_CNNAFFINITY_RE = re.compile(
+        r"CNNaffinity\s*:\s*(?P<affinity>-?\d+\.?\d*)",
+    )
+
+    def parse_vina(self, stdout: str) -> Optional[float]:
+        """Parse best (lowest) Vina binding energy from *stdout*.
+
+        Handles both tabular output (``mode | affinity ...``) and
+        single-line ``Affinity: X`` format.  Returns ``None`` if no
+        valid energy is found or if known error keywords are present.
+        """
+        if not stdout or not stdout.strip():
+            log.debug("Vina stdout is empty")
+            return None
+
+        if self._contains_error(stdout, self._VINA_ERROR_KEYWORDS):
+            log.warning("Vina output contains known error keywords")
+            return None
+
+        # Tabular output — look for the header row, then mode lines
+        mode_values: List[float] = []
+        found_header = False
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            if not found_header and self._VINA_TABLE_HEADER_RE.search(stripped):
+                found_header = True
                 continue
-    for line in gnina_stdout.splitlines():
-        stripped = line.strip()
-        m = re.search(r"CNNaffinity\s*:\s*(-?\d+\.?\d*)", stripped)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                continue
-    return None
+            if found_header:
+                m = self._VINA_MODE_LINE_RE.match(stripped)
+                if m:
+                    try:
+                        val = float(m.group("affinity"))
+                        mode_values.append(val)
+                    except ValueError:
+                        continue
+
+        if mode_values:
+            if len(mode_values) > 1:
+                log.warning(
+                    f"Multiple docking modes found ({len(mode_values)}); "
+                    f"using best (lowest) energy: {mode_values[0]:.3f}"
+                )
+            return mode_values[0]
+
+        # No header found — try to parse mode lines directly (headerless output)
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            m = self._VINA_MODE_LINE_RE.match(stripped)
+            if m:
+                try:
+                    val = float(m.group("affinity"))
+                    mode_values.append(val)
+                except ValueError:
+                    continue
+
+        if mode_values:
+            return mode_values[0]
+
+        # Fallback: single-line "Affinity: X" output
+        for line in stdout.splitlines():
+            m = self._VINA_AFFINITY_LINE_RE.search(line)
+            if m:
+                try:
+                    return float(m.group("affinity"))
+                except ValueError:
+                    continue
+
+        log.debug("No Vina energy value could be parsed from output")
+        return None
+
+    def parse_gnina(self, stdout: str) -> Optional[float]:
+        """Parse best CNNscore from GNINA *stdout*.
+
+        Prioritises ``CNNscore`` over ``CNNaffinity``.  Returns
+        ``None`` if CUDA errors, parsing failures, or known error
+        keywords are detected.
+        """
+        if not stdout or not stdout.strip():
+            log.debug("GNINA stdout is empty")
+            return None
+
+        if self._contains_error(stdout, self._GNINA_ERROR_KEYWORDS):
+            log.warning("GNINA output contains known error keywords")
+            return None
+
+        # Prioritise CNNscore (first occurrence = best mode)
+        for line in stdout.splitlines():
+            m = self._GNINA_CNNSCORE_RE.search(line)
+            if m:
+                try:
+                    score = float(m.group("score"))
+                    if not math.isfinite(score):
+                        log.warning("GNINA CNNscore is NaN or infinite")
+                        continue
+                    return score
+                except ValueError:
+                    continue
+
+        # Fallback to CNNaffinity
+        for line in stdout.splitlines():
+            m = self._GNINA_CNNAFFINITY_RE.search(line)
+            if m:
+                try:
+                    affinity = float(m.group("affinity"))
+                    if not math.isfinite(affinity):
+                        log.warning("GNINA CNNaffinity is NaN or infinite")
+                        continue
+                    return affinity
+                except ValueError:
+                    continue
+
+        log.debug("No GNINA score could be parsed from output")
+        return None
+
+    def validate_binary_health(
+        self, tool_name: str, version_output: str,
+    ) -> bool:
+        """Check the version string matches expected patterns.
+
+        Returns ``True`` for known-good version strings, ``False``
+        for unknown or incompatible versions.
+        """
+        if not version_output or not version_output.strip():
+            log.warning(f"No version output for {tool_name}")
+            return False
+
+        lower = version_output.lower()
+
+        if tool_name == "vina":
+            # Vina 1.2.x
+            if re.search(r"vina\s+1\.2\.\d", lower):
+                return True
+            # AutoDock Vina 1.x
+            if re.search(r"autodock\s+vina\s+1\.\d", lower):
+                return True
+            log.warning(f"Unknown Vina version string: {version_output.strip()}")
+            return False
+
+        if tool_name == "gnina":
+            # GNINA 1.x or higher
+            if re.search(r"gnina\s+[1-9]\.\d", lower):
+                return True
+            # gnina (with version number >= 1.0, not 0.x)
+            if re.search(r"gnina.*\b[1-9]\.\d+", lower):
+                return True
+            log.warning(f"Unknown GNINA version string: {version_output.strip()}")
+            return False
+
+        log.warning(f"Unknown tool name: {tool_name}")
+        return False
+
+    @staticmethod
+    def _contains_error(text: str, keywords: frozenset) -> bool:
+        """Check if *text* contains any of the given error *keywords*."""
+        lower = text.lower()
+        for kw in keywords:
+            if kw.lower() in lower:
+                return True
+        return False
 
 
 def download_with_retry(

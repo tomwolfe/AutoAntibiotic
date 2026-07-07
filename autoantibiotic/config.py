@@ -191,6 +191,8 @@ class PipelineConfig:
     ])
 
     # ── Docking parameters ──
+    validate_docking_binaries_on_startup: bool = True
+    """When True, validate docking binary versions and health on startup."""
     vina_exhaustiveness: int = 8
     vina_num_modes: int = 3
     vina_timeout_s: int = 120

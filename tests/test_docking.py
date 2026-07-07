@@ -20,6 +20,8 @@ from autoantibiotic.docking import (
     prepare_ligand_pdbqt,
 )
 from autoantibiotic.io_utils import (
+    DockingParseError,
+    DockingResultValidator,
     parse_gnina_energy,
     parse_vina_energy,
     ToolResult,
@@ -27,6 +29,7 @@ from autoantibiotic.io_utils import (
     OpenBabelError,
     _classify_tool_error,
 )
+from autoantibiotic.config import ConfigurationError
 
 
 # ── GNINA output parsing ───────────────────────────────────────────
@@ -106,10 +109,14 @@ class TestRunGninaDocking:
 
     @pytest.fixture(autouse=True)
     def reset_gnina_config(self) -> None:
-        saved = CONFIG.gnina_binary_path, CONFIG.dry_run
+        saved = (
+            CONFIG.gnina_binary_path, CONFIG.dry_run,
+            CONFIG.validate_docking_binaries_on_startup,
+        )
         CONFIG.dry_run = False
+        CONFIG.validate_docking_binaries_on_startup = False
         yield
-        CONFIG.gnina_binary_path, CONFIG.dry_run = saved
+        CONFIG.gnina_binary_path, CONFIG.dry_run, CONFIG.validate_docking_binaries_on_startup = saved
 
     def test_successful_docking_returns_cnnscore(self) -> None:
         with patch("autoantibiotic.docking.run_tool", return_value=_make_tool_result()):
@@ -123,20 +130,20 @@ class TestRunGninaDocking:
             )
         assert score == pytest.approx(0.9123)
 
-    def test_nonzero_returncode_returns_none(self) -> None:
+    def test_nonzero_returncode_raises_error(self) -> None:
         with patch(
             "autoantibiotic.docking.run_tool",
             return_value=_make_tool_result(returncode=1, stderr=_GNINA_FAILURE_STDERR),
         ):
-            score = _run_docking_tool(
-                "gnina",
-                receptor_pdbqt="rec.pdbqt",
-                ligand_pdbqt="lig.pdbqt",
-                output_pdbqt="out.pdbqt",
-                center=np.array([0.0, 0.0, 0.0]),
-                box_size=(20.0, 20.0, 20.0),
-            )
-        assert score is None
+            with pytest.raises(DockingParseError):
+                _run_docking_tool(
+                    "gnina",
+                    receptor_pdbqt="rec.pdbqt",
+                    ligand_pdbqt="lig.pdbqt",
+                    output_pdbqt="out.pdbqt",
+                    center=np.array([0.0, 0.0, 0.0]),
+                    box_size=(20.0, 20.0, 20.0),
+                )
 
     def test_dry_run_returns_random_score(self) -> None:
         saved = CONFIG.dry_run
@@ -211,17 +218,19 @@ class TestDockCompoundWithGnina:
         self.work_dir = str(tmp_path)
         self.saved_config = (
             CONFIG.use_gnina, CONFIG.gnina_binary_path, CONFIG.dry_run,
+            CONFIG.validate_docking_binaries_on_startup,
         )
         CONFIG.dry_run = False
         CONFIG.use_gnina = True
         CONFIG.gnina_binary_path = "gnina"
+        CONFIG.validate_docking_binaries_on_startup = False
         self.record = CompoundRecord(
             compound_id="TEST-GNINA",
             smiles="c1ccccc1O",
             mol=Chem.MolFromSmiles("c1ccccc1O"),
         )
         yield
-        CONFIG.use_gnina, CONFIG.gnina_binary_path, CONFIG.dry_run = self.saved_config
+        CONFIG.use_gnina, CONFIG.gnina_binary_path, CONFIG.dry_run, CONFIG.validate_docking_binaries_on_startup = self.saved_config
 
     def test_gnina_success_returns_score(self) -> None:
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
@@ -444,5 +453,220 @@ class TestErrorClassification:
 
     def test_openbabel_error_is_exception(self) -> None:
         err = OpenBabelError("test error")
+        assert isinstance(err, Exception)
+        assert "test error" in str(err)
+
+
+# ── DockingResultValidator tests ────────────────────────────────────
+
+class TestDockingResultValidator:
+    """Tests for the structured DockingResultValidator."""
+
+    @pytest.fixture
+    def validator(self) -> DockingResultValidator:
+        return DockingResultValidator()
+
+    # ── parse_vina ─────────────────────────────────────────────────
+
+    def test_vina_tabular_output(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "mode |   affinity | dist from best mode\n"
+            "     | (kcal/mol) | rmsd l.b.| rmsd u.b.\n"
+            "-----+------------+----------+----------\n"
+            "   1       -8.123       0.000      0.000\n"
+            "   2       -7.500       1.234      2.345\n"
+        )
+        energy = validator.parse_vina(stdout)
+        assert energy == pytest.approx(-8.123)
+
+    def test_vina_tabular_without_header(self, validator: DockingResultValidator) -> None:
+        """Should still parse mode lines even without detecting header."""
+        stdout = (
+            "   1       -8.123       0.000      0.000\n"
+            "   2       -7.500       1.234      2.345\n"
+        )
+        energy = validator.parse_vina(stdout)
+        assert energy == pytest.approx(-8.123)
+
+    def test_vina_single_line_affinity(self, validator: DockingResultValidator) -> None:
+        stdout = "Affinity: -9.456 (kcal/mol)"
+        energy = validator.parse_vina(stdout)
+        assert energy == pytest.approx(-9.456)
+
+    def test_vina_affinity_no_parenthetical(self, validator: DockingResultValidator) -> None:
+        stdout = "Affinity: -5.234"
+        energy = validator.parse_vina(stdout)
+        assert energy == pytest.approx(-5.234)
+
+    def test_vina_malformed_output_no_numbers(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "mode |   affinity\n"
+            "-----+----------\n"
+            "   a       b\n"
+        )
+        assert validator.parse_vina(stdout) is None
+
+    def test_vina_error_keyword_fatal(self, validator: DockingResultValidator) -> None:
+        stdout = "Fatal Error: something went wrong\n"
+        assert validator.parse_vina(stdout) is None
+
+    def test_vina_error_keyword_segfault(self, validator: DockingResultValidator) -> None:
+        stdout = "Segmentation fault\n"
+        assert validator.parse_vina(stdout) is None
+
+    def test_vina_empty_string(self, validator: DockingResultValidator) -> None:
+        assert validator.parse_vina("") is None
+
+    def test_vina_whitespace_only(self, validator: DockingResultValidator) -> None:
+        assert validator.parse_vina("   \n   \n") is None
+
+    def test_vina_mixed_success_and_error(self, validator: DockingResultValidator) -> None:
+        """Output with partial success but also an error keyword."""
+        stdout = (
+            "mode |   affinity | dist from best mode\n"
+            "     | (kcal/mol) | rmsd l.b.| rmsd u.b.\n"
+            "-----+------------+----------+----------\n"
+            "   1       -8.123       0.000      0.000\n"
+            "Error: Could not open receptor file\n"
+        )
+        assert validator.parse_vina(stdout) is None
+
+    def test_vina_missing_columns(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "mode |   affinity\n"
+            "-----+----------\n"
+            "   1       -8.1\n"
+            "   2\n"
+        )
+        energy = validator.parse_vina(stdout)
+        assert energy == pytest.approx(-8.1)
+
+    def test_vina_logs_warning_on_multiple_modes(self, validator: DockingResultValidator, caplog) -> None:
+        import logging
+        caplog.set_level(logging.WARNING)
+        stdout = (
+            "mode |   affinity | dist from best mode\n"
+            "-----+------------+----------+----------\n"
+            "   1       -8.123       0.000      0.000\n"
+            "   2       -7.500       1.234      2.345\n"
+        )
+        energy = validator.parse_vina(stdout)
+        assert energy == pytest.approx(-8.123)
+        assert any("Multiple docking modes found" in rec.message for rec in caplog.records)
+
+    # ── parse_gnina ────────────────────────────────────────────────
+
+    def test_gnina_cnnscore_parsed(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "CNNscore    :   0.8567\n"
+            "CNNaffinity :   7.2345\n"
+        )
+        score = validator.parse_gnina(stdout)
+        assert score == pytest.approx(0.8567)
+
+    def test_gnina_cnnaffinity_fallback(self, validator: DockingResultValidator) -> None:
+        stdout = "CNNaffinity :   7.2345\n"
+        score = validator.parse_gnina(stdout)
+        assert score == pytest.approx(7.2345)
+
+    def test_gnina_no_score_returns_none(self, validator: DockingResultValidator) -> None:
+        assert validator.parse_gnina("No GNINA output") is None
+
+    def test_gnina_empty_string(self, validator: DockingResultValidator) -> None:
+        assert validator.parse_gnina("") is None
+
+    def test_gnina_multi_mode_returns_first_cnnscore(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "-----+------------+----------+----------\n"
+            "   1       -8.123       0.000      0.000\n"
+            "CNNscore    :   0.9123\n"
+            "CNNaffinity :   8.4567\n"
+            "   2       -7.500       1.234      2.345\n"
+            "CNNscore    :   0.8500\n"
+            "CNNaffinity :   7.8000\n"
+        )
+        score = validator.parse_gnina(stdout)
+        assert score == pytest.approx(0.9123)
+
+    def test_gnina_missing_cnnscore_fallback_cnnaffinity(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "-----+------------+----------+----------\n"
+            "   1       -8.123       0.000      0.000\n"
+            "CNNaffinity :   8.4567\n"
+        )
+        score = validator.parse_gnina(stdout)
+        assert score == pytest.approx(8.4567)
+
+    def test_gnina_nan_values_ignored(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "CNNscore    :   nan\n"
+            "CNNaffinity :   7.2345\n"
+        )
+        score = validator.parse_gnina(stdout)
+        assert score == pytest.approx(7.2345)
+
+    def test_gnina_cuda_error(self, validator: DockingResultValidator) -> None:
+        stdout = (
+            "CUDA error: out of memory\n"
+            "CNNscore    :   0.8567\n"
+        )
+        assert validator.parse_gnina(stdout) is None
+
+    def test_gnina_cudna_error_variant(self, validator: DockingResultValidator) -> None:
+        stdout = "cudaError: all CUDA-capable devices are busy or unavailable\n"
+        assert validator.parse_gnina(stdout) is None
+
+    def test_gnina_fatal_error(self, validator: DockingResultValidator) -> None:
+        stdout = "Fatal Error: could not read input\n"
+        assert validator.parse_gnina(stdout) is None
+
+    def test_gnina_partial_output_no_crash(self, validator: DockingResultValidator) -> None:
+        """Partial output from a timeout scenario should not crash."""
+        stdout = "Reading input ...\n"
+        assert validator.parse_gnina(stdout) is None
+
+    def test_gnina_vina_stdout_not_parsed(self, validator: DockingResultValidator) -> None:
+        """Vina's table should not produce a false positive GNINA score."""
+        stdout = (
+            "mode |   affinity | dist from best mode\n"
+            "     | (kcal/mol) | rmsd l.b.| rmsd u.b.\n"
+            "-----+------------+----------+----------\n"
+            "   1       -8.123       0.000      0.000\n"
+        )
+        assert validator.parse_gnina(stdout) is None
+
+    # ── validate_binary_health ─────────────────────────────────────
+
+    def test_vina_version_valid(self, validator: DockingResultValidator) -> None:
+        assert validator.validate_binary_health("vina", "Vina 1.2.3")
+
+    def test_vina_autodock_version_valid(self, validator: DockingResultValidator) -> None:
+        assert validator.validate_binary_health("vina", "AutoDock Vina 1.2.3")
+
+    def test_vina_version_unknown(self, validator: DockingResultValidator) -> None:
+        assert not validator.validate_binary_health("vina", "Vina 0.9.0")
+
+    def test_vina_version_empty(self, validator: DockingResultValidator) -> None:
+        assert not validator.validate_binary_health("vina", "")
+
+    def test_gnina_version_valid(self, validator: DockingResultValidator) -> None:
+        assert validator.validate_binary_health("gnina", "GNINA 1.1")
+
+    def test_gnina_version_with_path(self, validator: DockingResultValidator) -> None:
+        assert validator.validate_binary_health("gnina", "gnina 1.0.1")
+
+    def test_gnina_version_unknown(self, validator: DockingResultValidator) -> None:
+        assert not validator.validate_binary_health("gnina", "GNINA 0.9")
+
+    def test_gnina_version_empty(self, validator: DockingResultValidator) -> None:
+        assert not validator.validate_binary_health("gnina", "")
+
+    def test_unknown_tool_name(self, validator: DockingResultValidator) -> None:
+        assert not validator.validate_binary_health("blarg", "blarg 1.0")
+
+    # ── DockingParseError ─────────────────────────────────────────
+
+    def test_docking_parse_error_is_exception(self) -> None:
+        err = DockingParseError("test error")
         assert isinstance(err, Exception)
         assert "test error" in str(err)
