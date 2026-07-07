@@ -235,7 +235,7 @@ class TestDockCompoundWithGnina:
     def test_gnina_success_returns_score(self) -> None:
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
             with patch("autoantibiotic.docking._run_docking_tool", return_value=0.9123):
-                energy = dock_compound(
+                energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
                     center=np.array([0.0, 0.0, 0.0]),
@@ -244,6 +244,7 @@ class TestDockCompoundWithGnina:
                     tag="test",
                 )
         assert energy == pytest.approx(0.9123)
+        assert method == "GNINA"
 
     def test_gnina_failure_falls_back_to_vina(self) -> None:
         def _mock_dock(tool_name, *args, **kwargs):
@@ -251,7 +252,7 @@ class TestDockCompoundWithGnina:
 
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
             with patch("autoantibiotic.docking._run_docking_tool", side_effect=_mock_dock):
-                energy = dock_compound(
+                energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
                     center=np.array([0.0, 0.0, 0.0]),
@@ -260,11 +261,12 @@ class TestDockCompoundWithGnina:
                     tag="test",
                 )
         assert energy == pytest.approx(-8.5)
+        assert method == "Vina"
 
     def test_both_fail_return_none(self) -> None:
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
             with patch("autoantibiotic.docking._run_docking_tool", return_value=None):
-                energy = dock_compound(
+                energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
                     center=np.array([0.0, 0.0, 0.0]),
@@ -273,12 +275,45 @@ class TestDockCompoundWithGnina:
                     tag="test",
                 )
         assert energy is None
+        assert method == "Vina"
+
+    def test_returns_method_string_in_dry_run_gnina(self) -> None:
+        CONFIG.dry_run = True
+        CONFIG.use_gnina = True
+        with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking._run_docking_tool") as mock_dock:
+                energy, method = dock_compound(
+                    self.record,
+                    receptor_pdbqt="rec.pdbqt",
+                    center=np.array([0.0, 0.0, 0.0]),
+                    box_size=(20.0, 20.0, 20.0),
+                    work_dir=self.work_dir,
+                    tag="test",
+                )
+                assert method == "GNINA"
+                assert energy is not None
+
+    def test_returns_method_string_in_dry_run_vina(self) -> None:
+        CONFIG.dry_run = True
+        CONFIG.use_gnina = False
+        with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking._run_docking_tool") as mock_dock:
+                energy, method = dock_compound(
+                    self.record,
+                    receptor_pdbqt="rec.pdbqt",
+                    center=np.array([0.0, 0.0, 0.0]),
+                    box_size=(20.0, 20.0, 20.0),
+                    work_dir=self.work_dir,
+                    tag="test",
+                )
+                assert method == "Vina"
+                assert energy is not None
 
     def test_gnina_not_used_when_disabled(self) -> None:
         CONFIG.use_gnina = False
         with patch("autoantibiotic.docking.prepare_ligand_pdbqt", return_value=True):
             with patch("autoantibiotic.docking._run_docking_tool", return_value=-7.2) as mock_dock:
-                dock_compound(
+                energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
                     center=np.array([0.0, 0.0, 0.0]),
@@ -287,6 +322,7 @@ class TestDockCompoundWithGnina:
                     tag="test",
                 )
                 assert mock_dock.call_args[0][0] == "vina"
+                assert method == "Vina"
 
 
 # ── Ensemble docking ───────────────────────────────────────────────
@@ -310,20 +346,20 @@ class TestDockCompoundEnsemble:
         yield
         CONFIG.consensus_scoring_method, CONFIG.use_gnina, CONFIG.dry_run = self.saved_config
 
-    def _mock_dock_compound(self, *args, **kwargs) -> Optional[float]:
+    def _mock_dock_compound(self, *args, **kwargs) -> Tuple[Optional[float], str]:
         tag = args[5] if len(args) > 5 else ""
         if "ens0" in tag:
-            return -8.0
+            return -8.0, "Vina"
         elif "ens1" in tag:
-            return -6.0
+            return -6.0, "Vina"
         elif "ens2" in tag:
-            return -10.0
-        return None
+            return -10.0, "Vina"
+        return None, "None"
 
     def test_mean_consensus(self) -> None:
         CONFIG.consensus_scoring_method = "mean"
         with patch("autoantibiotic.docking.dock_compound", side_effect=self._mock_dock_compound):
-            score = dock_compound_ensemble(
+            score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt", "r3.pdbqt"],
                 center_list=[np.array([0, 0, 0]), np.array([1, 1, 1]), np.array([2, 2, 2])],
@@ -332,11 +368,12 @@ class TestDockCompoundEnsemble:
                 tag="ens",
             )
         assert score == pytest.approx(-8.0)
+        assert method == "Vina"
 
     def test_min_consensus(self) -> None:
         CONFIG.consensus_scoring_method = "min"
         with patch("autoantibiotic.docking.dock_compound", side_effect=self._mock_dock_compound):
-            score = dock_compound_ensemble(
+            score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt", "r3.pdbqt"],
                 center_list=[np.array([0, 0, 0]), np.array([1, 1, 1]), np.array([2, 2, 2])],
@@ -345,11 +382,12 @@ class TestDockCompoundEnsemble:
                 tag="ens",
             )
         assert score == pytest.approx(-10.0)
+        assert method == "Vina"
 
     def test_median_consensus(self) -> None:
         CONFIG.consensus_scoring_method = "median"
         with patch("autoantibiotic.docking.dock_compound", side_effect=self._mock_dock_compound):
-            score = dock_compound_ensemble(
+            score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt", "r3.pdbqt"],
                 center_list=[np.array([0, 0, 0]), np.array([1, 1, 1]), np.array([2, 2, 2])],
@@ -358,10 +396,11 @@ class TestDockCompoundEnsemble:
                 tag="ens",
             )
         assert score == pytest.approx(-8.0)
+        assert method == "Vina"
 
     def test_all_fail_returns_none(self) -> None:
-        with patch("autoantibiotic.docking.dock_compound", return_value=None):
-            score = dock_compound_ensemble(
+        with patch("autoantibiotic.docking.dock_compound", return_value=(None, "None")):
+            score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt"],
                 center_list=[np.array([0, 0, 0])],
@@ -370,15 +409,16 @@ class TestDockCompoundEnsemble:
                 tag="ens",
             )
         assert score is None
+        assert method == "None"
 
     def test_some_fail_uses_remaining(self) -> None:
-        def _partial(*args, **kwargs):
+        def _partial(*args, **kwargs) -> Tuple[Optional[float], str]:
             tag = args[5] if len(args) > 5 else ""
-            return -9.0 if "ens0" in tag else None
+            return (-9.0, "Vina") if "ens0" in tag else (None, "None")
 
         CONFIG.consensus_scoring_method = "mean"
         with patch("autoantibiotic.docking.dock_compound", side_effect=_partial):
-            score = dock_compound_ensemble(
+            score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt"],
                 center_list=[np.array([0, 0, 0]), np.array([1, 1, 1])],
@@ -387,17 +427,18 @@ class TestDockCompoundEnsemble:
                 tag="ens",
             )
         assert score == pytest.approx(-9.0)
+        assert method == "Vina"
 
     def test_first_fail_uses_remaining(self) -> None:
-        def _first_fails(*args, **kwargs):
+        def _first_fails(*args, **kwargs) -> Tuple[Optional[float], str]:
             tag = args[5] if len(args) > 5 else ""
             if "ens0" in tag:
-                return None
-            return -7.0
+                return None, "None"
+            return -7.0, "Vina"
 
         CONFIG.consensus_scoring_method = "mean"
         with patch("autoantibiotic.docking.dock_compound", side_effect=_first_fails):
-            score = dock_compound_ensemble(
+            score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt"],
                 center_list=[np.array([0, 0, 0]), np.array([1, 1, 1])],
@@ -406,6 +447,7 @@ class TestDockCompoundEnsemble:
                 tag="ens",
             )
         assert score == pytest.approx(-7.0)
+        assert method == "Vina"
 
 
 # ── Error classification tests ──────────────────────────────────────

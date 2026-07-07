@@ -356,3 +356,81 @@ class TestSmallPipelineRun:
 
             # Verify small library works
             assert len("test") > 0  # Placeholder
+
+    def test_csv_report_contains_docking_method_column(self) -> None:
+        """CSV report should contain the Docking_Method column."""
+        records = [
+            CompoundRecord(
+                compound_id="AA-001", smiles="c1ccccc1",
+                pb2pa_allosteric_energy=-8.5,
+                docking_method="Vina",
+            ),
+            CompoundRecord(
+                compound_id="AA-002", smiles="c1ccccc1O",
+                pb2pa_allosteric_energy=-7.2,
+                docking_method="GNINA",
+            ),
+            CompoundRecord(
+                compound_id="AA-003", smiles="c1ccccc1N",
+                pb2pa_allosteric_energy=None,
+                shape_score=2.5,
+                docking_method="ShapeFallback",
+            ),
+        ]
+        from autoantibiotic.reporting import generate_csv_report
+        saved_dir = CONFIG.output_dir
+        saved_name = CONFIG.csv_report_name
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                CONFIG.output_dir = Path(tmp)
+                CONFIG.csv_report_name = "test_candidates.csv"
+                csv_path = generate_csv_report(records)
+                with open(csv_path) as f:
+                    content = f.read()
+                assert "Docking_Method" in content
+                assert "Vina" in content
+                assert "GNINA" in content
+                assert "ShapeFallback" in content
+        finally:
+            CONFIG.output_dir = saved_dir
+            CONFIG.csv_report_name = saved_name
+
+    def test_html_report_renders_with_docking_method(self) -> None:
+        """HTML report should render without error and contain docking method info."""
+        import plotly.io as pio
+        if not pio.templates:
+            pytest.skip("plotly not fully configured")
+        records = [
+            CompoundRecord(
+                compound_id="AA-001", smiles="c1ccccc1",
+                pb2pa_allosteric_energy=-8.5,
+                docking_method="Vina",
+                qed_score=0.7,
+                selectivity_index=2.5,
+            ),
+            CompoundRecord(
+                compound_id="AA-002", smiles="c1ccccc1O",
+                pb2pa_allosteric_energy=-7.2,
+                docking_method="ShapeFallback",
+                qed_score=0.6,
+                selectivity_index=2.0,
+            ),
+        ]
+        from autoantibiotic.reporting import generate_html_report
+        saved_dir = CONFIG.output_dir
+        saved_name = CONFIG.html_report_name
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                CONFIG.output_dir = Path(tmp)
+                CONFIG.html_report_name = "test_report.html"
+                html_path, _, _ = generate_html_report(records, records, Path(tmp))
+                with open(html_path) as f:
+                    content = f.read()
+                assert "Docking Method" in content
+                assert "ShapeFallback" in content
+                assert "Vina" in content
+                assert "background-color:#ff9800" in content  # orange badge for ShapeFallback
+                assert "background-color:#4caf50" in content  # green badge for others
+        finally:
+            CONFIG.output_dir = saved_dir
+            CONFIG.html_report_name = saved_name

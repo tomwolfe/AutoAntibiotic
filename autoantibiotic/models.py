@@ -63,3 +63,6 @@ class CompoundRecord:
 
     docked_pose_path: Optional[str] = None
     """Path to the best docked pose PDBQT file for interaction fingerprint analysis."""
+
+    docking_method: str = "Pending"
+    """Docking method used: "Vina", "GNINA", "ShapeFallback", "None", "Failed", or "Unknown"."""

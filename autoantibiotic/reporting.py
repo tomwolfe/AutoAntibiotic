@@ -65,6 +65,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
             "QED_Score": f"{rec.qed_score:.3f}",
             "ADMET_Flags": "; ".join(rec.admet_flags) if rec.admet_flags else "N/A",
             "Scoring_Method": scoring_method,
+            "Docking_Method": rec.docking_method,
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
         })
 
@@ -321,6 +322,15 @@ def generate_html_report(
         )
         row_style = ' style="background-color:#ffcccc;"' if poor_admet else ""
 
+        is_shape_fallback = rec.docking_method == "ShapeFallback"
+        method_badge = (
+            f'<span style="background-color:#ff9800;color:#fff;padding:2px 6px;'
+            f'border-radius:4px;font-size:0.8em;">{rec.docking_method}</span>'
+            if is_shape_fallback
+            else f'<span style="background-color:#4caf50;color:#fff;padding:2px 6px;'
+                 f'border-radius:4px;font-size:0.8em;">{rec.docking_method}</span>'
+        )
+
         table_rows += (
             f"<tr{row_style}>"
             f"<td>{i + 1}</td>"
@@ -332,6 +342,7 @@ def generate_html_report(
             f"<td>{si}</td>"
             f"<td>{qed}</td>"
             f"<td style='font-size:0.8em;max-width:200px;'>{admet_str}</td>"
+            f"<td>{method_badge}</td>"
             f"<td style='font-size:0.8em;max-width:250px;'>{rec.resistance_notes}</td>"
             f"</tr>\n"
         )
@@ -390,6 +401,7 @@ tr.admet-warning {{ background-color: #ffcccc; }}
   <th>Selectivity Index</th>
   <th>QED</th>
   <th>ADMET Flags</th>
+  <th>Docking Method</th>
   <th>Resistance Notes</th>
 </tr>
 {table_rows}

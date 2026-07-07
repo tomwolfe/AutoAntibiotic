@@ -522,17 +522,21 @@ def dock_compound(
     tag: str = "",
     cache: _CacheLike = None,
     use_cache: bool = False,
-) -> Optional[float]:
-    """Full docking pipeline for a single compound: PDBQT prep → dock → parse."""
+) -> Tuple[Optional[float], str]:
+    """Full docking pipeline for a single compound: PDBQT prep → dock → parse.
+
+    Returns ``(energy, method)`` where *method* is ``"GNINA"``, ``"Vina"``,
+    ``"None"``, or ``"Unknown"`` (cache hit).
+    """
     tool_name = "gnina" if CONFIG.use_gnina else "vina"
     cache_key = make_cache_key(record.smiles, tool_name)
     if use_cache and cache is not None and cache_key in cache:
-        return cache[cache_key]
+        return cache[cache_key], "Unknown"
 
     if record.mol is None:
         mol = Chem.MolFromSmiles(record.smiles)
         if mol is None:
-            return None
+            return None, "None"
         record.mol = mol
 
     safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
@@ -540,10 +544,12 @@ def dock_compound(
     out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
 
     if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
-        return None
+        return None, "None"
 
+    method = "None"
     try:
         energy = _run_docking_tool(tool_name, receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+        method = "GNINA" if tool_name == "gnina" else "Vina"
     except DockingParseError:
         energy = None
 
@@ -551,6 +557,7 @@ def dock_compound(
         log.warning("  GNINA docking failed, falling back to Vina.")
         try:
             energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+            method = "Vina"
         except DockingParseError:
             energy = None
 
@@ -564,7 +571,7 @@ def dock_compound(
     if use_cache and cache is not None:
         cache[cache_key] = energy
 
-    return energy
+    return energy, method
 
 
 def _compute_rank_consensus(energies_list: List[List[float]]) -> List[float]:
@@ -605,7 +612,7 @@ def dock_compound_ensemble(
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str = "",
-) -> Optional[float]:
+) -> Tuple[Optional[float], str]:
     """Dock a compound against an ensemble of receptor structures.
 
     Each receptor structure is docked independently.  The final score
@@ -619,20 +626,12 @@ def dock_compound_ensemble(
        returned as a fallback.  Use :func:`_compute_rank_consensus`
        in batch mode for proper rank-based consensus.
 
-    Args:
-        record: Compound record to dock.
-        receptor_pdbqt_list: Paths to receptor PDBQT files.
-        center_list: Search-box centres, one per receptor.
-        box_size: Shared box dimensions for all receptors.
-        work_dir: Working directory for intermediate files.
-        tag: Label for cache keys and file names.
-
-    Returns:
-        Consensus score, or None if all individual dockings failed.
+    Returns ``(consensus_score, method)``.
     """
     energies: List[float] = []
+    method = "GNINA" if CONFIG.use_gnina else "Vina"
     for i, (rec_pdbqt, ctr) in enumerate(zip(receptor_pdbqt_list, center_list)):
-        e = dock_compound(
+        e, _ = dock_compound(
             record, rec_pdbqt, ctr, box_size,
             work_dir, f"{tag}_ens{i}",
         )
@@ -640,17 +639,17 @@ def dock_compound_ensemble(
             energies.append(e)
 
     if not energies:
-        return None
+        return None, "None"
 
-    method = CONFIG.consensus_scoring_method
-    if method == "min":
-        return min(energies)
-    elif method == "median":
-        return statistics.median(energies)
-    elif method == "rank":
-        return statistics.mean(energies)
+    consensus = CONFIG.consensus_scoring_method
+    if consensus == "min":
+        return min(energies), method
+    elif consensus == "median":
+        return statistics.median(energies), method
+    elif consensus == "rank":
+        return statistics.mean(energies), method
     else:
-        return statistics.mean(energies)
+        return statistics.mean(energies), method
 
 
 # ── Flexible residue docking helpers ─────────────────────────────
@@ -902,12 +901,14 @@ def _prepare_flexible_receptors(
 
 def _worker_dock_wrapper(
     args: Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int],
-) -> Tuple[str, Optional[float], Optional[str]]:
+) -> Tuple[str, Optional[float], Optional[str], str]:
     """Module-level worker for :func:`_parallel_dock` (pool.map compatible).
 
-    Returns ``(cid, energy, error_reason)`` where *error_reason* is
+    Returns ``(cid, energy, error_reason, method)`` where *error_reason* is
     ``"DockingFailure"`` when docking failed (energy is None) and
-    ``None`` otherwise.  Callers use the error reason to populate
+    ``None`` otherwise.  *method* is the docking engine used.
+
+    Callers use the error reason to populate
     :class:`~autoantibiotic.io_utils.PipelineAudit`.
 
     The per-job wall-clock timeout is enforced by :func:`run_tool` via
@@ -921,17 +922,18 @@ def _worker_dock_wrapper(
 
     rng = np.random.default_rng(seed)
     if dry_run:
-        return cid, float(rng.uniform(-10.0, -5.0)), None
+        method = "GNINA" if CONFIG.use_gnina else "Vina"
+        return cid, float(rng.uniform(-10.0, -5.0)), None, method
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        return cid, None, "DockingFailure"
+        return cid, None, "DockingFailure", "None"
     rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
-    energy = dock_compound(
+    energy, method = dock_compound(
         rec, receptor_pdbqt, center, box_size,
         work_dir, tag, cache=None, use_cache=False,
     )
     error_reason = "DockingFailure" if energy is None else None
-    return cid, energy, error_reason
+    return cid, energy, error_reason, method
 
 
 def _parallel_dock(
@@ -945,18 +947,18 @@ def _parallel_dock(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
-) -> List[Tuple[str, Optional[float], Optional[str]]]:
+) -> List[Tuple[str, Optional[float], Optional[str], str]]:
     """Dock a list of compounds in parallel with batched processing.
 
     Compounds are processed in batches (:attr:`CONFIG.batch_size_docking`,
     default 75) to allow periodic garbage collection and prevent memory
     bloat in worker processes.
 
-    Returns list of ``(compound_id, energy, error_reason)`` tuples where
-    *error_reason* is ``"DockingFailure"`` when the compound could not be
-    docked and ``None`` otherwise.
+    Returns list of ``(compound_id, energy, error_reason, method)`` tuples
+    where *error_reason* is ``"DockingFailure"`` when the compound could not
+    be docked and ``None`` otherwise.  *method* is the docking engine used.
     """
-    results: List[Tuple[str, Optional[float], Optional[str]]] = []
+    results: List[Tuple[str, Optional[float], Optional[str], str]] = []
     to_dock: List[Tuple[str, str, str]] = []
 
     tool_name = "gnina" if CONFIG.use_gnina else "vina"
@@ -964,7 +966,7 @@ def _parallel_dock(
         cache_key = make_cache_key(smiles, tool_name)
         if use_cache and cache is not None and cache_key in cache:
             cached_val = cache[cache_key]
-            results.append((cid, cached_val, None))
+            results.append((cid, cached_val, None, "Unknown"))
             log.debug(f"    Cache hit: {cid} ({tag})")
         else:
             to_dock.append((cid, smiles, cache_key))
@@ -995,8 +997,8 @@ def _parallel_dock(
                 )
             )
 
-        for (cid, _, cache_key), (_, energy, err) in zip(batch, mapped):
-            results.append((cid, energy, err))
+        for (cid, _, cache_key), (_, energy, err, method) in zip(batch, mapped):
+            results.append((cid, energy, err, method))
             if use_cache and cache is not None:
                 cache[cache_key] = energy
 
@@ -1068,31 +1070,32 @@ def _parallel_dock_ensemble(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
-) -> List[Tuple[str, Optional[float]]]:
+) -> List[Tuple[str, Optional[float], str]]:
     """Dock a list of compounds against an ensemble of receptors.
 
     Each compound is docked independently against every receptor,
     then a consensus score is computed via ``CONFIG.consensus_scoring_method``.
 
-    Returns list of ``(compound_id, consensus_energy)`` tuples.
+    Returns list of ``(compound_id, consensus_energy, method)`` tuples.
     """
-    results: List[Tuple[str, Optional[float]]] = []
+    results: List[Tuple[str, Optional[float], str]] = []
 
     rng = np.random.default_rng(CONFIG.random_seed)
     for cid, smiles in items:
         if dry_run:
-            results.append((cid, float(rng.uniform(-10.0, -5.0))))
+            method = "GNINA" if CONFIG.use_gnina else "Vina"
+            results.append((cid, float(rng.uniform(-10.0, -5.0)), method))
             continue
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            results.append((cid, None))
+            results.append((cid, None, "None"))
             continue
         rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
-        energy = dock_compound_ensemble(
+        energy, method = dock_compound_ensemble(
             rec, receptor_pdbqt_list, center_list,
             box_size, work_dir, tag,
         )
-        results.append((cid, energy))
+        results.append((cid, energy, method))
 
     return results
 
@@ -1224,7 +1227,7 @@ def _screen_ensemble(
             work_dir, f"ens_alloc_{i}",
             cache=cache, use_cache=use_cache, dry_run=dry_run,
         )
-        receptor_energies.append([e for _, e, _ in results])
+        receptor_energies.append([e for _, e, _, _ in results])
 
     # Phase 2: consensus scoring across receptors
     _apply_consensus_scoring(records, receptor_energies)
@@ -1239,6 +1242,9 @@ def _screen_ensemble(
                 audit.record_dropout(r.compound_id, "DockingFailure")
 
     scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
+    primary_tool = "GNINA" if CONFIG.use_gnina else "Vina"
+    for r in scored:
+        r.docking_method = primary_tool
     scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
     top50 = scored[:CONFIG.top_n_for_active]
 
@@ -1252,7 +1258,7 @@ def _screen_ensemble(
                 work_dir, f"ens_act_{i}",
                 cache=cache, use_cache=use_cache, dry_run=dry_run,
             )
-            active_receptor_energies.append([e for _, e, _ in results])
+            active_receptor_energies.append([e for _, e, _, _ in results])
         _apply_consensus_scoring(top50, active_receptor_energies, "pb2pa_active_energy")
 
     return scored[:CONFIG.top_n]
@@ -1301,9 +1307,11 @@ def _screen_flexible(
     CONFIG.consensus_scoring_method = saved_method
 
     cid_to_record = {r.compound_id: r for r in records}
-    for cid, energy in allosteric_results:
+    primary_tool = "GNINA" if CONFIG.use_gnina else "Vina"
+    for cid, energy, method in allosteric_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_allosteric_energy = energy
+            cid_to_record[cid].docking_method = method or primary_tool
 
     n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
     log.info(f"  Flexible allosteric docking complete: {n_scored}/{len(records)} scored.")
@@ -1331,9 +1339,10 @@ def _screen_flexible(
     )
     CONFIG.consensus_scoring_method = saved_method
 
-    for cid, energy in active_results:
+    for cid, energy, method in active_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_active_energy = energy
+            cid_to_record[cid].docking_method = method or primary_tool
 
     return scored[:CONFIG.top_n]
 
@@ -1362,9 +1371,10 @@ def _screen_standard(
     )
 
     cid_to_record = {r.compound_id: r for r in records}
-    for cid, energy, err in allosteric_results:
+    for cid, energy, err, method in allosteric_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_allosteric_energy = energy
+            cid_to_record[cid].docking_method = method
         if err is not None and audit is not None:
             audit.record_dropout(cid, err)
 
@@ -1385,9 +1395,10 @@ def _screen_standard(
         cache=cache, use_cache=use_cache, dry_run=dry_run,
     )
 
-    for cid, energy, err in active_results:
+    for cid, energy, err, method in active_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_active_energy = energy
+            cid_to_record[cid].docking_method = method
         if err is not None and audit is not None:
             audit.record_dropout(cid, err)
 
@@ -1440,6 +1451,8 @@ def _screen_shape_fallback(
 
     if ref_mol is None:
         log.error("  Cannot obtain reference molecule for shape scoring.")
+        for rec in records[:CONFIG.top_n]:
+            rec.docking_method = "Failed"
         return records[:CONFIG.top_n]
 
     total = len(records)
@@ -1455,6 +1468,7 @@ def _screen_shape_fallback(
             rec.mol = mol
         score = _compute_shape_fallback_score(rec.mol, ref_mol)
         rec.shape_score = score
+        rec.docking_method = "ShapeFallback"
         if (i + 1) % 100 == 0 and not _HAVE_TQDM:
             log.info(f"  Shape scored {i + 1} / {total}")
 
