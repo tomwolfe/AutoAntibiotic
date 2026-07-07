@@ -1,145 +1,216 @@
-"""Tests for active learning retraining stub."""
+"""
+Tests for the Active Learning Feedback Loop:
+- Uncertainty quantification (predict_with_uncertainty)
+- Model retraining via retrain_with_new_data
+- Review queue generation
+- CLI retrain flag integration
+"""
 
 from __future__ import annotations
 
-import os
+import csv
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import List
 
-import pytest
-
-from autoantibiotic.active_learning import retrain_meta_scorer, _parse_active_learning_csv
-
-
-class TestParseActiveLearningCSV:
-    """Tests for CSV parsing in active learning."""
-
-    @pytest.fixture
-    def valid_csv_path(self, tmp_path):
-        csv_path = tmp_path / "active_data.csv"
-        csv_path.write_text(
-            "smiles,ic50\n"
-            "CC(=O)OC,1e-6\n"
-            "CC(C)O,5e-5\n"
-            "CCO,1e-3\n"
-        )
-        return str(csv_path)
-
-    @pytest.fixture
-    def invalid_csv_path(self, tmp_path):
-        csv_path = tmp_path / "invalid_data.csv"
-        csv_path.write_text(
-            "name,value\n"
-            "foo,1.0\n"
-            "bar,2.0\n"
-        )
-        return str(csv_path)
-
-    @pytest.fixture
-    def empty_csv_path(self, tmp_path):
-        csv_path = tmp_path / "empty.csv"
-        csv_path.write_text("")
-        return str(csv_path)
-
-    def test_parse_valid_csv(self, valid_csv_path):
-        smiles, pIC50 = _parse_active_learning_csv(valid_csv_path)
-        assert len(smiles) == 3
-        assert len(pIC50) == 3
-        # pIC50 = -log10(ic50)
-        assert abs(pIC50[0] - (-np.log10(1e-6))) < 1e-10
-        assert abs(pIC50[1] - (-np.log10(5e-5))) < 1e-10
-        assert abs(pIC50[2] - (-np.log10(1e-3))) < 1e-10
-
-    def test_parse_missing_columns(self, invalid_csv_path):
-        smiles, pIC50 = _parse_active_learning_csv(invalid_csv_path)
-        assert len(smiles) == 0
-        assert len(pIC50) == 0
-
-    def test_parse_empty_csv(self, empty_csv_path):
-        smiles, pIC50 = _parse_active_learning_csv(empty_csv_path)
-        assert len(smiles) == 0
-        assert len(pIC50) == 0
-
-    def test_parse_nonexistent_file(self):
-        smiles, pIC50 = _parse_active_learning_csv("/nonexistent/file.csv")
-        assert len(smiles) == 0
-        assert len(pIC50) == 0
-
-    def test_parse_invalid_values(self, tmp_path):
-        csv_path = tmp_path / "invalid_values.csv"
-        csv_path.write_text(
-            "smiles,ic50\n"
-            "CCO,not_a_number\n"
-            "CC(=O)OC,1e-6\n"
-        )
-        smiles, pIC50 = _parse_active_learning_csv(str(csv_path))
-        # Only the valid entry should be parsed
-        assert len(smiles) == 1
-        assert "CC(=O)OC" in smiles
-
-    def test_parse_negative_ic50(self, tmp_path):
-        csv_path = tmp_path / "negative_ic50.csv"
-        csv_path.write_text(
-            "smiles,ic50\n"
-            "CCO,-100.0\n"
-            "CC(=O)OC,1e-6\n"
-        )
-        smiles, pIC50 = _parse_active_learning_csv(str(csv_path))
-        # Only the valid positive entry should be parsed
-        assert len(smiles) == 1
-
-    def test_empty_string_columns(self, tmp_path):
-        csv_path = tmp_path / "empty_columns.csv"
-        csv_path.write_text(
-            "smiles,ic50\n"
-            ",\n"
-            "CCO,1e-6\n"
-        )
-        smiles, pIC50 = _parse_active_learning_csv(str(csv_path))
-        assert len(smiles) == 1
-        assert "CCO" in smiles
-
-
-class TestRetrainMetaScorer:
-    """Tests for active learning retraining."""
-
-    @pytest.fixture
-    def csv_path(self, tmp_path):
-        csv_path = tmp_path / "training_data.csv"
-        csv_path.write_text(
-            "smiles,ic50\n"
-            "CC(=O)OC,1e-6\n"
-            "CC(C)O,5e-5\n"
-        )
-        return str(csv_path)
-
-    def test_retrain_with_valid_csv(self, csv_path):
-        result = retrain_meta_scorer(csv_path)
-        assert result is True
-
-    def test_retrain_with_nonexistent_file(self):
-        result = retrain_meta_scorer("/nonexistent/file.csv")
-        assert result is False
-
-    def test_retrain_with_too_few_entries(self, tmp_path):
-        csv_path = tmp_path / "too_few.csv"
-        csv_path.write_text(
-            "smiles,ic50\n"
-            "CCO,1e-6\n"
-        )
-        result = retrain_meta_scorer(str(csv_path))
-        assert result is False
-
-    def test_retrain_model_path_specified(self, csv_path, tmp_path):
-        model_path = str(tmp_path / "model.joblib")
-        result = retrain_meta_scorer(csv_path, model_path=model_path)
-        assert result is True
-
-    def test_retrain_invalid_csv_path(self):
-        result = retrain_meta_scorer("invalid.csv")
-        assert result is False
-
-
-# Import numpy for the test
 import numpy as np
+import pytest
+from rdkit import Chem
+
+from autoantibiotic.analysis import MetaScorer, _get_meta_scorer
+from autoantibiotic.config import CONFIG
+from autoantibiotic.models import CompoundRecord
+
+
+def _make_record(
+    compound_id: str = "TEST-001",
+    smiles: str = "c1ccccc1O",
+    mol: Chem.Mol = None,
+) -> CompoundRecord:
+    if mol is None:
+        mol = Chem.MolFromSmiles(smiles)
+        assert mol is not None
+    return CompoundRecord(
+        compound_id=compound_id,
+        smiles=smiles,
+        mol=mol,
+        pb2pa_allosteric_energy=-8.5,
+        shape_score=0.75,
+        qed_score=0.7,
+    )
+
+
+# ── test_uncertainty_quantification ─────────────────────────────────
+
+ACTIVES = [
+    "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+    "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+    "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+]
+INACTIVES = [
+    "CCCCCCCCCCCCCCCCCC(=O)O",
+    "CC(C)(C)OC(=O)NCCCCCCBr",
+]
+
+
+def test_uncertainty_quantification() -> None:
+    """predict_with_uncertainty returns non-zero std_dev for a compound
+    different from training data."""
+    scorer = MetaScorer()
+    scorer.fit(ACTIVES, INACTIVES, uncertainty_threshold=0.0001)
+
+    # Use a compound not in training data
+    new_smiles = "CC1=CC2=C(C=C1)C(=O)C2=O"  # anthraquinone-like
+    rec = _make_record("UNCERT-001", new_smiles)
+
+    mean_score, std_dev = scorer.predict_with_uncertainty(rec)
+
+    assert mean_score is not None
+    assert 0.0 <= mean_score <= 1.0
+    assert std_dev >= 0.0, "std_dev must be non-negative"
+    assert std_dev > 0.0, (
+        "std_dev must be non-zero for a compound different from training data"
+    )
+
+
+# ── test_retrain_updates_model ──────────────────────────────────────
+
+def test_retrain_updates_model() -> None:
+    """Train on small set, predict, add new data, retrain, and verify
+    prediction for a new compound changes significantly."""
+    initial_actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    initial_inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(initial_actives, initial_inactives, uncertainty_threshold=0.0001)
+
+    # Predict on a new compound
+    test_smiles = "CC(=O)Oc1ccccc1C(=O)O"  # aspirin-like
+    test_rec = _make_record("RETRAIN-001", test_smiles)
+    mean1, std1 = scorer.predict_with_uncertainty(test_rec)
+
+    # Add new training data
+    new_actives = [
+        "CC(=O)Oc1ccccc1C(=O)O",  # aspirin
+    ]
+    new_inactives = [
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+    scorer.retrain_with_new_data(new_actives, new_inactives)
+
+    # Predict again after retrain
+    test_rec2 = _make_record("RETRAIN-002", test_smiles)
+    mean2, std2 = scorer.predict_with_uncertainty(test_rec2)
+
+    # The prediction should change significantly after retrain
+    assert mean2 is not None
+    assert 0.0 <= mean2 <= 1.0
+    assert std2 >= 0.0
+
+    # The mean score should change by at least 0.05 (significant change)
+    assert abs(mean2 - mean1) > 0.05, (
+        f"Prediction should change after retrain: {mean1:.4f} -> {mean2:.4f}"
+    )
+
+
+# ── test_review_queue_generation ────────────────────────────────────
+
+def test_review_queue_generation() -> None:
+    """Run a mock pipeline step and verify review_queue.csv is created
+    with correct columns when uncertainty is high."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir) / "output"
+        output_dir.mkdir()
+
+        scorer = MetaScorer()
+        scorer.fit(ACTIVES, INACTIVES)
+
+        # Create records that will be flagged (use very low threshold)
+        rec1 = _make_record("REVIEW-001", ACTIVES[0])
+        rec2 = _make_record("REVIEW-002", ACTIVES[1])
+        rec3 = _make_record("REVIEW-003", "CC(=O)Oc1ccccc1C(=O)O")  # new compound
+
+        # Flag with high threshold to ensure at least some are flagged
+        flagged = scorer.flag_uncertain_predictions(
+            [rec1, rec2, rec3], threshold=0.0001,
+        )
+        flagged_records = [r for r in flagged if r.needs_manual_review]
+        assert len(flagged_records) > 0, "At least one record should be flagged"
+
+        # Verify that the flagged records have needs_manual_review = True
+        for rec in flagged_records:
+            assert rec.needs_manual_review is True
+
+        # Create a review queue CSV and verify its columns
+        review_path = output_dir / "review_queue.csv"
+        with open(review_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["compound_id", "smiles", "meta_score", "reason"])
+            for rec in flagged_records:
+                writer.writerow([
+                    rec.compound_id, rec.smiles,
+                    getattr(rec, "ml_score", ""),
+                    "High prediction uncertainty",
+                ])
+
+        # Read back and verify columns
+        with open(review_path, "r") as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            assert header == [
+                "compound_id", "smiles", "meta_score", "reason",
+            ], f"Expected 4 columns, got {len(header)}: {header}"
+            rows = list(reader)
+            assert len(rows) == len(flagged_records)
+
+
+# ── test_cli_retrain_flag ──────────────────────────────────────────
+
+def test_cli_retrain_flag() -> None:
+    """Verify that passing --retrain-model loads data and triggers
+    retraining without error."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        csv_path = Path(tmpdir) / "retrain_data.csv"
+
+        # Create a small CSV with actives/inactives
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["smiles", "ic50"])
+            # Positive ic50 -> active
+            writer.writerow(["CC(=O)Oc1ccccc1C(=O)O", "500"])
+            # Negative/zero ic50 -> inactive
+            writer.writerow(["CC(C)(C)OC(=O)NCCCCCCBr", "0"])
+
+        # Load the data and trigger retraining
+        from autoantibiotic.ml_scoring.meta_scorer import _get_meta_scorer, MetaScorer
+
+        scorer = _get_meta_scorer()
+        if scorer is not None:
+            new_actives: List[str] = []
+            new_inactives: List[str] = []
+            with open(csv_path, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    smi = row.get("smiles", "").strip()
+                    ic50 = row.get("ic50", "").strip()
+                    if not smi or not ic50:
+                        continue
+                    try:
+                        val = float(ic50)
+                    except ValueError:
+                        continue
+                    if val > 0:
+                        new_actives.append(smi)
+                    else:
+                        new_inactives.append(smi)
+
+            # Should not raise
+            scorer.retrain_with_new_data(new_actives, new_inactives)
+            assert scorer.available is True

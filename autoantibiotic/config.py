@@ -347,6 +347,10 @@ class PipelineConfig:
     """Maximum number of synthesis routes to evaluate per compound."""
 
     # ── Active learning parameters ──
+    uncertainty_threshold: float = 0.1
+    """Standard-deviation threshold for prediction uncertainty.
+    When the ensemble prediction std exceeds this value, the compound
+    is flagged for manual review."""
     retrain_model_path: Optional[str] = None
     """Path to a CSV file ({smiles, ic50}) for active-learning retraining.
     When set, the pipeline will retrain the MetaScorer with the new data."""

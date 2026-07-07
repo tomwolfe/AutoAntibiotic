@@ -117,6 +117,10 @@ class PipelineOrchestrator:
         self.deps = verify_dependencies()
         os.makedirs(self.config.work_dir, exist_ok=True)
 
+        # Active-learning retraining
+        if self.config.retrain_model_path:
+            self._retrain_from_csv(self.config.retrain_model_path)
+
     def run_water_analysis(self) -> None:
         """Phase 0.5: Crystallographic water analysis (if available)."""
         self.water_results = None
@@ -595,3 +599,47 @@ class PipelineOrchestrator:
             log.warning(f"  Failed to save review queue: {exc}")
 
         log.info("Pipeline complete. Exiting.")
+
+    def _retrain_from_csv(self, csv_path: str) -> None:
+        """Load a CSV with {smiles, ic50} and retrain the MetaScorer."""
+        import csv
+
+        # Ensure output directory exists (needed for model persistence)
+        output_dir = self.config.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        from autoantibiotic.ml_scoring.meta_scorer import _get_meta_scorer, MetaScorer
+
+        scorer = _get_meta_scorer()
+        if scorer is None:
+            log.warning("  MetaScorer unavailable for retraining.")
+            return
+
+        new_actives: List[str] = []
+        new_inactives: List[str] = []
+        try:
+            with open(csv_path, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    smi = row.get("smiles", "").strip()
+                    ic50 = row.get("ic50", "").strip()
+                    if not smi or not ic50:
+                        continue
+                    try:
+                        val = float(ic50)
+                    except ValueError:
+                        continue
+                    if val > 0:
+                        new_actives.append(smi)
+                    else:
+                        new_inactives.append(smi)
+            if new_actives or new_inactives:
+                scorer.retrain_with_new_data(new_actives, new_inactives)
+                log.info(
+                    f"  MetaScorer retrained with {len(new_actives)} active "
+                    f"/ {len(new_inactives)} inactive compounds from {csv_path}"
+                )
+            else:
+                log.info("  No valid retraining data found in CSV.")
+        except Exception as exc:
+            log.warning(f"  Failed to retrain model from CSV: {exc}")

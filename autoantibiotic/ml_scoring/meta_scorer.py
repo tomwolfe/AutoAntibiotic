@@ -362,6 +362,51 @@ class MetaScorer:
         except Exception:
             return None
 
+    def predict_with_uncertainty(self, record: CompoundRecord) -> Tuple[float, float]:
+        """Predict the meta-score and return prediction uncertainty.
+
+        Returns a tuple ``(mean_score, std_dev)`` where ``mean_score``
+        is the clipped prediction from the model and ``std_dev`` is the
+        standard deviation of predictions across all tree estimators.
+
+        Raises
+        ------
+        ValueError
+            If the model is not fitted or feature extraction fails.
+        """
+        if not self.available:
+            raise ValueError("MetaScorer is not fitted.")
+        if record.mol is None:
+            mol = Chem.MolFromSmiles(record.smiles)
+            if mol is None:
+                raise ValueError(f"Cannot parse SMILES for {record.compound_id}")
+            record.mol = mol
+
+        try:
+            feats = self._default_features(
+                record.mol,
+                md_ligand_rmsd=record.md_ligand_rmsd,
+                md_pocket_rg_stability=record.md_pocket_rg_stability,
+                ifp_score=record.ifp_score,
+                water_displacement_energy=record.water_displacement_energy,
+            ).reshape(1, -1)
+            prob = float(self._model.predict(feats)[0])  # type: ignore[union-attr]
+
+            threshold = getattr(self, "_uncertainty_threshold", None)
+            tree_preds = None
+            std = 0.0
+            if threshold is not None and hasattr(self._model, "estimators_"):
+                tree_preds = np.array([
+                    tree.predict(feats)[0] for tree in self._model.estimators_
+                ])
+                std = float(np.std(tree_preds, ddof=1))
+                if std > threshold:
+                    record.needs_manual_review = True
+
+            return (float(np.clip(prob, 0.0, 1.0)), std)
+        except Exception:
+            raise ValueError("Feature extraction failed.")
+
     def load(self) -> bool:
         """Load a previously trained model from disk.
 
