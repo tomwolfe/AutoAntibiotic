@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 from .io_utils import log
 
@@ -10,6 +11,59 @@ try:
     _HAVE_CHEMBL = True
 except ImportError:
     _HAVE_CHEMBL = False
+
+
+def _api_call_with_backoff(
+    callable_obj: Callable[[], Any],
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    backoff_factor: float = 2.0,
+) -> Any:
+    """Execute an API call with exponential backoff retry logic.
+
+    Retries up to ``max_retries`` times with exponentially increasing
+    delay between attempts.  Handles transient network errors and
+    rate-limiting (HTTP 429 / 503).
+
+    Parameters
+    ----------
+    callable_obj : Callable
+        A zero-argument callable wrapping the API call.
+    max_retries : int
+        Maximum number of retry attempts (default 3).
+    base_delay : float
+        Initial delay in seconds before the first retry (default 1.0).
+    backoff_factor : float
+        Multiplier for the delay after each retry (default 2.0).
+
+    Returns
+    -------
+    Any
+        The result of the callable if successful.
+
+    Raises
+    ------
+    Exception
+        The last exception if all retries are exhausted.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            return callable_obj()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = base_delay * (backoff_factor ** attempt)
+                log.warning(
+                    f"API call attempt {attempt + 1}/{max_retries + 1} failed "
+                    f"({exc}); retrying in {delay:.1f}s."
+                )
+                time.sleep(delay)
+            else:
+                log.warning(
+                    f"API call failed after {max_retries + 1} attempts: {exc}"
+                )
+    raise last_exc  # type: ignore[misc]
 
 PBP2A_CHEMBL_ID: str = "CHEMBL396"
 """ChEMBL target ID for PBP2a (Penicillin-binding protein 2a,
@@ -130,7 +184,9 @@ def fetch_chembl_admet_data() -> Dict[str, List[Dict[str, Any]]]:
     ``{"herg": [...], "cyp": [...]}`` with >500 entries per class if
     the API is available.
 
-    Falls back to the hardcoded benchmark data if the API fails.
+    Uses exponential backoff for API calls to handle rate limits and
+    transient errors gracefully.  Falls back to the hardcoded benchmark
+    data if the API is unavailable or returns insufficient data.
     """
     if not _HAVE_CHEMBL:
         log.warning("chembl_webresource_client not installed; using hardcoded ADMET data.")
@@ -142,17 +198,21 @@ def fetch_chembl_admet_data() -> Dict[str, List[Dict[str, Any]]]:
         activities = new_client.activity
         chembl_mols = new_client.molecule
 
-        herg_target = new_client.target.filter(
-            pref_name__icontains="hERG",
-        ).only("target_chembl_id")
+        herg_target = _api_call_with_backoff(
+            lambda: new_client.target.filter(
+                pref_name__icontains="hERG",
+            ).only("target_chembl_id"),
+        )
         herg_target_id = herg_target[0]["target_chembl_id"] if herg_target else None
 
         if herg_target_id:
-            herg_acts = activities.filter(
-                target_chembl_id=herg_target_id,
-                pchembl_value__isnull=False,
-                standard_type__in=["IC50", "Ki"],
-            ).only("molecule_chembl_id", "pchembl_value", "standard_relation")
+            herg_acts = _api_call_with_backoff(
+                lambda: activities.filter(
+                    target_chembl_id=herg_target_id,
+                    pchembl_value__isnull=False,
+                    standard_type__in=["IC50", "Ki"],
+                ).only("molecule_chembl_id", "pchembl_value", "standard_relation"),
+            )
 
             for act in herg_acts:
                 mol_id = act.get("molecule_chembl_id")
@@ -160,7 +220,11 @@ def fetch_chembl_admet_data() -> Dict[str, List[Dict[str, Any]]]:
                 if mol_id is None or pchembl is None:
                     continue
                 try:
-                    mol_record = chembl_mols.get(mol_id)
+                    mol_record = _api_call_with_backoff(
+                        lambda: chembl_mols.get(mol_id),
+                        max_retries=2,
+                        base_delay=0.5,
+                    )
                     smiles = _extract_smiles(mol_record) if mol_record else None
                     if smiles is None:
                         continue
@@ -176,16 +240,20 @@ def fetch_chembl_admet_data() -> Dict[str, List[Dict[str, Any]]]:
         return _fallback_admet_data()
 
     try:
-        cyp_targets = new_client.target.filter(
-            pref_name__icontains="CYP",
-        ).only("target_chembl_id")
+        cyp_targets = _api_call_with_backoff(
+            lambda: new_client.target.filter(
+                pref_name__icontains="CYP",
+            ).only("target_chembl_id"),
+        )
         cyp_target_ids = [t["target_chembl_id"] for t in cyp_targets[:5]]
 
         if cyp_target_ids:
-            cyp_acts = activities.filter(
-                target_chembl_id__in=cyp_target_ids,
-                pchembl_value__isnull=False,
-            ).only("molecule_chembl_id", "pchembl_value")
+            cyp_acts = _api_call_with_backoff(
+                lambda: activities.filter(
+                    target_chembl_id__in=cyp_target_ids,
+                    pchembl_value__isnull=False,
+                ).only("molecule_chembl_id", "pchembl_value"),
+            )
 
             for act in cyp_acts:
                 mol_id = act.get("molecule_chembl_id")
@@ -193,7 +261,11 @@ def fetch_chembl_admet_data() -> Dict[str, List[Dict[str, Any]]]:
                 if mol_id is None or pchembl is None:
                     continue
                 try:
-                    mol_record = chembl_mols.get(mol_id)
+                    mol_record = _api_call_with_backoff(
+                        lambda: chembl_mols.get(mol_id),
+                        max_retries=2,
+                        base_delay=0.5,
+                    )
                     smiles = _extract_smiles(mol_record) if mol_record else None
                     if smiles is None:
                         continue

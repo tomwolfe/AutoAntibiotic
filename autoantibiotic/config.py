@@ -278,11 +278,15 @@ class PipelineConfig:
     water_displacement_energy_threshold: float = 2.5
 
     # ── FEP / resistance profiling ──
-    use_fep_resistance: bool = False
+    use_fep_resistance: bool = True
     """When True, use OpenMM-based Free Energy Perturbation (FEP) for
     resistance profiling instead of the heuristic standard-deviation
     approach.  Falls back to the heuristic when OpenMM/alchemical tools
     are unavailable."""
+    use_heuristic_resistance_fallback: bool = True
+    """When True and FEP fails for a specific compound, fall back to
+    heuristic docking-based SD resistance profiling instead of crashing
+    or skipping the compound entirely."""
     fep_lambda_windows: int = 11
     """Number of lambda windows for the FEP alchemical transformation."""
     fep_stages: str = "van_der_waals_and_electrostatics"
@@ -328,10 +332,10 @@ class PipelineConfig:
     so that interrupted simulations can be resumed from the last
     completed window.  When False (or when checkpoint_dir is None),
     no checkpointing is performed."""
-    fep_top_n: int = 20
+    fep_top_n: int = 5
     """Maximum number of top candidates to run rigorous FEP on.
     FEP is only triggered if the candidate is within this many top
-    compounds after docking and MM-GB/SA rescoring.  Default 20."""
+    compounds after docking and MM-GB/SA rescoring.  Default 5."""
 
     # ── Entropy estimation ──
     include_entropy: bool = False

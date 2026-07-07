@@ -223,6 +223,10 @@ class PipelineOrchestrator:
         rescoring.  Skips candidates whose ligand has >50 heavy atoms
         or whose SMILES exceeds 100 characters.
 
+        If FEP fails for a specific compound and
+        ``use_heuristic_resistance_fallback`` is True, falls back to
+        heuristic docking-based SD resistance profiling.
+
         Configured via ``CONFIG.use_fep_resistance`` and
         ``CONFIG.fep_top_n``.
         """
@@ -244,6 +248,16 @@ class PipelineOrchestrator:
         log.info(f"  FEP enabled: evaluating up to {len(candidates)} top candidates.")
 
         from .fep_engine import FEPResistanceCalculator, ConfigurationError as FEPConfigError
+        from .analysis import profile_resistance_mutation_sensitivity
+
+        # Gather mutant PDBQTs for potential heuristic fallback
+        mutant_pdbqts: List[str] = []
+        mutant_dir = self.config.output_dir / "mutants"
+        if mutant_dir.exists():
+            mutant_pdbqts = sorted(str(p) for p in mutant_dir.glob("*.pdbqt"))
+
+        center = pb2pa.get("allosteric_center", (0.0, 0.0, 0.0))
+        box_size = self.config.allosteric_box_size
 
         for rec in candidates:
             if rec.mol is None:
@@ -268,14 +282,46 @@ class PipelineOrchestrator:
                     ligand_rdkit=rec.mol,
                 )
                 result = calc.calculate_ddg()
+                rec.resistance_stability_score = result.delta_delta_g
                 log.info(
                     f"  {rec.compound_id}: FEP ΔΔG = {result.delta_delta_g:.3f} "
                     f"kcal/mol (confidence={result.confidence:.2f})"
                 )
-            except FEPConfigError as exc:
-                log.warning(f"  {rec.compound_id}: FEP skipped — {exc}")
-            except Exception as exc:
-                log.warning(f"  {rec.compound_id}: FEP failed — {exc}")
+            except (FEPConfigError, Exception) as exc:
+                if self.config.use_heuristic_resistance_fallback and mutant_pdbqts:
+                    log.warning(
+                        f"  {rec.compound_id}: FEP failed ({exc}), "
+                        "falling back to heuristic resistance profiling."
+                    )
+                    try:
+                        heuristic_score = profile_resistance_mutation_sensitivity(
+                            rec, str(self.config.work_dir), mutant_pdbqts,
+                            center, box_size,
+                        )
+                        rec.resistance_stability_score = heuristic_score
+                        if heuristic_score is not None:
+                            log.info(
+                                f"  {rec.compound_id}: Heuristic resistance score = "
+                                f"{heuristic_score:.3f}"
+                            )
+                        else:
+                            log.warning(
+                                f"  {rec.compound_id}: Heuristic fallback also "
+                                "returned None."
+                            )
+                    except Exception as he:
+                        log.warning(
+                            f"  {rec.compound_id}: Heuristic fallback also failed "
+                            f"({he})."
+                        )
+                else:
+                    if not mutant_pdbqts and self.config.use_heuristic_resistance_fallback:
+                        log.warning(
+                            f"  {rec.compound_id}: FEP failed ({exc}) — "
+                            "no mutant PDBQTs available for heuristic fallback."
+                        )
+                    else:
+                        log.warning(f"  {rec.compound_id}: FEP skipped — {exc}")
 
     def apply_explicit_solvent_rescoring(self) -> None:
         """Phase 4.6 — Explicit-solvent MM-GB/SA rescoring (if enabled).
