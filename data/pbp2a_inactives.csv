@@ -1,0 +1,29 @@
+id,smiles,reference
+INACTIVE_01,CCCCCCCCCCCCCCCCCC(=O)O,Stearic acid — PubChem negative
+INACTIVE_02,CC(C)(C)OC(=O)NCCCCCCBr,Boc-aminohexyl bromide — negative
+INACTIVE_03,CC(C)(C)NS(=O)(=O)c1ccc(Br)cc1,Sulfonamide — no PBP2a binding
+INACTIVE_04,CN(C)Cc1ccccc1,Benzyl dimethylamine — negative
+INACTIVE_05,CC(C)(C)OC(=O)N1CCC(C(=O)O)CC1,Boc-piperidine carboxylic acid — negative
+INACTIVE_06,COc1cc(OC)c(cc1OC)C=O,Trimethoxybenzaldehyde — negative
+INACTIVE_07,CCOC(=O)c1ccc(C)cc1,Ethyl 4-methylbenzoate — PubChem negative
+INACTIVE_08,Cc1cc(Cl)c(C)c(C#N)c1,Chlorobenzonitrile — negative
+INACTIVE_09,CC(C)C1=CC=C(C=C1)C(C)C(=O)O,Ibuprofen — PubChem negative
+INACTIVE_10,CC1=CC=C(C=C1)S(=O)(=O)N,Toluene-4-sulfonamide — negative
+INACTIVE_11,OC(=O)C1=CC=CC=C1C2=CC=CC=C2,Biphenyl carboxylic acid — negative
+INACTIVE_12,CC1=CC=C(C=C1)C(=O)NC2=CC=C(C=C2)C(=O)O,Benzanilide derivative — negative
+INACTIVE_13,CCOC(=O)C1=CC=C(C=C1)NC(=O)C2=CC=CC=C2,Ethyl benzanilate — negative
+INACTIVE_14,CC1=CC(=O)OC1,Butyrolactone — negative
+INACTIVE_15,CC(C)(C)C1=CC=C(C=C1)C(=O)O,4-tert-Butylbenzoic acid — negative
+INACTIVE_16,CC1=CC=C(C=C1)NC(=O)C2=CC=CC=C2,p-Methylbenzanilide — negative
+INACTIVE_17,CC1=CC=C(C=C1)S(=O)(=O)NC2=CC=CC=C2,Tosyl anilide — negative
+INACTIVE_18,CCCCC1=CC=C(C=C1)C(=O)O,4-Pentylbenzoic acid — negative
+INACTIVE_19,CCCCCC1=CC=CC=C1,Hexylbenzene — negative
+INACTIVE_20,CC1=CC=C(C=C1)OC2=CC=CC=C2,p-Cresyl phenyl ether — negative
+INACTIVE_21,CC1=CC=CC(C)=C1NC(=O)C2=CC=C(C=C2)Cl,Chlorobenzanilide — negative
+INACTIVE_22,CC1=CC=C(C=C1)N(C)C(=O)C2=CC=CC=C2,N-Methylbenzanilide — negative
+INACTIVE_23,CC1=CC=C(C=C1)NC(=O)C2=CC=C(C=C2)C#N,Cyano benzanilide — negative
+INACTIVE_24,CC1=CC=C(C=C1)S(=O)(=O)NCCCCCCCC,Tosyl octylamide — negative
+INACTIVE_25,CC1=CC=C(C=C1)C2=CC=C(C=C2)C(=O)O,Biphenyl carboxylic ester — negative
+INACTIVE_26,CCCCCCCCCCCCCC(=O)O,Palmitic acid — negative
+INACTIVE_27,CCCCCCCCCCCCCCCC(=O)O,Stearic acid — PubChem negative
+INACTIVE_28,CCCCCCCCCCCCCCCCCC(=O)OCC,Ethyl stearate — negative

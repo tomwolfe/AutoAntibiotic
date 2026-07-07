@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+import pandas as pd
 
 from .io_utils import log
 
 try:
     from chembl_webresource_client.new_client import new_client
+    from chembl_webresource_client.settings import Settings
+
+    Settings.Instance().CACHING = False
     _HAVE_CHEMBL = True
 except ImportError:
     _HAVE_CHEMBL = False
+
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 def _api_call_with_backoff(
@@ -292,5 +300,9 @@ def fetch_chembl_admet_data() -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _fallback_admet_data() -> Dict[str, List[Dict[str, Any]]]:
-    from benchmarks.reference_data import load_chembl_admet_subset
-    return load_chembl_admet_subset()
+    herg_df = pd.read_csv(_DATA_DIR / "herg_data.csv")
+    cyp_df = pd.read_csv(_DATA_DIR / "cyp_data.csv")
+    return {
+        "herg": herg_df.to_dict(orient="records"),
+        "cyp": cyp_df.to_dict(orient="records"),
+    }

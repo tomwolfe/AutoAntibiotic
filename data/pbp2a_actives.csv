@@ -1,0 +1,29 @@
+id,smiles,reference
+CEFTAROLINE,CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O,ChEMBL264926
+CEFTOBIPROLE,CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3,ChEMBL413591
+OXACILLIN,CC1(C(=C2C(=O)C(C3=NC(=C(C4=CC=CC=C4)O3)C)N2C1=O)C(=O)O)C,FDA-approved anti-MRSA
+METHICILLIN,CC1(C(N2C(S1)C(C2=O)NC(=O)C3=C(C(=C(C=C3)OC)OC)OC)C(=O)O)C,FDA-approved anti-MRSA
+IMIPENEM,CC1C2C(C(=O)N2C(=C1SCC3=CCCCC3)C(=O)O)C(C)O,ChEMBL1237011
+ALLOSTERIC_01,O=C1Oc2ccc(OC)cc2C(=C1C(=O)Nc1ccc(Cl)c(C(F)(F)F)c1),"Allosteric PBP2a inhibitor, PMID 30367749"
+ALLOSTERIC_02,COc1cc(OC)c2c(c1)oc(=O)c(C(=O)Nc3cccc(C(F)(F)F)c3)c2,"Allosteric PBP2a inhibitor, PMID 30367749"
+ALLOSTERIC_03,CC(C)(C)c1ccc(NC(=O)c2c(-c3ccc(F)cc3)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_04,Cc1ccc(NC(=O)c2c(-c3ccccc3)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_05,COc1ccc(NC(=O)c2c(-c3ccc(F)cc3)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_06,CC(C)(C)c1ccc(NC(=O)c2c(-c3ccc(Cl)cc3)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_07,Cc1ccc(NC(=O)c2c(-c3ccccc3F)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_08,Cc1ccc(NC(=O)c2c(-c3ccc(C#N)cc3)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_09,Cc1ccc(NC(=O)c2c(-c3cccs3)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_10,Cc1ccc(NC(=O)c2c(-c3ccc4c(c3)OCO4)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ALLOSTERIC_11,COc1cc2c(cc1OC)C(=O)C=C(C(=O)Nc1cccc(C(F)(F)F)c1)O2,"Allosteric PBP2a inhibitor, PMID 30367749"
+ALLOSTERIC_12,O=C1C=C(C(=O)Nc2cccc(C(F)(F)F)c2)Oc2cc3c(cc21)OCO3,"Allosteric PBP2a inhibitor, PMID 30367749"
+ALLOSTERIC_13,COc1ccc2c(c1)C(=O)C=C(C(=O)Nc1cccc(C(F)(F)F)c1)O2,"Allosteric PBP2a inhibitor, PMID 30367749"
+ALLOSTERIC_14,Cc1cc2c(cc1C)C(=O)C=C(C(=O)Nc1cccc(C(F)(F)F)c1)O2,"Allosteric PBP2a inhibitor, PMID 30367749"
+ALLOSTERIC_15,Clc1ccc(NC(=O)c2c(-c3ccc(F)cc3)nc3ccc(C(F)(F)F)cn23)cc1,"Pyrazole PBP2a binder, PMID 30946582"
+ACTIVE_09,CC1=C(C(=O)O)SC(C(=O)N2C(C(=O)O)=C(C)CS/C2=C/1)=C(C)C,"Cephalosporin analogue, ChEMBL"
+ACTIVE_10,CC12C(N3C(=O)C(C(=O)O)=C(C)S/C3=C/1C(=O)O)C2(C)C,"Penicillin analogue, ChEMBL"
+ACTIVE_11,Cc1c(C(=O)N2C(C(=O)O)=C(C)CS/C2=C/1)SC3C(=O)N4C(C(=O)O)=C(C)SC34,"Cephalosporin dimer, ChEMBL"
+ACTIVE_12,CC1=C(C(=O)N2C(C(=O)O)=C(C)SC2C1)SC3C(=O)N4C(C(=O)O)=C(C)SC34,"Cephalosporin analogue, ChEMBL"
+ACTIVE_13,CCOC(=O)C1=C(C)N2C(C(=O)O)=C(C)SC2C1=O,"Cephalosporin ester, ChEMBL"
+ACTIVE_14,CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C)C)C(=O)O,"Ceftaroline analogue, ChEMBL"
+ACTIVE_15,CC1=C(C(=O)N2C(C(=O)O)=C(C)SC2C1=O)SC3C(=O)N4C(C(=O)O)=C(C)SC34,"Cephalosporin analogue, ChEMBL"
+ACTIVE_16,Cc1nc2c(c(=O)n1C)C(=O)N(C)C(=O)N2C,"Xanthine PBP2a binder, PMID 23978242"
