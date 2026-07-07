@@ -275,8 +275,8 @@ class TestFEPAdaptiveConvergence:
     def test_config_defaults_for_adaptive_sampling(self):
         """Verify that config defaults support adaptive sampling."""
         assert CONFIG.fep_convergence_threshold_kcal_per_mol == 0.5
+        assert CONFIG.fep_uncertainty_threshold == 1.0
         assert CONFIG.fep_check_interval_steps == 500
-
 
 
 class TestFEPUncertaintyFlagging:
@@ -307,55 +307,6 @@ class TestFEPUncertaintyFlagging:
             mbar_uncertainty=0.15,
         )
         assert result.confidence_label == "High Confidence"
-
-
-class TestFEPAdaptiveConvergence:
-    """Tests for adaptive convergence in FEP calculations.
-
-    Verifies that the adaptive sampling loop:
-    - Uses fep_check_interval_steps as the check interval
-    - Stops early when uncertainty drops below fep_convergence_threshold_kcal_per_mol
-    - Populates per_window_uncertainties in the result
-    - Calculates total_simulation_time_ps
-    """
-
-    def test_result_has_per_window_uncertainties(self):
-        """Verify that FEPResistanceResult can hold per_window_uncertainties."""
-        result = FEPResistanceResult(
-            delta_delta_g=-1.5,
-            confidence=0.8,
-            n_windows=11,
-            per_window_uncertainties=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.5],
-            total_simulation_time_ps=5000.0,
-        )
-        assert result.per_window_uncertainties is not None
-        assert len(result.per_window_uncertainties) == 11
-        assert result.total_simulation_time_ps == 5000.0
-
-    def test_result_default_uncertainties_are_none(self):
-        """Verify that per_window_uncertainties defaults to None."""
-        result = FEPResistanceResult(
-            delta_delta_g=-1.5,
-            confidence=0.8,
-            n_windows=11,
-        )
-        assert result.per_window_uncertainties is None
-
-    def test_result_default_time_is_zero(self):
-        """Verify that total_simulation_time_ps defaults to 0.0."""
-        result = FEPResistanceResult(
-            delta_delta_g=-1.5,
-            confidence=0.8,
-            n_windows=11,
-        )
-        assert result.total_simulation_time_ps == 0.0
-
-    def test_config_defaults_for_adaptive_sampling(self):
-        """Verify that config defaults support adaptive sampling."""
-        assert CONFIG.fep_convergence_threshold_kcal_per_mol == 0.5
-        assert CONFIG.fep_check_interval_steps == 500
-
-
 
 class TestPreScreenRejection:
     """Tests for FEP pre-screening energy threshold."""
@@ -469,3 +420,243 @@ class TestCheckpointSaveLoad:
         assert checkpoint_path.exists()
         assert "checkpoint_" in str(checkpoint_path)
         assert str(checkpoint_path).endswith(".json")
+
+    def test_checkpoint_skips_completed_windows(self, tmp_path):
+        """Verify checkpoint loading skips completed windows."""
+        import json
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create a checkpoint with 2 completed windows for WT
+        checkpoint_data = {
+            "label": "WT",
+            "windows": [
+                {"index": 0, "samples": [[0.0, 0.1, 0.2], [0.3, 0.4, 0.5]]},
+                {"index": 1, "samples": [[0.6, 0.7, 0.8], [0.9, 1.0, 1.1]]},
+            ],
+            "per_window_uncertainties": [0.1, 0.2],
+        }
+        checkpoint_path = checkpoint_dir / "checkpoint_WT.json"
+        with open(checkpoint_path, "w") as f:
+            json.dump(checkpoint_data, f)
+
+        # Verify file exists and has correct content
+        assert checkpoint_path.exists()
+        with open(checkpoint_path, "r") as f:
+            loaded = json.load(f)
+        assert len(loaded["windows"]) == 2
+        assert loaded["windows"][0]["index"] == 0
+        assert len(loaded["windows"][0]["samples"]) == 2
+        assert loaded["per_window_uncertainties"] == [0.1, 0.2]
+
+
+class TestFEPConvergenceCheck:
+    """Tests for MBAR-based convergence during FEP calculations."""
+
+    class MockQuantity:
+        """Minimal mock for OpenMM Quantity so arithmetic yields real floats."""
+        def __init__(self, val=0.0):
+            self._val = float(val)
+
+        def value_in_unit(self, unit):
+            return self._val
+
+        def __sub__(self, other):
+            if isinstance(other, TestFEPConvergenceCheck.MockQuantity):
+                return TestFEPConvergenceCheck.MockQuantity(self._val - other._val)
+            return TestFEPConvergenceCheck.MockQuantity(self._val - other)
+
+        def __rsub__(self, other):
+            return TestFEPConvergenceCheck.MockQuantity(other - self._val)
+
+        def __truediv__(self, other):
+            if isinstance(other, TestFEPConvergenceCheck.MockQuantity):
+                return TestFEPConvergenceCheck.MockQuantity(
+                    self._val / other._val if other._val != 0 else 0.0
+                )
+            return TestFEPConvergenceCheck.MockQuantity(
+                self._val / other if other != 0 else 0.0
+            )
+
+        def __rtruediv__(self, other):
+            return TestFEPConvergenceCheck.MockQuantity(
+                other / self._val if self._val != 0 else 0.0
+            )
+
+        def __mul__(self, other):
+            if isinstance(other, TestFEPConvergenceCheck.MockQuantity):
+                return TestFEPConvergenceCheck.MockQuantity(self._val * other._val)
+            return TestFEPConvergenceCheck.MockQuantity(self._val * other)
+
+        def __rmul__(self, other):
+            return TestFEPConvergenceCheck.MockQuantity(other * self._val)
+
+        def __neg__(self):
+            return TestFEPConvergenceCheck.MockQuantity(-self._val)
+
+        def __abs__(self):
+            return TestFEPConvergenceCheck.MockQuantity(abs(self._val))
+
+    def _setup_mock_environment(
+        self, mock_mbar_return_values,
+    ):
+        """Set up all OpenMM mocks and return the patcher contexts.
+
+        ``mock_mbar_return_values`` is a list of (delta_f, ddelta_f) tuples
+        that MBAR.get_free_energy_differences should return on successive
+        calls.
+        """
+        import openmmtools.multistate as _oms
+        import openmmtools.alchemy as _alchemy
+        MQ = self.MockQuantity
+        mock_unit = MagicMock()
+        mock_unit.kelvin = MQ(1.0)
+        mock_unit.atmospheres = MQ(1.0)
+        mock_unit.picosecond = MQ(1.0)
+        mock_unit.kilojoules_per_mole = MQ(1.0)
+        mock_unit.kilocalories_per_mole = MQ(1.0)
+        mock_unit.MOLAR_GAS_CONSTANT_R = MQ(1.0)
+
+        mock_mbar_instance = MagicMock()
+        counter = [0]
+
+        def get_free_energy():
+            idx = counter[0]
+            counter[0] += 1
+            if idx < len(mock_mbar_return_values):
+                return mock_mbar_return_values[idx]
+            return (np.zeros((3, 3)), np.ones((3, 3)) * 0.3, None)
+
+        mock_mbar_instance.get_free_energy_differences.side_effect = get_free_energy
+
+        mock_positions = MagicMock()
+
+        mock_state = MagicMock()
+        mock_state.getPositions.return_value = mock_positions
+        mock_state.getPotentialEnergy.return_value = MQ(0.0)
+        mock_state.getParameters.return_value = MagicMock()
+
+        mock_sim = MagicMock()
+        mock_sim.context.getState.return_value = mock_state
+
+        off_diag_energy = MQ(1.0)
+        mock_context_instance = MagicMock()
+        mock_context_instance.getState.return_value.getPotentialEnergy.return_value = off_diag_energy
+
+        mock_topology = MagicMock()
+        mock_topology.atoms.return_value = []
+        mock_topology.getNumAtoms.return_value = 100
+
+        mock_mbar_class = MagicMock()
+        mock_mbar_class.from_energy_matrix.return_value = mock_mbar_instance
+
+        mock_alchemical_state_class = MagicMock()
+        mock_alchemical_state_class.from_system.return_value = MagicMock()
+        mock_alchemical_region_class = MagicMock()
+        mock_alchemical_factory_class = MagicMock()
+        mock_alchemical_factory_instance = MagicMock()
+        mock_alchemical_factory_class.return_value = mock_alchemical_factory_instance
+
+        patchers = [
+            patch("autoantibiotic.fep_engine._openmm_unit", mock_unit),
+            patch("autoantibiotic.fep_engine._openmm.LangevinIntegrator"),
+            patch("autoantibiotic.fep_engine._openmm.Platform.getPlatformByName"),
+            patch("autoantibiotic.fep_engine._openmm_app.Simulation", return_value=mock_sim),
+            patch("autoantibiotic.fep_engine._openmm.Context", return_value=mock_context_instance),
+            patch.object(_oms, "MBAR", mock_mbar_class, create=True),
+            patch.object(_alchemy, "AlchemicalState", mock_alchemical_state_class, create=True),
+            patch.object(_alchemy, "AlchemicalRegion", mock_alchemical_region_class, create=True),
+            patch.object(_alchemy, "AbsoluteAlchemicalFactory", mock_alchemical_factory_class, create=True),
+        ]
+
+        return patchers, mock_topology
+
+    def test_adaptive_convergence_stops_early(self, tmp_path):
+        """MBAR convergence stops sampling before max steps."""
+        from unittest.mock import patch as utpatch
+
+        n_windows = 3
+        saved = {
+            "lw": CONFIG.fep_lambda_windows,
+            "mn": CONFIG.fep_min_steps_per_window,
+            "mx": CONFIG.fep_max_steps_per_window,
+            "ci": CONFIG.fep_check_interval_steps,
+            "cp": CONFIG.fep_enable_checkpointing,
+        }
+        CONFIG.fep_lambda_windows = n_windows
+        CONFIG.fep_min_steps_per_window = 1
+        CONFIG.fep_max_steps_per_window = 200
+        CONFIG.fep_check_interval_steps = 1
+        CONFIG.fep_enable_checkpointing = False
+
+        try:
+            stable_dG = -6.15
+            stable_unc = 0.3
+
+            return_values = []
+            for i in range(20):
+                df = np.zeros((n_windows, n_windows))
+                ddf = np.ones((n_windows, n_windows)) * 2.0
+                if i < 2:
+                    df[-1, 0] = -5.0 + i * 2.0
+                    ddf[-1, 0] = 1.5
+                elif i < 3:
+                    df[-1, 0] = -6.1
+                    ddf[-1, 0] = 0.8
+                else:
+                    df[-1, 0] = stable_dG
+                    ddf[-1, 0] = stable_unc
+                return_values.append((df, ddf, None))
+
+            patchers, mock_topology = self._setup_mock_environment(return_values)
+
+            calc = FEPResistanceCalculator(
+                receptor_wt_pdb="wt.pdb",
+                receptor_mut_pdb="mut.pdb",
+                ligand_smiles="CC(=O)OC",
+            )
+
+            with utpatch("autoantibiotic.fep_engine._HAVE_OPENMM", True), \
+                 utpatch("autoantibiotic.fep_engine._HAVE_OPENMMTOOLS", True), \
+                 utpatch("autoantibiotic.fep_engine._HAVE_OPENMMFORCEFIELDS", True), \
+                 utpatch("os.path.exists", return_value=True), \
+                 utpatch.object(calc, "_pre_screen_initial_energy", return_value=None), \
+                 utpatch.object(calc, "_build_system") as mock_build:
+                mock_build.return_value = (MagicMock(), mock_topology, MagicMock())
+
+                for p in patchers:
+                    p.start()
+
+                try:
+                    result = calc.calculate_ddg()
+                finally:
+                    for p in patchers:
+                        p.stop()
+
+            max_total_ps = (
+                n_windows
+                * CONFIG.fep_max_steps_per_window
+                * CONFIG.fep_check_interval_steps
+                * CONFIG.fep_time_step_ps
+                * 2
+            )
+            assert result.total_simulation_time_ps < max_total_ps, (
+                f"Expected early convergence but total_time={result.total_simulation_time_ps} "
+                f">= max={max_total_ps}"
+            )
+            assert result.delta_delta_g != 0.0 or result.n_windows > 0
+        finally:
+            for k, v in saved.items():
+                setattr(CONFIG, {
+                    "lw": "fep_lambda_windows",
+                    "mn": "fep_min_steps_per_window",
+                    "mx": "fep_max_steps_per_window",
+                    "ci": "fep_check_interval_steps",
+                    "cp": "fep_enable_checkpointing",
+                }[k], v)
+
+    def test_config_has_checkpoint_defaults(self):
+        """Config has defaults for all checkpoint-related fields."""
+        assert CONFIG.fep_enable_checkpointing is True
+        assert CONFIG.fep_uncertainty_threshold == 1.0

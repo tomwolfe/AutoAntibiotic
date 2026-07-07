@@ -330,52 +330,64 @@ class FEPResistanceCalculator:
         factory = AbsoluteAlchemicalFactory()
         lambda_protocol = np.linspace(0.0, 1.0, n_windows)
 
+        checkpoint_dir: Optional[str] = None
+        if CONFIG.fep_enable_checkpointing:
+            checkpoint_dir = str(CONFIG.output_dir / "fep_checkpoints")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+
         def _run_fep_for_system(
             system: _openmm.System,
             topology: _openmm_app.Topology,
             positions: _openmm_unit.Quantity,
             alchemical_region: AlchemicalRegion,
             label: str,
-            checkpoint_dir: Optional[str] = None,
+            chk_dir: Optional[str] = None,
         ) -> Tuple[float, List[float], float]:
-            """Run FEP for one system and return (delta_G, per_window_uncertainties, total_time_ps).
-
-            Implements adaptive convergence monitoring: after every
-            ``fep_check_interval_steps`` production steps, the running
-            estimate of the reduced potential at the current lambda window
-            is checked.  If the change over the last 3 checks is below
-            *fep_convergence_threshold* (and the minimum step count has
-            been reached), sampling terminates early for that window.
-            """
             n_eq_steps = CONFIG.fep_warmup_steps
             min_prod_steps = CONFIG.fep_min_steps_per_window
             max_prod_steps = CONFIG.fep_max_steps_per_window
             check_interval = CONFIG.fep_check_interval_steps
-            conv_threshold = CONFIG.fep_convergence_threshold
-            kT_kcal = CONFIG.fep_kT_kcal_per_mol
-            conv_threshold_red = conv_threshold / kT_kcal  # in reduced units
+            conv_threshold = CONFIG.fep_convergence_threshold_kcal_per_mol
+            unc_threshold = CONFIG.fep_uncertainty_threshold
+            min_samples_mbar = 100
 
             all_window_samples: List[List[np.ndarray]] = []
             per_window_uncertainties: List[float] = []
 
-            # Load checkpoint if available
-            if checkpoint_dir is not None:
-                checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{label}.json")
+            # ── Load checkpoint if available ───────────────────────
+            start_window = 0
+            if chk_dir is not None:
+                checkpoint_path = os.path.join(chk_dir, f"checkpoint_{label}.json")
                 if os.path.exists(checkpoint_path):
-                    with open(checkpoint_path, "r") as f:
-                        checkpoint_data = json.load(f)
-                    for window_data in checkpoint_data.get("windows", []):
-                        samples = window_data.get("samples", [])
-                        all_window_samples.append(samples)
-                        per_window_uncertainties.append(window_data.get("uncertainty", 0.0))
+                    try:
+                        with open(checkpoint_path, "r") as f:
+                            checkpoint_data = json.load(f)
+                        for window_data in checkpoint_data.get("windows", []):
+                            samples_list = window_data.get("samples", [])
+                            converted = [np.array(s) for s in samples_list]
+                            all_window_samples.append(converted)
+                            per_window_uncertainties.append(
+                                window_data.get("uncertainty", 0.0)
+                            )
+                        start_window = len(all_window_samples)
+                        log.info(
+                            "Loaded checkpoint for %s: %d windows completed",
+                            label, start_window,
+                        )
+                    except Exception as e:
+                        log.warning(
+                            "Failed to load checkpoint for %s: %s. "
+                            "Restarting from scratch.", label, e,
+                        )
+                        all_window_samples = []
+                        per_window_uncertainties = []
 
-            # Skip already completed windows
-            completed_count = len(all_window_samples)
-            start_window = completed_count
+            running_delta_g: List[float] = []
 
             for i, lam in enumerate(lambda_protocol):
                 if i < start_window:
                     continue
+
                 alchemical_state = AlchemicalState.from_system(system)
                 alchemical_state.lambda_sterics = lam
                 alchemical_state.lambda_electrostatics = lam
@@ -400,9 +412,8 @@ class FEPResistanceCalculator:
                 simulation.minimizeEnergy(maxIterations=n_eq_steps)
                 simulation.step(n_eq_steps)
 
-                # Adaptive production sampling
+                # Adaptive production sampling with MBAR convergence
                 window_samples: List[np.ndarray] = []
-                running_avg_u_i: List[float] = []
                 n_steps = 0
 
                 while n_steps < max_prod_steps:
@@ -446,33 +457,92 @@ class FEPResistanceCalculator:
 
                     window_samples.append(u_k)
 
-                    # Convergence check every check_interval steps
-                    if n_steps >= min_prod_steps and len(window_samples) % 3 == 0:
-                        u_i_vals = [w[i] for w in window_samples]
-                        avg_u_i = float(np.mean(u_i_vals))
-                        running_avg_u_i.append(avg_u_i)
+                    # ── MBAR-based convergence check ─────────────
+                    if n_steps >= min_prod_steps:
+                        current_all = list(all_window_samples) + [window_samples]
+                        # Pad with empty lists for windows not yet started
+                        while len(current_all) < n_windows:
+                            current_all.append([])
+                        total_frames = sum(len(s) for s in current_all)
+                        n_valid = sum(1 for s in current_all if len(s) > 0)
 
-                        if len(running_avg_u_i) >= 3:
-                            changes = [
-                                abs(running_avg_u_i[-j] - running_avg_u_i[-j - 1])
-                                for j in range(1, 3)
-                            ]
-                            if all(c < conv_threshold_red for c in changes):
-                                log.info(
-                                    "Convergence reached for %s at step %d",
-                                    label, n_steps,
+                        if total_frames >= min_samples_mbar and n_valid >= 2:
+                            max_n = max(len(s) for s in current_all)
+                            u_kln = np.full((n_windows, max_n, n_windows), np.nan)
+                            for k in range(n_windows):
+                                for n, u_vec in enumerate(current_all[k]):
+                                    u_kln[k, n, :] = u_vec
+
+                            try:
+                                mbar = MBAR.from_energy_matrix(
+                                    u_kln, temperature=temperature,
                                 )
-                                break
+                                delta_f, ddelta_f, _ = mbar.get_free_energy_differences()
+                                delta_G = delta_f[-1, 0] * kT
+                                uncertainty = float(ddelta_f[-1, 0])
+                                delta_G_kcal = delta_G.value_in_unit(
+                                    _openmm_unit.kilocalories_per_mole
+                                )
+                                running_delta_g.append(delta_G_kcal)
+
+                                log.info(
+                                    "%s window %d: ΔG = %.3f kcal/mol, "
+                                    "uncertainty = %.3f kcal/mol "
+                                    "(step %d/%d)",
+                                    label, i, delta_G_kcal, uncertainty,
+                                    n_steps, max_prod_steps,
+                                )
+
+                                if len(running_delta_g) >= 3:
+                                    changes = [
+                                        abs(running_delta_g[-j]
+                                            - running_delta_g[-j - 1])
+                                        for j in range(1, 3)
+                                    ]
+                                    if (all(c < conv_threshold for c in changes)
+                                            and uncertainty < unc_threshold):
+                                        log.info(
+                                            "Convergence reached for %s "
+                                            "window %d at step %d "
+                                            "(ΔG=%.3f, unc=%.3f)",
+                                            label, i, n_steps,
+                                            delta_G_kcal, uncertainty,
+                                        )
+                                        break
+                            except Exception:
+                                pass
                 else:
                     log.warning(
-                        "Max steps reached for %s without convergence (steps=%d)",
-                        label, n_steps,
+                        "Max steps reached for %s window %d "
+                        "without convergence (steps=%d)",
+                        label, i, n_steps,
                     )
 
                 all_window_samples.append(window_samples)
 
-            # ── Build u_kln matrix for MBAR ────────────────────────
-            # Shape: (K, max_N_k, K) where K = n_windows
+                # ── Save checkpoint after each window ─────────────
+                if chk_dir is not None:
+                    ckpt_path = os.path.join(chk_dir, f"checkpoint_{label}.json")
+                    try:
+                        ckpt_data: Dict[str, Any] = {
+                            "label": label,
+                            "windows": [
+                                {
+                                    "index": idx,
+                                    "samples": [s.tolist() for s in w_samples],
+                                }
+                                for idx, w_samples in enumerate(all_window_samples)
+                            ],
+                            "per_window_uncertainties": per_window_uncertainties,
+                        }
+                        with open(ckpt_path, "w") as f:
+                            json.dump(ckpt_data, f, indent=2)
+                    except Exception as e:
+                        log.warning(
+                            "Failed to save checkpoint for %s: %s", label, e,
+                        )
+
+            # ── Final MBAR estimate ────────────────────────────────
             max_n_k = max(len(s) for s in all_window_samples)
             u_kln = np.full((n_windows, max_n_k, n_windows), np.nan)
             for k in range(n_windows):
@@ -490,11 +560,14 @@ class FEPResistanceCalculator:
                 delta_G_kcal = delta_G.value_in_unit(
                     _openmm_unit.kilocalories_per_mole
                 )
-                # Track per-window uncertainty and total simulation time
                 per_window_uncertainties.append(uncertainty)
-                total_time_ps = n_windows * n_steps * timestep.value_in_unit(
-                    _openmm_unit.picosecond
-                )
+                total_time_ps = 0.0
+                for w_samples in all_window_samples:
+                    total_time_ps += (
+                        len(w_samples)
+                        * check_interval
+                        * timestep.value_in_unit(_openmm_unit.picosecond)
+                    )
                 return float(delta_G_kcal), per_window_uncertainties, total_time_ps
             except Exception:
                 return 0.0, [], 0.0
@@ -502,11 +575,11 @@ class FEPResistanceCalculator:
         # Compute ΔG for WT and mutant
         delta_g_wt, per_window_unc_wt, total_time_wt = _run_fep_for_system(
             wt_system, wt_topology, wt_positions,
-            alchemical_region_wt, "WT",
+            alchemical_region_wt, "WT", checkpoint_dir,
         )
         delta_g_mut, per_window_unc_mut, total_time_mut = _run_fep_for_system(
             mut_system, mut_topology, mut_positions,
-            alchemical_region_mut, "Mutant",
+            alchemical_region_mut, "Mutant", checkpoint_dir,
         )
 
         delta_delta_g = delta_g_mut - delta_g_wt
@@ -518,25 +591,6 @@ class FEPResistanceCalculator:
 
         all_uncertainties = per_window_unc_wt + per_window_unc_mut
         total_time_ps = total_time_wt + total_time_mut
-
-        # Save checkpoint if checkpoint_dir is provided
-        if checkpoint_dir is not None:
-            checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{label}.json")
-            checkpoint_data = {
-                "windows": [
-                    {
-                        "index": idx,
-                        "samples": samples,
-                        "uncertainty": unc,
-                    }
-                    for idx, (samples, unc) in enumerate(
-                        zip(all_window_samples, per_window_uncertainties)
-                    )
-                ]
-            }
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            with open(checkpoint_path, "w") as f:
-                json.dump(checkpoint_data, f, indent=2)
 
         return FEPResistanceResult(
             delta_delta_g=delta_delta_g,

@@ -302,9 +302,15 @@ class PipelineConfig:
     the cumulative ΔG estimate changes by less than this value over the
     last 3 checks, the lambda window terminates early.  Default 0.1."""
     fep_convergence_threshold_kcal_per_mol: float = 0.5
+    """Convergence threshold (kcal/mol) for adaptive FEP sampling.
+    When the change in cumulative ΔG over the last 3 checks is below
+    this value and uncertainty is below ``fep_uncertainty_threshold``,
+    the lambda window terminates early.  Default 0.5."""
+    fep_uncertainty_threshold: float = 1.0
     """MBAR uncertainty threshold (kcal/mol) for adaptive FEP sampling.
-    When the cumulative uncertainty drops below this value, the lambda
-    window terminates early.  Default 0.5."""
+    When the cumulative uncertainty drops below this value and the ΔG
+    change is below ``fep_convergence_threshold_kcal_per_mol``, the
+    lambda window terminates early.  Default 1.0."""
     fep_check_interval_steps: int = 500
     """Number of production steps between convergence checks.
     Default 500."""
