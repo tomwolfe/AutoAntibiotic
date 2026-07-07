@@ -547,6 +547,56 @@ class MetaScorer:
         )
         return self
 
+    def explain_prediction(self, record: CompoundRecord) -> Dict[str, float]:
+        """Return a dict mapping feature names to SHAP values for *record*.
+
+        Uses :class:`shap.TreeExplainer` on the fitted model.  If ``shap``
+        is not installed, logs a warning and returns an empty dict.
+
+        Returns
+        -------
+        Dict[str, float]
+            Feature-name → SHAP value.  Positive values push prediction
+            toward the active (1) class.
+        """
+        if not self.available:
+            log.warning("MetaScorer not fitted — cannot explain prediction.")
+            return {}
+        try:
+            import shap
+        except ImportError:
+            log.warning(
+                "SHAP is not installed. Install with: "
+                "pip install autoantibiotic[explainability]"
+            )
+            return {}
+
+        if record.mol is None:
+            mol = Chem.MolFromSmiles(record.smiles)
+            if mol is None:
+                return {}
+            record.mol = mol
+
+        try:
+            feats = self._default_features(
+                record.mol,
+                md_ligand_rmsd=record.md_ligand_rmsd,
+                md_pocket_rg_stability=record.md_pocket_rg_stability,
+                ifp_score=record.ifp_score,
+                water_displacement_energy=record.water_displacement_energy,
+            ).reshape(1, -1)
+            explainer = shap.TreeExplainer(self._model)
+            shap_values = explainer.shap_values(feats)
+            # shap_values shape: (1, n_features) for single-output regressor
+            sv = shap_values[0] if shap_values.ndim == 2 else shap_values
+            feat_names = self._feature_names or [
+                f"feat_{i}" for i in range(len(sv))
+            ]
+            return dict(zip(feat_names, map(float, sv)))
+        except Exception as exc:
+            log.warning(f"SHAP explanation failed: {exc}")
+            return {}
+
     # ── internals ───────────────────────────────────────────────────
 
     def _default_features(

@@ -4,9 +4,11 @@ Tests for the MetaScorer (stacking regressor for consensus scoring, v4.0).
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import List
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -492,3 +494,110 @@ def test_predict_validates_md_features() -> None:
             scorer.predict(rec)
     finally:
         CONFIG.force_md_for_meta_scoring = original_value
+
+
+# ── SHAP explanation tests ───────────────────────────────────────
+
+
+def test_shap_explanation_returns_dict() -> None:
+    """explain_prediction must return a non-empty dict for a fitted model."""
+    import sys
+
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+    assert scorer.available is True
+
+    # Fake shap in sys.modules so the lazy import inside explain_prediction works
+    import numpy as np
+    fake_shap = MagicMock()
+    fake_explainer = MagicMock()
+    fake_shap.TreeExplainer.return_value = fake_explainer
+    fake_explainer.shap_values.return_value = np.array(
+        [[0.1, -0.05, 0.2, 0.0, 0.3, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+        dtype=np.float32,
+    )
+
+    with patch.dict("sys.modules", {"shap": fake_shap}):
+        rec = _make_record(actives[0])
+        result = scorer.explain_prediction(rec)
+
+    assert isinstance(result, dict)
+    assert len(result) > 0
+    assert "vina_energy" in result
+    assert result["vina_energy"] == pytest.approx(0.1, abs=1e-6)
+    assert result["qed"] == pytest.approx(0.3, abs=1e-6)
+    assert result["logp"] == pytest.approx(-0.1, abs=1e-6)
+
+
+def test_shap_fallback_without_library(caplog: pytest.LogCaptureFixture) -> None:
+    """When shap is not installed, explain_prediction must return an empty
+    dict and log a warning."""
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    scorer.fit(actives, inactives)
+    assert scorer.available is True
+
+    rec = _make_record(actives[0])
+    result = scorer.explain_prediction(rec)
+
+    assert isinstance(result, dict)
+    assert len(result) == 0
+    # The log should mention SHAP is not installed
+    assert any(
+        "SHAP is not installed" in message
+        for message in caplog.messages
+    )
+
+
+def test_feature_importance_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """After fitting, the log must contain 'top SHAP features'."""
+    import logging
+    import sys
+    caplog.set_level(logging.INFO)
+
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+
+    import numpy as np
+    fake_shap = MagicMock()
+    fake_explainer = MagicMock()
+    fake_shap.TreeExplainer.return_value = fake_explainer
+    n_feats = 13
+    n_samples = 4
+    fake_explainer.shap_values.return_value = np.random.randn(n_samples, n_feats).astype(np.float32)
+
+    with patch.dict("sys.modules", {"shap": fake_shap}):
+        scorer.fit(actives, inactives)
+
+    assert any(
+        "SHAP features" in message
+        for message in caplog.messages
+    ), "Expected log to contain SHAP features after fit"

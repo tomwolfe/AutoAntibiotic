@@ -247,10 +247,18 @@ def analyze_selectivity_and_resistance(
     deps: Dict[str, Any],
     cache: _CacheLike = None,
     use_cache: bool = False,
+    water_results: Any = None,
 ) -> List[CompoundRecord]:
     """Phase 4 — Selectivity & Resistance Analysis.
 
     Docks top 10 against human off-targets, computes SI, profiles resistance risk.
+
+    Parameters
+    ----------
+    water_results : WaterAnalysisResult, optional
+        Result from crystallographic water analysis.  When provided,
+        ``rec.water_displacement_energy`` is populated from the mean
+        displacement energy of all waters.
     """
     log.info("─── Phase 4: Selectivity & Resistance Analysis ───")
 
@@ -426,6 +434,14 @@ def analyze_selectivity_and_resistance(
                         )
         except Exception as exc:
             log.debug(f"  IFP similarity failed for {rec.compound_id}: {exc}")
+
+        try:
+            if water_results is not None and hasattr(water_results, "all_waters") and water_results.all_waters:
+                energies = [w.displacement_energy for w in water_results.all_waters]
+                if energies:
+                    rec.water_displacement_energy = float(np.mean(energies))
+        except Exception as exc:
+            log.debug(f"  Water displacement energy failed for {rec.compound_id}: {exc}")
 
     # ── ADMET profiling on top 10 ──
     log.info("  Computing ADMET profiles for top candidates…")

@@ -31,9 +31,13 @@ fep = [
 generative = [
     "torch>=2.0.0",
 ]
+explainability = [
+    "shap>=0.46.0",
+]
 all = [
     "autoantibiotic[fep]",
     "autoantibiotic[generative]",
+    "autoantibiotic[explainability]",
 ]
 
 [tool.setuptools.packages.find]

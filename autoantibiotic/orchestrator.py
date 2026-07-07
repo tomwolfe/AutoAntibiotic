@@ -226,6 +226,7 @@ class PipelineOrchestrator:
         self.top_candidates = analyze_selectivity_and_resistance(
             self.top_candidates, self.targets, str(self.config.work_dir),
             self.deps, cache=self.cache, use_cache=self.use_cache,
+            water_results=self.water_results,
         )
 
     def apply_fep_resistance(self) -> None:

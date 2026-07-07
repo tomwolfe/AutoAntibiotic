@@ -17,6 +17,9 @@ from .config import CONFIG
 from .models import CompoundRecord
 from .io_utils import ensure_output_dir, log
 
+# Imported lazily (in generate_html_report) to avoid circular imports
+# _get_meta_scorer is used to compute SHAP explanations
+
 
 def generate_csv_report(top10: List[CompoundRecord]) -> str:
     """Phase 5.1 — Write top_candidates.csv with all required columns."""
@@ -306,6 +309,23 @@ def generate_html_report(
     hist_div = _make_qed_histogram(top50)
     pca_div = _make_pca_plot(top50)
 
+    # ── SHAP explanations for each record ──────────────────────────
+    from .ml_scoring.meta_scorer import _get_meta_scorer as _get_shap_scorer
+    _meta_scorer_instance = _get_shap_scorer()
+    shap_explanations: Dict[str, str] = {}
+    if _meta_scorer_instance is not None:
+        for rec in top10:
+            try:
+                shap_dict = _meta_scorer_instance.explain_prediction(rec)
+                if shap_dict:
+                    sorted_by_val = sorted(shap_dict.items(), key=lambda x: x[1], reverse=True)
+                    top_pos = [f"+{k}:{v:.3f}" for k, v in sorted_by_val[:3] if v > 0]
+                    top_neg = [f"{k}:{v:.3f}" for k, v in sorted_by_val[-3:] if v < 0]
+                    parts = top_pos + top_neg
+                    shap_explanations[rec.compound_id] = ", ".join(parts) if parts else "N/A"
+            except Exception:
+                shap_explanations[rec.compound_id] = "N/A"
+
     table_rows = ""
     for i, rec in enumerate(top10):
         allosteric = f"{rec.pb2pa_allosteric_energy:.2f}" if rec.pb2pa_allosteric_energy is not None else "N/A"
@@ -314,6 +334,7 @@ def generate_html_report(
         qed = f"{rec.qed_score:.3f}" if rec.qed_score else "N/A"
         ml_score = f"{rec.ml_score:.2f}" if rec.ml_score is not None else "N/A"
         admet_str = "; ".join(rec.admet_flags) if rec.admet_flags else "N/A"
+        shap_str = shap_explanations.get(rec.compound_id, "N/A")
 
         poor_admet = (
             "poor_solubility" in admet_str.lower()
@@ -341,6 +362,7 @@ def generate_html_report(
             f"<td>{ml_score}</td>"
             f"<td>{si}</td>"
             f"<td>{qed}</td>"
+            f"<td style='font-size:0.8em;max-width:180px;'>{shap_str}</td>"
             f"<td style='font-size:0.8em;max-width:200px;'>{admet_str}</td>"
             f"<td>{method_badge}</td>"
             f"<td style='font-size:0.8em;max-width:250px;'>{rec.resistance_notes}</td>"
@@ -400,6 +422,7 @@ tr.admet-warning {{ background-color: #ffcccc; }}
   <th>ML Score</th>
   <th>Selectivity Index</th>
   <th>QED</th>
+  <th>Top SHAP Features</th>
   <th>ADMET Flags</th>
   <th>Docking Method</th>
   <th>Resistance Notes</th>
