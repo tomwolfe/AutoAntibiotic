@@ -53,7 +53,7 @@ except ImportError:
     _HAVE_BIOPDB = False
 
 try:
-    from .structure_prep import clean_pdb_structure
+    from .structure_prep import clean_pdb_structure, calculate_adaptive_box_size, get_ligand_max_dimension
     _HAVE_CLEAN = True
 except ImportError:
     _HAVE_CLEAN = False
@@ -936,8 +936,18 @@ def _worker_dock_wrapper(
     return cid, energy, error_reason, method
 
 
+_Item = Tuple[str, str, Optional[np.ndarray], Optional[Tuple[float, float, float]]]
+"""Extended item format: ``(compound_id, smiles, per_center, per_box_size)``.
+
+When *per_center* and *per_box_size* are not ``None``, they override the
+default *center* / *box_size* arguments of :func:`_parallel_dock` for
+that specific compound.  This enables dynamic (ligand-adaptive) grid
+box sizing without pickling RDKit Mol objects across process boundaries.
+"""
+
+
 def _parallel_dock(
-    items: List[Tuple[str, str]],
+    items: List[_Item],
     receptor_pdbqt: str,
     center: np.ndarray,
     box_size: Tuple[float, float, float],
@@ -950,6 +960,11 @@ def _parallel_dock(
 ) -> List[Tuple[str, Optional[float], Optional[str], str]]:
     """Dock a list of compounds in parallel with batched processing.
 
+    *items* may be 2-tuples ``(compound_id, smiles)`` for backward
+    compatibility, or 4-tuples ``(compound_id, smiles, per_center,
+    per_box_size)`` where *per_center* / *per_box_size* override the
+    default grid parameters for that specific compound.
+
     Compounds are processed in batches (:attr:`CONFIG.batch_size_docking`,
     default 75) to allow periodic garbage collection and prevent memory
     bloat in worker processes.
@@ -959,17 +974,22 @@ def _parallel_dock(
     be docked and ``None`` otherwise.  *method* is the docking engine used.
     """
     results: List[Tuple[str, Optional[float], Optional[str], str]] = []
-    to_dock: List[Tuple[str, str, str]] = []
+    to_dock: List[Tuple[str, str, str, Optional[np.ndarray], Optional[Tuple[float, float, float]]]] = []
 
     tool_name = "gnina" if CONFIG.use_gnina else "vina"
-    for cid, smiles in items:
+    for item in items:
+        if len(item) == 4:
+            cid, smiles, per_center, per_box = item
+        else:
+            cid, smiles = item  # type: ignore[misc]
+            per_center, per_box = None, None
         cache_key = make_cache_key(smiles, tool_name)
         if use_cache and cache is not None and cache_key in cache:
             cached_val = cache[cache_key]
             results.append((cid, cached_val, None, "Unknown"))
             log.debug(f"    Cache hit: {cid} ({tag})")
         else:
-            to_dock.append((cid, smiles, cache_key))
+            to_dock.append((cid, smiles, cache_key, per_center, per_box))
 
     if not to_dock:
         return results
@@ -982,8 +1002,13 @@ def _parallel_dock(
 
         worker_seed = CONFIG.random_seed + batch_start
         work_items: List[Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int]] = [
-            (cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run, worker_seed)
-            for cid, smiles, _ in batch
+            (
+                cid, smiles, receptor_pdbqt,
+                per_center if per_center is not None else center,
+                per_box if per_box is not None else box_size,
+                work_dir, tag, dry_run, worker_seed,
+            )
+            for cid, smiles, _, per_center, per_box in batch
         ]
 
         chunksize_val = max(1, len(work_items) // (n_jobs_eff * 4))
@@ -997,7 +1022,7 @@ def _parallel_dock(
                 )
             )
 
-        for (cid, _, cache_key), (_, energy, err, method) in zip(batch, mapped):
+        for (cid, _, cache_key, _, _), (_, energy, err, method) in zip(batch, mapped):
             results.append((cid, energy, err, method))
             if use_cache and cache is not None:
                 cache[cache_key] = energy
@@ -1217,11 +1242,26 @@ def _screen_ensemble(
     n_rec = len(receptor_pdbqt_list)
 
     log.info(f"  Ensemble docking all compounds against {n_rec} structures (allosteric site)…")
-    items = [(r.compound_id, r.smiles) for r in records]
+
+    # Pre-compute per-compound box parameters (same for all receptors)
+    per_compound_box: Dict[str, Tuple[float, float, float]] = {}
+    if CONFIG.use_dynamic_box_sizing:
+        for r in records:
+            _, per_box = _compute_dynamic_box_params(
+                r, allosteric_center_list[0], CONFIG.allosteric_box_size,
+            )
+            per_compound_box[r.compound_id] = per_box
 
     # Phase 1: dock all compounds against each receptor separately
     receptor_energies: List[List[Optional[float]]] = []
     for i, (rec_pdbqt, center) in enumerate(zip(receptor_pdbqt_list, allosteric_center_list)):
+        if per_compound_box:
+            items: List[_Item] = [
+                (r.compound_id, r.smiles, center, per_compound_box.get(r.compound_id))
+                for r in records
+            ]
+        else:
+            items = [(r.compound_id, r.smiles, None, None) for r in records]
         results = _parallel_dock(
             items, rec_pdbqt, center, CONFIG.allosteric_box_size,
             work_dir, f"ens_alloc_{i}",
@@ -1250,9 +1290,15 @@ def _screen_ensemble(
 
     if top50:
         log.info(f"  Ensemble docking top {len(top50)} against active site ({n_rec} structures)…")
-        active_items = [(r.compound_id, r.smiles) for r in top50]
         active_receptor_energies: List[List[Optional[float]]] = []
         for i, (rec_pdbqt, center) in enumerate(zip(receptor_pdbqt_list, active_center_list)):
+            if per_compound_box:
+                active_items: List[_Item] = [
+                    (r.compound_id, r.smiles, center, per_compound_box.get(r.compound_id))
+                    for r in top50
+                ]
+            else:
+                active_items = [(r.compound_id, r.smiles, None, None) for r in top50]
             results = _parallel_dock(
                 active_items, rec_pdbqt, center, CONFIG.active_box_size,
                 work_dir, f"ens_act_{i}",
@@ -1347,6 +1393,39 @@ def _screen_flexible(
     return scored[:CONFIG.top_n]
 
 
+def _compute_dynamic_box_params(
+    record: CompoundRecord,
+    center: np.ndarray,
+    base_box_size: Tuple[float, float, float],
+) -> Tuple[np.ndarray, Tuple[float, float, float]]:
+    """Compute per-compound dynamic box parameters.
+
+    When ``CONFIG.use_dynamic_box_sizing`` is True and the record has a
+    valid ``mol``, the box size is expanded to accommodate the ligand's
+    maximum dimension.  The center remains unchanged.
+
+    Args:
+        record: Compound record (uses ``.mol`` if available).
+        center: Default binding-site centroid.
+        base_box_size: Default box dimensions (e.g. ``CONFIG.allosteric_box_size``).
+
+    Returns:
+        ``(center, box_size)`` tuple — either the defaults or an expanded box.
+    """
+    if not CONFIG.use_dynamic_box_sizing or record.mol is None:
+        return center, base_box_size
+
+    try:
+        ligand_max_dim = get_ligand_max_dimension(record.mol)
+    except Exception:
+        return center, base_box_size
+
+    half_buffer = ligand_max_dim / 2.0 + CONFIG.dynamic_box_padding
+    base = np.array(base_box_size, dtype=float)
+    dyn = np.maximum(base, half_buffer)
+    return center, (float(dyn[0]), float(dyn[1]), float(dyn[2]))
+
+
 def _screen_standard(
     records: List[CompoundRecord],
     targets: Dict[str, Any],
@@ -1362,7 +1441,12 @@ def _screen_standard(
     active_center = pb2pa["active_center"]
 
     log.info("  Docking all compounds against allosteric site…")
-    items = [(r.compound_id, r.smiles) for r in records]
+    items: List[_Item] = []
+    for r in records:
+        per_center, per_box = _compute_dynamic_box_params(
+            r, allosteric_center, CONFIG.allosteric_box_size,
+        )
+        items.append((r.compound_id, r.smiles, per_center, per_box))
     allosteric_results = _parallel_dock(
         items, pb2pa["pdbqt"],
         allosteric_center, CONFIG.allosteric_box_size,
@@ -1387,7 +1471,12 @@ def _screen_standard(
     top50 = scored[:CONFIG.top_n_for_active]
     log.info(f"  Docking top {len(top50)} compounds against active site…")
 
-    active_items = [(r.compound_id, r.smiles) for r in top50]
+    active_items: List[_Item] = []
+    for r in top50:
+        per_center, per_box = _compute_dynamic_box_params(
+            r, active_center, CONFIG.active_box_size,
+        )
+        active_items.append((r.compound_id, r.smiles, per_center, per_box))
     active_results = _parallel_dock(
         active_items, pb2pa["pdbqt"],
         active_center, CONFIG.active_box_size,

@@ -197,6 +197,13 @@ class PipelineConfig:
     ])
 
     # ── Docking parameters ──
+    use_dynamic_box_sizing: bool = True
+    """When True, calculate grid box dimensions dynamically based on the
+    ligand's maximum heavy-atom distance.  Falls back to fixed box sizes
+    (``allosteric_box_size`` / ``active_box_size``) when False."""
+    dynamic_box_padding: float = 5.0
+    """Padding (Å) added to the ligand's half-maximum dimension when
+    computing the dynamic grid box size."""
     validate_docking_binaries_on_startup: bool = True
     """When True, validate docking binary versions and health on startup."""
     vina_exhaustiveness: int = 8

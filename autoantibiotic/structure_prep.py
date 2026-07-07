@@ -37,6 +37,52 @@ CRITICAL_RESIDUE_ATOMS: Dict[str, Set[str]] = {
 }
 
 
+def get_ligand_max_dimension(mol: Chem.Mol) -> float:
+    """Compute the maximum distance between any two heavy atoms in the
+    ligand's 3D conformer.
+
+    If no conformer exists, one is generated using ETKDG.
+
+    Args:
+        mol: RDKit molecule (with or without a conformer).
+
+    Returns:
+        Maximum pairwise heavy-atom distance (Å).  Returns 0.0 if the
+        molecule has fewer than 2 heavy atoms or if embedding fails.
+    """
+    if mol.GetNumHeavyAtoms() < 2:
+        return 0.0
+
+    work = Chem.RWMol(mol)
+    work = Chem.AddHs(work)
+    if work.GetNumConformers() == 0:
+        params = AllChem.ETKDGv3()
+        params.randomSeed = 42
+        status = AllChem.EmbedMolecule(work, params)
+        if status < 0:
+            log.warning("  ETKDG embedding failed for max-dimension calculation; returning 0.0.")
+            return 0.0
+        AllChem.MMFFOptimizeMolecule(work)
+
+    conf = work.GetConformer()
+    heavy_indices = [
+        a.GetIdx() for a in work.GetAtoms()
+        if a.GetAtomicNum() > 1
+    ]
+    if len(heavy_indices) < 2:
+        return 0.0
+
+    max_dist = 0.0
+    for i in range(len(heavy_indices)):
+        pi = conf.GetAtomPosition(heavy_indices[i])
+        for j in range(i + 1, len(heavy_indices)):
+            pj = conf.GetAtomPosition(heavy_indices[j])
+            dist = pi.Distance(pj)
+            if dist > max_dist:
+                max_dist = dist
+    return max_dist
+
+
 def calculate_adaptive_box_size(
     coords: np.ndarray,
     padding: float = 5.0,
@@ -55,6 +101,10 @@ def calculate_adaptive_box_size(
     Returns:
         Tuple of (size_x, size_y, size_z).
     """
+    if coords is None or coords.size == 0:
+        log.warning("  Empty coordinates provided to adaptive box sizing. Using default minimum.")
+        return (minimum, minimum, minimum)
+
     if coords.ndim != 2 or coords.shape[1] != 3:
         raise ValueError(f"Expected (N, 3) array, got {coords.shape}")
 
