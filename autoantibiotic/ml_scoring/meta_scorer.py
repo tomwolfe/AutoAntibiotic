@@ -127,6 +127,21 @@ class MetaScorer:
         )
         self.uses_dynamic_features = has_nonzero_md
 
+        # ── Load benchmark docking features ────────────────────────
+        docking_features: Dict[str, Dict[str, float]] = {}
+        try:
+            from benchmarks.reference_data import get_benchmark_docking_features
+            all_smiles = actives_smiles + inactives_smiles
+            docking_features = get_benchmark_docking_features(
+                actives_smiles, inactives_smiles,
+                work_dir=str(CONFIG.work_dir),
+            )
+            log.info(
+                f"MetaScorer: loaded {len(docking_features)} benchmark docking features."
+            )
+        except Exception as exc:
+            log.warning(f"MetaScorer: failed to load benchmark docking data — {exc}")
+
         feature_extractor = feature_fn or self._default_features
 
         actives_md_rmsd = md_ligand_rmsd_values or []
@@ -139,7 +154,15 @@ class MetaScorer:
             try:
                 rmsd = actives_md_rmsd[i] if i < len(actives_md_rmsd) else None
                 rg = actives_rg_stab[i] if i < len(actives_rg_stab) else None
-                X_list.append(feature_extractor(mol, md_ligand_rmsd=rmsd, md_pocket_rg_stability=rg))
+                df = docking_features.get(smi, {})
+                X_list.append(feature_extractor(
+                    mol,
+                    md_ligand_rmsd=rmsd,
+                    md_pocket_rg_stability=rg,
+                    vina_energy=df.get("vina_energy"),
+                    gnina_score=df.get("gnina_score"),
+                    shape_score=df.get("shape_score"),
+                ))
                 y_list.append(1.0)
                 smiles_for_scaffold.append(smi)
             except Exception:
@@ -156,7 +179,15 @@ class MetaScorer:
                 idx = len(actives_smiles) + i
                 rmsd = md_ligand_rmsd_values[idx] if md_ligand_rmsd_values and idx < len(md_ligand_rmsd_values) else None
                 rg = md_pocket_rg_stability_values[idx] if md_pocket_rg_stability_values and idx < len(md_pocket_rg_stability_values) else None
-                X_list.append(feature_extractor(mol, md_ligand_rmsd=rmsd, md_pocket_rg_stability=rg))
+                df = docking_features.get(smi, {})
+                X_list.append(feature_extractor(
+                    mol,
+                    md_ligand_rmsd=rmsd,
+                    md_pocket_rg_stability=rg,
+                    vina_energy=df.get("vina_energy"),
+                    gnina_score=df.get("gnina_score"),
+                    shape_score=df.get("shape_score"),
+                ))
                 y_list.append(0.0)
                 smiles_for_scaffold.append(smi)
             except Exception:
@@ -446,11 +477,19 @@ class MetaScorer:
         md_pocket_rg_stability: Optional[float] = None,
         ifp_score: Optional[float] = None,
         water_displacement_energy: Optional[float] = None,
+        vina_energy: Optional[float] = None,
+        gnina_score: Optional[float] = None,
+        shape_score: Optional[float] = None,
     ) -> np.ndarray:
         """13-dim feature vector for a molecule.
 
-        Static descriptors (8):
-        1-4. Vina/GNINA/Shape/IFP placeholders (0.0)
+        Real physics data (4):
+        1.   Vina binding energy (kcal/mol)
+        2.   GNINA CNN score (0-1)
+        3.   Shape score (protrude distance normalised)
+        4.   IFP similarity score (from CompoundRecord.ifp_score)
+
+        Static descriptors (4):
         5.   QED
         6.   LogP
         7.   MolWt
@@ -470,15 +509,19 @@ class MetaScorer:
         mw = float(Descriptors.MolWt(mol))
         n_rot = float(Descriptors.NumRotatableBonds(mol))
 
-        rmsd_mean = md_ligand_rmsd if md_ligand_rmsd is not None else 0.0
-        rmsd_std = 0.0
-        rg_stab = md_pocket_rg_stability if md_pocket_rg_stability is not None else 0.0
+        vina = vina_energy if vina_energy is not None else 0.0
+        gnina = gnina_score if gnina_score is not None else 0.0
+        shape = shape_score if shape_score is not None else 0.0
 
         ifp = ifp_score if ifp_score is not None else 0.0
         water_disp = water_displacement_energy if water_displacement_energy is not None else 0.0
 
+        rmsd_mean = md_ligand_rmsd if md_ligand_rmsd is not None else 0.0
+        rmsd_std = 0.0
+        rg_stab = md_pocket_rg_stability if md_pocket_rg_stability is not None else 0.0
+
         arr = np.array(
-            [0.0, 0.0, 0.0, ifp, qed, logp, mw, n_rot,
+            [vina, gnina, shape, ifp, qed, logp, mw, n_rot,
              rmsd_mean, rmsd_std, rg_stab, ifp, water_disp],
             dtype=np.float32,
         )

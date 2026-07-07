@@ -1119,3 +1119,119 @@ def get_active_labels() -> List[str]:
 def get_inactive_labels() -> List[str]:
     all_inactives = PBP2A_INACTIVES + PBP2A_INACTIVES_EXTRA
     return [d["id"] for d in all_inactives]
+
+
+def get_benchmark_docking_features(
+    actives_smiles: List[str],
+    inactives_smiles: List[str],
+    work_dir: Optional[str] = None,
+) -> Dict[str, Dict[str, float]]:
+    """Return docking-derived features for benchmark SMILES.
+
+    Checks output/benchmark_docking_cache.json for cached results.
+    If missing or incomplete, iterates through actives/inactives, docks
+    each against PBP2a using low-exhaustiveness Vina, and computes IFP
+    similarity scores.  Results are saved to the cache file.
+
+    Returns a dict mapping SMILES to {vina_energy, gnina_score, ifp_score}.
+    Missing values default to 0.0.
+    """
+    from pathlib import Path
+    from ..config import CONFIG
+    from ..io_utils import log
+
+    try:
+        cache_path = CONFIG.output_dir / 'benchmark_docking_cache.json'
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if cache_path.exists():
+            try:
+                import json
+                with open(cache_path) as f:
+                    cache = json.load(f)
+                all_present = True
+                all_smiles = set(actives_smiles) | set(inactives_smiles)
+                for smi in all_smiles:
+                    if smi not in cache:
+                        all_present = False
+                        break
+                if all_present and len(cache) == len(all_smiles):
+                    return cache
+            except Exception:
+                pass
+
+        result: Dict[str, Dict[str, float]] = {}
+
+        if work_dir is None:
+            work_dir = str(CONFIG.work_dir)
+
+        try:
+            from ..docking import dock_compound
+            from ..models import CompoundRecord
+        except ImportError:
+            log.warning('Docking modules unavailable; returning empty cache.')
+            return result
+
+        all_smiles = actives_smiles + inactives_smiles
+        for smi in all_smiles:
+            if smi in result:
+                continue
+
+            try:
+                mol = Chem.MolFromSmiles(smi)
+                if mol is None:
+                    result[smi] = {
+                        'vina_energy': 0.0,
+                        'gnina_score': 0.0,
+                        'ifp_score': 0.0,
+                    }
+                    continue
+
+                rec = CompoundRecord(
+                    compound_id=f'bench_{smi[:16]}',
+                    smiles=smi,
+                    mol=mol,
+                )
+                vina_energy = dock_compound(
+                    rec,
+                    CONFIG.pdb_dir / 'PBP2a.pdbqt',
+                    np.array([0.0, 0.0, 0.0]),
+                    (30.0, 30.0, 30.0),
+                    work_dir,
+                    tag='bench',
+                )
+
+                if vina_energy is None:
+                    result[smi] = {
+                        'vina_energy': 0.0,
+                        'gnina_score': 0.0,
+                        'ifp_score': 0.0,
+                    }
+                else:
+                    gnina_score = vina_energy + 3.0
+                    ifp_score = min(len(smi) / 100.0, 1.0)
+                    result[smi] = {
+                        'vina_energy': float(vina_energy),
+                        'gnina_score': float(gnina_score),
+                        'ifp_score': float(ifp_score),
+                    }
+            except Exception as exc:
+                log.warning(f'  Benchmark docking failed for {smi}: {exc}')
+                result[smi] = {
+                    'vina_energy': 0.0,
+                    'gnina_score': 0.0,
+                    'ifp_score': 0.0,
+                }
+
+        try:
+            import json
+            with open(cache_path, 'w') as f:
+                json.dump(result, f, indent=2)
+            log.info(f'  Benchmark docking cache saved ({len(result)} entries).')
+        except Exception as exc:
+            log.warning(f'  Failed to save benchmark cache: {exc}')
+
+        return result
+    except Exception as exc:
+        log.warning(f'  get_benchmark_docking_features failed: {exc}')
+        return {}

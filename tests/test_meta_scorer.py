@@ -377,3 +377,58 @@ def test_metascorer_ifp_water_features_none_defaults() -> None:
     feat_with_none = scorer._default_features(raw_mol, ifp_score=None, water_displacement_energy=None)
     assert feat_with_none[3] == 0.0, "IFP score default should be 0.0"
     assert feat_with_none[12] == 0.0, "Water displacement default should be 0.0"
+
+
+def test_metascorer_with_real_docking_features() -> None:
+    """Feature vector must incorporate real docking values when available.
+
+    Mocks the benchmark docking cache to return non-zero docking features,
+    then verifies that the resulting feature vector contains non-zero
+    physics-based columns (vina_energy, gnina_score, shape_score).
+    """
+    actives = [
+        "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)"
+        "N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
+        "CC1=C(C(=O)N2C(C(=O)NO)C(C(=O)O)=C(C)S/C2=C/1)C(=O)N3C(=O)C4=CC=CS4N3",
+    ]
+    inactives = [
+        "CCCCCCCCCCCCCCCCCC(=O)O",
+        "CC(C)(C)OC(=O)NCCCCCCBr",
+    ]
+
+    scorer = MetaScorer()
+    # Patch get_benchmark_docking_features to return non-zero values
+    mock_docking = {
+        actives[0]: {"vina_energy": -9.5, "gnina_score": 0.85, "ifp_score": 0.92},
+        actives[1]: {"vina_energy": -8.2, "gnina_score": 0.72, "ifp_score": 0.80},
+        inactives[0]: {"vina_energy": -5.0, "gnina_score": 0.45, "ifp_score": 0.30},
+        inactives[1]: {"vina_energy": -6.1, "gnina_score": 0.55, "ifp_score": 0.40},
+    }
+    from unittest.mock import patch
+    with patch(
+        "benchmarks.reference_data.get_benchmark_docking_features",
+        return_value=mock_docking,
+    ):
+        scorer.fit(actives, inactives)
+
+    raw_mol = Chem.MolFromSmiles(actives[0])
+    assert raw_mol is not None
+
+    feats = scorer._default_features(
+        raw_mol,
+        vina_energy=-9.5,
+        gnina_score=0.85,
+        shape_score=0.92,
+    )
+    # Feature vector must have shape (13,)
+    assert feats.shape == (13,), f"Expected shape (13,), got {feats.shape}"
+
+    # Physics columns must be non-zero
+    assert feats[0] == pytest.approx(-9.5, abs=1e-6), "vina_energy must be -9.5"
+    assert feats[1] == pytest.approx(0.85, abs=1e-6), "gnina_score must be 0.85"
+    assert feats[2] == pytest.approx(0.92, abs=1e-6), "shape_score must be 0.92"
+
+    # Predict must return a valid score
+    score = scorer.predict(_make_record(actives[0]))
+    assert score is not None
+    assert 0.0 <= score <= 1.0
