@@ -440,6 +440,73 @@ def _compute_volume_overlap_ratio(
     return float(min(total_overlap / water_vol, 1.0))
 
 
+def _perform_pose_relaxation(
+    topology: Any,
+    system: Any,
+    positions: Any,
+    force_constant: float = 10.0,
+    max_iterations: int = 500,
+) -> Tuple[Any, bool]:
+    """Perform restrained minimization of a protein-ligand complex.
+
+    Adds harmonic restraints to protein backbone CA atoms so that
+    ligand and side chains can relax while the backbone stays near
+    its initial position.  Uses a force constant of *force_constant*
+    kcal/mol/\\u00c5\\u00b2.
+
+    Returns
+    -------
+    (relaxed_positions, success_flag)
+        On failure *relaxed_positions* is the input positions and the
+        flag is ``False``.
+    """
+    try:
+        cpu_platform = _openmm.Platform.getPlatformByName("CPU")
+        simulation = _openmm_app.Simulation(
+            topology, system,
+            _openmm.LangevinMiddleIntegrator(
+                300 * _openmm_unit.kelvin,
+                1.0 / _openmm_unit.picosecond,
+                0.002 * _openmm_unit.picosecond,
+            ),
+            cpu_platform,
+        )
+        simulation.context.setPositions(positions)
+
+        force = _openmm.CustomExternalForce(
+            "k*periodicdistance(x, y, z, x0, y0, z0)^2"
+        )
+        k_val = force_constant * _openmm_unit.kilocalories_per_mole / _openmm_unit.angstroms**2
+        force.addGlobalParameter("k", k_val)
+        force.addPerParticleParameter("x0")
+        force.addPerParticleParameter("y0")
+        force.addPerParticleParameter("z0")
+
+        exclude = {"HOH", "WAT", "LIG", "UNL"}
+        n_restrained = 0
+        for atom in topology.atoms():
+            res_name = atom.residue.name if atom.residue else ""
+            if atom.name == "CA" and res_name not in exclude:
+                pos = positions[atom.index]
+                force.addParticle(atom.index, [pos.x.value_in_unit(_openmm_unit.nanometers),
+                                                pos.y.value_in_unit(_openmm_unit.nanometers),
+                                                pos.z.value_in_unit(_openmm_unit.nanometers)])
+                n_restrained += 1
+
+        if n_restrained > 0:
+            system.addForce(force)
+            log.info(f"  Restrained minimisation: {n_restrained} CA atoms restrained")
+
+        simulation.minimizeEnergy(maxIterations=max_iterations)
+        state = simulation.context.getState(getPositions=True)
+        relaxed = state.getPositions()
+        return relaxed, True
+
+    except Exception as exc:
+        log.warning(f"  Pose relaxation failed: {exc}")
+        return positions, False
+
+
 def _prepare_receptor_for_mmgbsa(
     receptor_pdb: str, work_dir_mm: str,
 ) -> Optional[Tuple[Any, Any, Any, float]]:
@@ -612,33 +679,110 @@ def _compute_complex_gb_energy(
         return None
 
 
+def _build_explicit_complex_system(
+    rec_pdb: str,
+    lig_pdb: str,
+    work_dir_mm: str,
+    tag: str,
+    forcefield: Any,
+) -> Optional[Tuple[Any, Any, Any]]:
+    """Build a complex topology/system from solvated receptor + ligand PDBs.
+
+    Returns (topology, system, positions) or None on failure.
+    """
+    try:
+        complex_pdb = os.path.join(work_dir_mm, f"complex_{tag}.pdb")
+        with open(rec_pdb) as f:
+            rec_lines = f.readlines()
+        with open(lig_pdb) as f:
+            lig_lines = f.readlines()
+
+        with open(complex_pdb, "w") as f:
+            for line in rec_lines:
+                if line.startswith(("END", "TER")):
+                    continue
+                f.write(line)
+            f.write("TER\n")
+            for line in lig_lines:
+                if line.startswith(("END", "TER")):
+                    continue
+                f.write(line)
+            f.write("END\n")
+
+        pdb_obj = _openmm_app.PDBFile(complex_pdb)
+        system = forcefield.createSystem(
+            pdb_obj.topology,
+            nonbondedMethod=_openmm_app.PME,
+            nonbondedCutoff=1.0 * _openmm_unit.nanometer,
+            constraints=_openmm_app.HBonds,
+        )
+        return pdb_obj.topology, system, pdb_obj.positions
+    except Exception as exc:
+        log.warning(f"  Complex system build failed for {tag}: {exc}")
+        return None
+
+
+def _compute_complex_gb_energy_relaxed(
+    topology: Any,
+    positions: Any,
+    forcefield: Any,
+    cpu_platform: Any,
+) -> Optional[float]:
+    """Compute GB energy of a complex using OBC2 at given positions."""
+    try:
+        system = forcefield.createSystem(
+            topology,
+            nonbondedMethod=_openmm_app.NoCutoff,
+            constraints=_openmm_app.HBonds,
+            implicitSolvent=_openmm_app.OBC2,
+        )
+        simulation = _openmm_app.Simulation(
+            topology, system,
+            _openmm.LangevinMiddleIntegrator(
+                300 * _openmm_unit.kelvin,
+                1.0 / _openmm_unit.picosecond,
+                0.002 * _openmm_unit.picosecond,
+            ),
+            cpu_platform,
+        )
+        simulation.context.setPositions(positions)
+        simulation.minimizeEnergy(maxIterations=200)
+        energy = simulation.context.getState(
+            getEnergy=True,
+        ).getPotentialEnergy().value_in_unit(_openmm_unit.kilocalorie_per_mole)
+        return energy
+    except Exception as exc:
+        log.warning(f"  Complex GB energy (relaxed) failed: {exc}")
+        return None
+
+
 def rescore_with_mmgbsa(
     top_candidates: List[CompoundRecord],
     receptor_pdb: str,
     work_dir: str,
     water_results: Optional[WaterAnalysisResult] = None,
 ) -> List[CompoundRecord]:
-    """Rescore the top candidates using MM-GB/SA with OpenMM + OBC2.
+    """Rescore the top candidates using MM-GB/SA with explicit solvent
+    (TIP3P), pose relaxation, and water displacement correction.
 
-    Energy components (all implicit-solvent GB):
+    .. rubric:: Explicit-solvent path (default, when PDBFixer available)
 
-        ΔG_binding ≈ G(complex) - G(receptor) - G(ligand)
+    1. Prepare the receptor with PDBFixer and solvate with TIP3P
+       (10 \\u00c5 padding).
+    2. For each candidate, build the ligand-receptor complex and perform
+       a **restrained minimisation** (backbone CA restraints, 10 kcal/mol/\\u00c5\\u00b2)
+       to relax docking artefacts.
+    3. Extract multiple trajectory frames and compute \\u0394G\\u1d35\\u1d62\\u2099\\u05e0\\u1d62\\u2099\\u2097
+       via GB/SA (OBC2) on each relaxed snapshot.
+    4. Average over ``CONFIG.explicit_solvent_frames`` (or
+       ``CONFIG.mmgbsa_n_conformers`` when ensemble averaging is enabled).
+    5. Apply the **water displacement penalty** for high-energy waters
+       that overlap with the relaxed ligand pose (skipping bridging waters).
 
-    where each G = E_MM (bonded + vdW + Coulomb) + E_GB (Born).
+    .. rubric:: Implicit OBC2 fallback
 
-    **Ensemble averaging** (when ``CONFIG.use_expensive_ml_features``
-    is ``True``): generates ``CONFIG.mmgbsa_n_conformers`` conformers
-    for the ligand via ETKDG + MMFF and computes the mean ΔG and
-    standard deviation.  The mean is stored in ``record.ml_score`` and
-    the std dev in ``record.ml_score_std``.  A larger std dev indicates
-    higher sensitivity to ligand conformation.
-
-    **Water displacement correction**: high-energy waters that sterically
-    clash with the ligand contribute a favourable displacement penalty.
-    The penalty is the water's *displacement_energy* scaled by a
-    **volume-overlap clash factor** (see
-    :func:`_compute_water_displacement_penalty`).  Bridging waters
-    (those H-bonded to both protein and ligand) are excluded.
+    If OpenMM or PDBFixer is unavailable the original OBC2-only path is
+    used as a fallback.
 
     Args:
         top_candidates: Docked candidates (uses SMILES for 3D generation).
@@ -648,7 +792,7 @@ def rescore_with_mmgbsa(
 
     Returns:
         Updated candidates with ``ml_score`` set to the ensemble-mean
-        MM-GB/SA ΔG (more negative = stronger predicted binding).
+        MM-GB/SA \\u0394G (more negative = stronger predicted binding).
     """
     n_to_rescore = min(len(top_candidates), CONFIG.mm_gbsa_top_n)
     log.info(f"  Rescoring top {n_to_rescore}/{len(top_candidates)} with MM-GB/SA…")
@@ -663,9 +807,25 @@ def rescore_with_mmgbsa(
 
     use_ensemble = CONFIG.use_expensive_ml_features
     n_conf = CONFIG.mmgbsa_n_conformers if use_ensemble else 1
+    use_explicit = CONFIG.use_explicit_solvent_mmgbsa and _HAVE_PDBFIXER
 
     work_dir_mm = os.path.join(work_dir, "mmgbsa")
     os.makedirs(work_dir_mm, exist_ok=True)
+
+    # ── Explicit-solvent path (pose relaxation + TIP3P) ──────────
+    if use_explicit:
+        return _rescore_explicit_solvent_loop(
+            top_candidates, receptor_pdb, work_dir_mm, water_results,
+            n_to_rescore, n_conf, use_ensemble,
+        )
+
+    # ── Implicit OBC2 path (fallback) ────────────────────────────
+    if CONFIG.use_explicit_solvent_mmgbsa and not _HAVE_PDBFIXER:
+        log.warning(
+            "  PDBFixer not installed — falling back to implicit OBC2 MM-GB/SA. "
+            "Install pdbfixer (conda install -c conda-forge pdbfixer) for "
+            "explicit-solvent rescoring."
+        )
 
     rec_prep = _prepare_receptor_for_mmgbsa(receptor_pdb, work_dir_mm)
     if rec_prep is None:
@@ -678,7 +838,7 @@ def rescore_with_mmgbsa(
     to_rescore = top_candidates[:n_to_rescore]
 
     for rank, rec in enumerate(to_rescore):
-        log.info(f"  MM-GB/SA [{rank + 1}/{n_to_rescore}]: {rec.compound_id}")
+        log.info(f"  MM-GB/SA (OBC2) [{rank + 1}/{n_to_rescore}]: {rec.compound_id}")
         try:
             mol = rec.mol
             if mol is None:
@@ -710,7 +870,7 @@ def rescore_with_mmgbsa(
 
                 binding_energy = complex_energy - rec_energy - lig_energy
 
-                # ── Water displacement correction (volume-overlap clash factor) ──
+                # ── Water displacement correction ──
                 if water_results is not None and water_results.high_energy_waters:
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
@@ -734,7 +894,7 @@ def rescore_with_mmgbsa(
             mean_binding = float(np.mean(binding_energies))
             std_binding = float(np.std(binding_energies, ddof=1)) if len(binding_energies) > 1 else 0.0
 
-            # ── Entropy estimation (Normal Mode Analysis) ──
+            # ── Entropy estimation ──
             entropy_delta_ts: Optional[float] = None
             if CONFIG.include_entropy:
                 entropy_result = _compute_entropy_estimation(
@@ -746,7 +906,6 @@ def rescore_with_mmgbsa(
                         f"    -TΔS = {entropy_delta_ts:.2f} kcal/mol (NMA entropy)"
                     )
 
-            # Combine enthalpy and entropy: ΔG = ΔH - TΔS
             final_score = mean_binding - (entropy_delta_ts or 0.0)
             rec.ml_score = final_score
             rec.ml_score_std = std_binding
@@ -760,65 +919,24 @@ def rescore_with_mmgbsa(
     return top_candidates
 
 
-def rescore_with_explicit_mmgbsa(
+def _rescore_explicit_solvent_loop(
     top_candidates: List[CompoundRecord],
     receptor_pdb: str,
-    work_dir: str,
-    water_results: Optional[WaterAnalysisResult] = None,
+    work_dir_mm: str,
+    water_results: Optional[WaterAnalysisResult],
+    n_to_rescore: int,
+    n_conf: int,
+    use_ensemble: bool,
 ) -> List[CompoundRecord]:
-    """Rescore top candidates using **explicit-solvent** MM-GB/SA.
+    """Explicit-solvent MM-GB/SA rescoring with pose relaxation.
 
-    Unlike :func:`rescore_with_mmgbsa` which uses the OBC2 implicit
-    solvent model, this function:
-
-    1. Prepares the complex with PDBFixer.
-    2. Solvates with TIP3P water box (10 A padding).
-    3. Performs energy minimisation and a short NVT equilibration.
-    4. Extracts *n_frames* snapshots and computes ΔG_binding for each
-       using MM-GB/SA on the snapshots (GB still implicit, but water
-       structure from the explicit solvent trajectory is preserved).
-    5. Returns the mean ΔG and standard deviation across frames.
-
-    Falls back to :func:`rescore_with_mmgbsa` (implicit OBC2) if OpenMM
-    or PDBFixer are unavailable or if the receptor cannot be prepared.
-
-    Args:
-        top_candidates: Docked candidates (uses SMILES for 3D generation).
-        receptor_pdb: Path to the receptor PDB file.
-        work_dir: Working directory for intermediate files.
-        water_results: Optional water analysis result (passed through to
-            the fallback implicit MM-GB/SA).
-
-    Returns:
-        Updated candidates with ``ml_score`` set to the frame-averaged
-        MM-GB/SA ΔG (more negative = stronger predicted binding).
+    Prepares the solvated receptor once, then for each candidate
+    generates conformers, builds explicit-solvent complexes,
+    performs restrained minimization (pose relaxation), computes
+    GB/SA energies on the relaxed poses, and applies water
+    displacement penalties.
     """
-    n_to_rescore = min(len(top_candidates), CONFIG.mm_gbsa_top_n)
-    log.info(
-        f"  Rescoring top {n_to_rescore}/{len(top_candidates)} "
-        "with EXPLICIT-SOLVENT MM-GB/SA…"
-    )
-
-    if not _HAVE_OPENMM or not _HAVE_PDBFIXER:
-        missing = "OpenMM" if not _HAVE_OPENMM else "PDBFixer"
-        log.warning(
-            f"  {missing} not installed — falling back to implicit MM-GB/SA."
-        )
-        return rescore_with_mmgbsa(
-            top_candidates, receptor_pdb, work_dir, water_results=water_results,
-        )
-
-    if not os.path.exists(receptor_pdb):
-        log.warning(f"  Receptor PDB not found: {receptor_pdb}. Falling back to implicit MM-GB/SA.")
-        return rescore_with_mmgbsa(
-            top_candidates, receptor_pdb, work_dir, water_results=water_results,
-        )
-
-    n_frames = CONFIG.explicit_solvent_frames
-    work_dir_mm = os.path.join(work_dir, "explicit_mmgbsa")
-    os.makedirs(work_dir_mm, exist_ok=True)
-
-    # ── Prepare receptor ──────────────────────────────────────────
+    # ── Prepare solvated receptor ──────────────────────────────
     try:
         from pdbfixer import PDBFixer
 
@@ -832,18 +950,16 @@ def rescore_with_explicit_mmgbsa(
         fixer.addMissingHydrogens(pH=7.0)
 
         forcefield = _openmm_app.ForceField(
-            "amber14-all.xml", "amber14/tip3pfb.xml"
+            "amber14-all.xml", "amber14/tip3pfb.xml",
         )
 
-        # ── Solvate with TIP3P (10 A padding) ─────────────────────
         modeller = _openmm_app.Modeller(fixer.topology, fixer.positions)
         modeller.addSolvent(
-            forcefield,
-            model="tip3p",
+            forcefield, model="tip3p",
             padding=10.0 * _openmm_unit.angstrom,
         )
 
-        system = forcefield.createSystem(
+        rec_system = forcefield.createSystem(
             modeller.topology,
             nonbondedMethod=_openmm_app.PME,
             nonbondedCutoff=1.0 * _openmm_unit.nanometer,
@@ -851,30 +967,25 @@ def rescore_with_explicit_mmgbsa(
         )
 
         cpu_platform = _openmm.Platform.getPlatformByName("CPU")
-        integrator = _openmm.LangevinMiddleIntegrator(
+        rec_integrator = _openmm.LangevinMiddleIntegrator(
             300.0 * _openmm_unit.kelvin,
             1.0 / _openmm_unit.picosecond,
             0.002 * _openmm_unit.picosecond,
         )
-        simulation = _openmm_app.Simulation(
-            modeller.topology, system, integrator, cpu_platform,
+        rec_sim = _openmm_app.Simulation(
+            modeller.topology, rec_system, rec_integrator, cpu_platform,
         )
-        simulation.context.setPositions(modeller.positions)
+        rec_sim.context.setPositions(modeller.positions)
+        rec_sim.minimizeEnergy(maxIterations=500)
+        rec_sim.step(1000)  # short NVT equilibration
 
-        # Minimise
-        simulation.minimizeEnergy(maxIterations=500)
-
-        # Short NVT equilibration (2 ps)
-        simulation.step(1000)
-
-        # Single-point GB energy of solvated receptor
-        rec_state = simulation.context.getState(getEnergy=True)
-        rec_energy = rec_state.getPotentialEnergy().value_in_unit(
+        rec_energy = rec_sim.context.getState(
+            getEnergy=True,
+        ).getPotentialEnergy().value_in_unit(
             _openmm_unit.kilocalorie_per_mole,
         )
-        log.info(f"  Explicit-solvent receptor GB energy: {rec_energy:.2f} kcal/mol")
+        log.info(f"  Explicit-solvent receptor energy: {rec_energy:.2f} kcal/mol")
 
-        # Save solvated receptor structure for frame-wise complex building
         rec_pdb_out = os.path.join(work_dir_mm, "receptor_solvated.pdb")
         with open(rec_pdb_out, "w") as f:
             _openmm_app.PDBFile.writeFile(
@@ -882,19 +993,20 @@ def rescore_with_explicit_mmgbsa(
             )
 
     except Exception as exc:
-        log.warning(f"  Explicit-solvent receptor preparation failed: {exc}")
-        log.info("  Falling back to implicit MM-GB/SA.")
-        return rescore_with_mmgbsa(
-            top_candidates, receptor_pdb, work_dir, water_results=water_results,
+        log.warning(
+            f"  Explicit-solvent receptor preparation failed: {exc}. "
+            "Cannot proceed with explicit MM-GB/SA."
         )
+        return top_candidates
 
-    # ── Rescore each candidate ────────────────────────────────────
+    n_frames = CONFIG.explicit_solvent_frames if use_ensemble else 1
     to_rescore = top_candidates[:n_to_rescore]
+    water_string = "with water displacement" if water_results else "no water correction"
 
     for rank, rec in enumerate(to_rescore):
         log.info(
             f"  Explicit MM-GB/SA [{rank + 1}/{n_to_rescore}]: "
-            f"{rec.compound_id}"
+            f"{rec.compound_id} ({water_string})"
         )
         try:
             mol = rec.mol
@@ -906,11 +1018,12 @@ def rescore_with_explicit_mmgbsa(
 
             tag = rec.compound_id.replace("/", "_").replace(" ", "_")
             binding_energies: List[float] = []
+            relaxation_failed_flag = False
 
             for frame_idx in range(n_frames):
                 seed = CONFIG.random_seed + rank * n_frames + frame_idx
 
-                # Ligand GB energy (generated fresh each frame for averaging)
+                # --- Ligand conformer ---
                 lig_energy = _compute_ligand_gb_energy(
                     mol, forcefield, cpu_platform,
                     work_dir_mm, f"{tag}_f{frame_idx}", seed,
@@ -918,18 +1031,39 @@ def rescore_with_explicit_mmgbsa(
                 if lig_energy is None:
                     continue
 
-                # Complex GB energy (combine solvated receptor + ligand)
-                complex_energy = _compute_complex_gb_energy(
-                    rec_pdb_out, f"{tag}_f{frame_idx}",
-                    forcefield, cpu_platform,
-                    work_dir_mm, f"{tag}_f{frame_idx}",
+                # --- Build solvated complex and relax pose ---
+                lig_tag = f"{tag}_f{frame_idx}"
+                lig_pdb = os.path.join(work_dir_mm, f"lig_{lig_tag}.pdb")
+
+                complex_info = _build_explicit_complex_system(
+                    rec_pdb_out, lig_pdb, work_dir_mm, lig_tag, forcefield,
+                )
+                if complex_info is None:
+                    continue
+
+                complex_topology, complex_system, complex_positions = complex_info
+
+                # Pose relaxation (restrained minimisation)
+                relaxed_positions, relax_ok = _perform_pose_relaxation(
+                    complex_topology, complex_system, complex_positions,
+                )
+                if not relax_ok:
+                    relaxation_failed_flag = True
+                    relaxed_positions = complex_positions
+
+                # Compute GB/SA energy of relaxed complex
+                complex_energy = _compute_complex_gb_energy_relaxed(
+                    complex_topology, relaxed_positions, forcefield, cpu_platform,
                 )
                 if complex_energy is None:
                     continue
 
                 binding_energy = complex_energy - rec_energy - lig_energy
 
+                # ── Water displacement correction ──
                 if water_results is not None and water_results.high_energy_waters:
+                    # Check overlap with the relaxed ligand pose; generate 3D conformer
+                    # for the penalty calculation
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
                         receptor_pdb=receptor_pdb,
@@ -937,13 +1071,18 @@ def rescore_with_explicit_mmgbsa(
                     )
                     if penalty > 0.0:
                         binding_energy -= penalty
+                        log.info(
+                            f"      Water displacement penalty: "
+                            f"-{penalty:.2f} kcal/mol (frame {frame_idx})"
+                        )
 
                 binding_energies.append(binding_energy)
 
+                if not use_ensemble:
+                    break
+
             if not binding_energies:
-                log.warning(
-                    f"  No valid frames for {rec.compound_id}"
-                )
+                log.warning(f"  No valid frames for {rec.compound_id}")
                 continue
 
             mean_binding = float(np.mean(binding_energies))
@@ -951,12 +1090,32 @@ def rescore_with_explicit_mmgbsa(
                 float(np.std(binding_energies, ddof=1))
                 if len(binding_energies) > 1 else 0.0
             )
-            rec.ml_score = mean_binding
+
+            # ── Entropy estimation ──
+            entropy_delta_ts: Optional[float] = None
+            if CONFIG.include_entropy:
+                entropy_result = _compute_entropy_estimation(
+                    mol, work_dir_mm, tag, seed,
+                )
+                if entropy_result is not None:
+                    entropy_delta_ts = entropy_result
+                    log.info(
+                        f"    -TΔS = {entropy_delta_ts:.2f} kcal/mol (NMA entropy)"
+                    )
+
+            final_score = mean_binding - (entropy_delta_ts or 0.0)
+            rec.ml_score = final_score
             rec.ml_score_std = std_binding
 
+            if relaxation_failed_flag:
+                log.info(
+                    f"    (used original docked pose — relaxation failed for "
+                    f"at least one frame)"
+                )
+
             log.info(
-                f"    ΔG ≈ {mean_binding:.2f} ± {std_binding:.2f} kcal/mol "
-                f"({len(binding_energies)} frames, explicit solvent)"
+                f"    ΔG ≈ {final_score:.2f} ± {std_binding:.2f} kcal/mol "
+                f"(explicit TIP3P + relax)"
             )
 
         except Exception as exc:
@@ -965,6 +1124,42 @@ def rescore_with_explicit_mmgbsa(
             )
 
     return top_candidates
+
+
+def rescore_with_explicit_mmgbsa(
+    top_candidates: List[CompoundRecord],
+    receptor_pdb: str,
+    work_dir: str,
+    water_results: Optional[WaterAnalysisResult] = None,
+) -> List[CompoundRecord]:
+    """Rescore top candidates using **explicit-solvent** MM-GB/SA.
+
+    This is a thin wrapper around :func:`rescore_with_mmgbsa` that
+    temporarily sets ``CONFIG.use_explicit_solvent_mmgbsa = True`` so
+    that the explicit-solvent path (TIP3P + pose relaxation) is always
+    used, regardless of the configuration default.
+
+    Falls back to the implicit OBC2 path if OpenMM or PDBFixer are
+    unavailable.
+
+    Args:
+        top_candidates: Docked candidates (uses SMILES for 3D generation).
+        receptor_pdb: Path to the receptor PDB file.
+        work_dir: Working directory for intermediate files.
+        water_results: Optional water analysis result.
+
+    Returns:
+        Updated candidates with ``ml_score`` set to the frame-averaged
+        MM-GB/SA ΔG (more negative = stronger predicted binding).
+    """
+    saved = CONFIG.use_explicit_solvent_mmgbsa
+    CONFIG.use_explicit_solvent_mmgbsa = True
+    try:
+        return rescore_with_mmgbsa(
+            top_candidates, receptor_pdb, work_dir, water_results=water_results,
+        )
+    finally:
+        CONFIG.use_explicit_solvent_mmgbsa = saved
 
 
 def _load_protein_heavy_atoms(
@@ -1248,17 +1443,10 @@ def rescore_with_ml(
     n = len(top_candidates)
     log.info(f"  Rescoring {n} candidates with ML.")
 
-    # Priority 0: MM-GB/SA (if enabled via either flag)
+    # Priority 0: MM-GB/SA (handles both explicit TIP3P + implicit OBC2 internally)
     if CONFIG.use_mm_gbsa or CONFIG.use_mm_gbsa_rescoring:
         receptor_pdb = receptor_pdbqt.replace(".pdbqt", ".pdb")
         if os.path.exists(receptor_pdb):
-            use_explicit = CONFIG.use_explicit_solvent_mmgbsa
-            if use_explicit:
-                log.info("  Using EXPLICIT-solvent MM-GB/SA rescoring.")
-                return rescore_with_explicit_mmgbsa(
-                    top_candidates, receptor_pdb, work_dir,
-                    water_results=water_results,
-                )
             return rescore_with_mmgbsa(
                 top_candidates, receptor_pdb, work_dir,
                 water_results=water_results,

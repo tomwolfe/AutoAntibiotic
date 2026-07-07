@@ -16,6 +16,8 @@ from autoantibiotic.ml_scoring.scoring import (
     rescore_with_mmgbsa,
     rescore_with_ml,
     _compute_rdkit_descriptors,
+    _compute_water_displacement_penalty,
+    _perform_pose_relaxation,
     _HAVE_OPENMM,
 )
 from autoantibiotic.md_validation import (
@@ -282,6 +284,7 @@ class TestWaterDisplacementCorrection:
         with patch.multiple(
             "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=False,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(
                     MagicMock(),  # rec_topology
@@ -336,6 +339,7 @@ class TestWaterDisplacementCorrection:
         with patch.multiple(
             "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=False,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
@@ -372,6 +376,7 @@ class TestWaterDisplacementCorrection:
         with patch.multiple(
             "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=False,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
@@ -421,6 +426,7 @@ class TestWaterDisplacementIntegration:
         with patch.multiple(
             "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=False,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
@@ -436,8 +442,8 @@ class TestWaterDisplacementIntegration:
 
         assert len(result) == 1
         final_score = result[0].ml_score
-        assert final_score is not None
         # expected = 0.0 - 2.5 = -2.5
+        assert final_score is not None
         assert final_score == pytest.approx(-2.5, abs=1e-4), (
             f"Expected -2.5, got {final_score}"
         )
@@ -461,6 +467,7 @@ class TestWaterDisplacementIntegration:
         with patch.multiple(
             "autoantibiotic.ml_scoring.scoring",
             _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=False,
             _prepare_receptor_for_mmgbsa=MagicMock(
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
@@ -475,8 +482,8 @@ class TestWaterDisplacementIntegration:
             )
 
         final_score = result[0].ml_score
-        assert final_score is not None
         # ΔG_binding = 0.0, no correction → expected 0.0
+        assert final_score is not None
         assert final_score == pytest.approx(0.0, abs=1e-4)
 
 
@@ -1012,16 +1019,18 @@ class TestExplicitSolventMMGBSA:
                     with patch("autoantibiotic.ml_scoring.scoring._openmm_app", _mock_openmm_app, create=True):
                         with patch("autoantibiotic.ml_scoring.scoring._openmm_unit", _mock_openmm_unit, create=True):
                             with patch("autoantibiotic.ml_scoring.scoring._compute_ligand_gb_energy", return_value=50.0):
-                                with patch("autoantibiotic.ml_scoring.scoring._compute_complex_gb_energy", return_value=-1950.0):
-                                    mock_fixer = MagicMock()
-                                    mock_fixer.topology = MagicMock()
-                                    mock_fixer.positions = []
-                                    _pdbfixer_mock.PDBFixer.return_value = mock_fixer
+                                with patch("autoantibiotic.ml_scoring.scoring._build_explicit_complex_system", return_value=(MagicMock(), MagicMock(), MagicMock())):
+                                    with patch("autoantibiotic.ml_scoring.scoring._perform_pose_relaxation", return_value=(MagicMock(), True)):
+                                        with patch("autoantibiotic.ml_scoring.scoring._compute_complex_gb_energy_relaxed", return_value=-1950.0):
+                                            mock_fixer = MagicMock()
+                                            mock_fixer.topology = MagicMock()
+                                            mock_fixer.positions = []
+                                            _pdbfixer_mock.PDBFixer.return_value = mock_fixer
 
-                                    from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
-                                    result = rescore_with_explicit_mmgbsa(
-                                        candidates, pdb_path, temp_work_dir,
-                                    )
+                                            from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
+                                            result = rescore_with_explicit_mmgbsa(
+                                                candidates, pdb_path, temp_work_dir,
+                                            )
         _sys.modules.pop("pdbfixer", None)
         assert len(result) == 1
         final_score = result[0].ml_score
@@ -1029,3 +1038,127 @@ class TestExplicitSolventMMGBSA:
         assert isinstance(final_score, float)
         # ΔG_binding = -1950 - (-2000) - 50 = 0.0 with our mocked values
         assert final_score == pytest.approx(0.0, abs=1e-4)
+
+
+# ── Pose relaxation + water displacement integration ───────────
+
+class TestPoseRelaxationAndWater:
+    """Tests for pose relaxation and water displacement integration."""
+
+    def test_rescore_with_relaxation_and_water(
+        self, temp_work_dir: str,
+    ) -> None:
+        """High-energy water clash makes ΔG more negative than no-water baseline."""
+        # Use distinct candidate objects to avoid mutation from a prior call
+        def make_candidate(cid: str) -> CompoundRecord:
+            return CompoundRecord(
+                compound_id=cid,
+                smiles="c1ccccc1O",
+                mol=Chem.MolFromSmiles("c1ccccc1O"),
+                pb2pa_allosteric_energy=-7.0,
+            )
+
+        water = MockWater(
+            position=[0.0, 0.0, 0.0],
+            displacement_energy=2.5,
+            is_high_energy=True,
+        )
+        water_results = MockWaterAnalysisResult(high_energy_waters=[water])
+
+        dummy_pdb = os.path.join(temp_work_dir, "receptor.pdb")
+        with open(dummy_pdb, "w") as f:
+            f.write(
+                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000"
+                "  1.00  0.00           C\nEND\n"
+            )
+
+        class _FakeExplicitLoop:
+            """Callable that replaces _rescore_explicit_solvent_loop.
+
+            Uses w_results presence to decide whether to apply the
+            water displacement penalty.
+            """
+            def __call__(
+                self, candidates, r_pdb, w_dir, w_results, n, n_c, ensemble,
+            ):
+                for rec in candidates[:n]:
+                    score = -5.0
+                    if w_results is not None and w_results.high_energy_waters:
+                        penalty = _compute_water_displacement_penalty(
+                            rec.mol, w_results.high_energy_waters,
+                            seed=CONFIG.random_seed,
+                            receptor_pdb=r_pdb,
+                            strict_mode=False,
+                        )
+                        score -= penalty
+                    rec.ml_score = score
+                return candidates
+
+        fake_loop = _FakeExplicitLoop()
+
+        saved_explicit = CONFIG.use_explicit_solvent_mmgbsa
+        saved_top_n = CONFIG.mm_gbsa_top_n
+        CONFIG.use_explicit_solvent_mmgbsa = True
+        CONFIG.mm_gbsa_top_n = 1
+        try:
+            with patch(
+                "autoantibiotic.ml_scoring.scoring._rescore_explicit_solvent_loop",
+                fake_loop,
+            ):
+                # Separate calls with distinct candidate objects
+                result_no_water = rescore_with_mmgbsa(
+                    [make_candidate("CMP-NO-WAT")], dummy_pdb, temp_work_dir,
+                )
+                result_with_water = rescore_with_mmgbsa(
+                    [make_candidate("CMP-WITH-WAT")], dummy_pdb, temp_work_dir,
+                    water_results=water_results,
+                )
+        finally:
+            CONFIG.use_explicit_solvent_mmgbsa = saved_explicit
+            CONFIG.mm_gbsa_top_n = saved_top_n
+
+        score_no = result_no_water[0].ml_score
+        score_with = result_with_water[0].ml_score
+
+        assert score_no is not None, "Baseline score should be set"
+        assert score_with is not None, "Water-corrected score should be set"
+        assert score_with < score_no, (
+            f"Water displacement should make ΔG more negative: "
+            f"{score_with} >= {score_no}"
+        )
+
+    def test_pose_relaxation_reduces_clashes(self, temp_work_dir: str) -> None:
+        """Synthetic bad pose → pose relaxation succeeds and returns positions."""
+        mock_topology = MagicMock()
+        mock_topology.atoms = MagicMock(return_value=[])  # No CA atoms → no restraints
+
+        mock_system = MagicMock()
+        mock_positions = MagicMock()
+        relaxed_positions = MagicMock()
+
+        mock_openmm = MagicMock()
+        mock_openmm_app = MagicMock()
+        mock_openmm_unit = MagicMock()
+
+        with patch.multiple(
+            "autoantibiotic.ml_scoring.scoring",
+            _openmm=mock_openmm,
+            _openmm_app=mock_openmm_app,
+            _openmm_unit=mock_openmm_unit,
+        ):
+            mock_sim = MagicMock()
+            mock_state = MagicMock()
+            mock_state.getPositions.return_value = relaxed_positions
+            mock_sim.context.getState.return_value = mock_state
+            mock_openmm_app.Simulation.return_value = mock_sim
+            mock_openmm.CustomExternalForce.return_value = MagicMock()
+            mock_openmm.Platform.getPlatformByName.return_value = MagicMock()
+
+            result, success = _perform_pose_relaxation(
+                mock_topology, mock_system, mock_positions,
+            )
+
+        assert success is True, "Pose relaxation should succeed"
+        assert result is relaxed_positions, (
+            "Relaxed positions should be returned"
+        )
