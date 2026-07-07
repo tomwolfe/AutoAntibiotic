@@ -362,10 +362,18 @@ class PipelineConfig:
     """Number of steps for the initial diagnostic run used to assess
     phase-space overlap between adjacent lambda windows.  Only used
     when ``fep_adaptive_lambda_insertion`` is True."""
-    fep_top_n: int = 5
+    fep_top_n: int = 20
     """Maximum number of top candidates to run rigorous FEP on.
     FEP is only triggered if the candidate is within this many top
-    compounds after docking and MM-GB/SA rescoring.  Default 5."""
+    compounds after docking and MM-GB/SA rescoring.  Default 20."""
+    fep_pre_screen_pool_size: int = 20
+    """Number of top candidates to consider for IFP pre-screening
+    before running FEP.  Candidates are first expanded to this pool,
+    then filtered by IFP similarity before FEP.  Default 20."""
+    fep_ifp_threshold: float = 0.5
+    """Minimum IFP Tanimoto similarity to the reference ligand
+    (Ceftaroline) required for a candidate to proceed to FEP after
+    pre-screening.  Default 0.5."""
 
     # ── Entropy estimation ──
     include_entropy: bool = False

@@ -18,7 +18,7 @@ from .config import CONFIG, PipelineConfig
 from .models import CompoundRecord
 from .docking import run_redocking_validation, screen_library
 from .analysis import analyze_selectivity_and_resistance, predict_meta_score
-from .scoring_metrics import check_key_interactions
+from .scoring_metrics import check_key_interactions, compute_ifp_similarity
 from .ml_scoring.meta_scorer import _get_meta_scorer
 from .io_utils import (
     ensure_output_dir,
@@ -255,10 +255,50 @@ class PipelineOrchestrator:
             log.warning("  Receptor PDB not found; skipping FEP.")
             return
 
-        # Only run FEP on top N candidates
+        # Pre-screen: expand pool and filter by IFP similarity
         fep_top_n = getattr(self.config, "fep_top_n", 5)
-        candidates = self.top_candidates[:fep_top_n]
-        log.info(f"  FEP enabled: evaluating up to {len(candidates)} top candidates.")
+        pool_size = getattr(self.config, "fep_pre_screen_pool_size", 20)
+        ifp_threshold = getattr(self.config, "fep_ifp_threshold", 0.5)
+
+        candidates_pool = self.top_candidates[:pool_size]
+
+        # Parse reference ligand (Ceftaroline) for IFP comparison
+        ref_smiles = CONFIG.reference_antibiotics.get("Ceftaroline", "")
+        ref_mol = Chem.MolFromSmiles(ref_smiles) if ref_smiles else None
+
+        fep_candidates: List[CompoundRecord] = []
+        for rec in candidates_pool:
+            pose_path = rec.docked_pose_path
+            if (pose_path and os.path.isfile(pose_path)
+                    and ref_mol is not None and rec.mol is not None):
+                try:
+                    ifp_score = compute_ifp_similarity(rec.mol, ref_mol, receptor_pdb)
+                    if ifp_score < ifp_threshold:
+                        log.warning(
+                            f"  {rec.compound_id}: IFP similarity {ifp_score:.3f} "
+                            f"below threshold {ifp_threshold} — "
+                            "Skipped: Low IFP Similarity"
+                        )
+                        continue
+                except Exception:
+                    log.warning(
+                        f"  {rec.compound_id}: IFP calculation failed, "
+                        "including candidate (fail-safe)."
+                    )
+            else:
+                if not pose_path or not os.path.isfile(pose_path):
+                    log.warning(
+                        f"  {rec.compound_id}: No docked pose path available, "
+                        "including candidate (fail-safe)."
+                    )
+            fep_candidates.append(rec)
+
+        candidates = fep_candidates[:fep_top_n]
+        log.info(
+            f"  Pre-screening selected {len(candidates)}/"
+            f"{len(candidates_pool)} candidates for FEP based on "
+            f"IFP threshold (threshold={ifp_threshold})."
+        )
 
         from .fep_engine import FEPResistanceCalculator, ConfigurationError as FEPConfigError
         from .analysis import profile_resistance_mutation_sensitivity

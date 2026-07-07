@@ -31,7 +31,7 @@ class TestFEPEnabledByDefault:
         assert CONFIG.use_fep_resistance is True
 
     def test_fep_top_n_default(self) -> None:
-        assert CONFIG.fep_top_n == 5
+        assert CONFIG.fep_top_n == 20
 
     def test_heuristic_fallback_enabled_by_default(self) -> None:
         assert CONFIG.use_heuristic_resistance_fallback is True
@@ -158,7 +158,105 @@ class TestFEPFallbackToHeuristic:
             CONFIG.use_heuristic_resistance_fallback = original_fallback
 
 
-# ── Test 3: ADMET expanded data ────────────────────────────────────
+# ── Test 3: FEP pre-screening with IFP ─────────────────────────────
+
+
+class TestFEPPreScreening:
+    """Verify the IFP-based pre-screening in apply_fep_resistance."""
+
+    @pytest.fixture
+    def mock_candidates(self) -> List[CompoundRecord]:
+        candidates = []
+        for i in range(10):
+            mol = Chem.MolFromSmiles("c1ccccc1O")
+            assert mol is not None
+            rec = CompoundRecord(
+                compound_id=f"TEST-PRE-{i:03d}",
+                smiles="c1ccccc1O",
+                mol=mol,
+                docked_pose_path=f"/tmp/fake_pose_{i}.pdbqt",
+            )
+            candidates.append(rec)
+        return candidates
+
+    @pytest.fixture
+    def mock_orchestrator(
+        self, mock_candidates: List[CompoundRecord],
+    ) -> Any:
+        from autoantibiotic.orchestrator import PipelineOrchestrator
+
+        orch = PipelineOrchestrator(use_cache=False)
+        orch.top_candidates = mock_candidates[:]
+        orch.targets = {
+            "PBP2a": {
+                "pdbqt": str(Path("/tmp/fake/pdbqt") / "PBP2a.pdbqt"),
+                "allosteric_center": (0.0, 0.0, 0.0),
+            },
+        }
+        return orch
+
+    def test_pre_screen_filters_low_ifp(
+        self, mock_orchestrator: Any,
+    ) -> None:
+        """Candidates with IFP below threshold are excluded from FEP."""
+        original_pool_size = CONFIG.fep_pre_screen_pool_size
+        original_ifp_threshold = CONFIG.fep_ifp_threshold
+        CONFIG.fep_pre_screen_pool_size = 10
+        CONFIG.fep_ifp_threshold = 0.5
+        try:
+            with patch(
+                "autoantibiotic.scoring_metrics.compute_ifp_similarity",
+                side_effect=[0.3, 0.3, 0.3] + [0.8] * 7,
+            ), patch(
+                "os.path.isfile", return_value=True,
+            ), patch(
+                "autoantibiotic.fep_engine.FEPResistanceCalculator",
+            ) as mock_fep_cls:
+                mock_calc = MagicMock()
+                mock_fep_cls.return_value = mock_calc
+
+                mock_orchestrator.apply_fep_resistance()
+
+                # 3 low IFP (skip) + 7 high IFP = 7 pass, cap at fep_top_n=5
+                assert mock_fep_cls.call_count == 5, (
+                    f"Expected 5 FEP calls, got {mock_fep_cls.call_count}"
+                )
+        finally:
+            CONFIG.fep_pre_screen_pool_size = original_pool_size
+            CONFIG.fep_ifp_threshold = original_ifp_threshold
+
+    def test_pre_screen_expands_pool(
+        self, mock_orchestrator: Any,
+    ) -> None:
+        """When more candidates pass IFP than fep_top_n, only top N are processed."""
+        original_pool_size = CONFIG.fep_pre_screen_pool_size
+        original_top_n = CONFIG.fep_top_n
+        CONFIG.fep_pre_screen_pool_size = 10
+        CONFIG.fep_top_n = 3
+        try:
+            with patch(
+                "autoantibiotic.scoring_metrics.compute_ifp_similarity",
+                return_value=0.9,
+            ), patch(
+                "os.path.isfile", return_value=True,
+            ), patch(
+                "autoantibiotic.fep_engine.FEPResistanceCalculator",
+            ) as mock_fep_cls:
+                mock_calc = MagicMock()
+                mock_fep_cls.return_value = mock_calc
+
+                mock_orchestrator.apply_fep_resistance()
+
+                # All 10 pass IFP, cap at fep_top_n=3
+                assert mock_fep_cls.call_count == 3, (
+                    f"Expected 3 FEP calls, got {mock_fep_cls.call_count}"
+                )
+        finally:
+            CONFIG.fep_pre_screen_pool_size = original_pool_size
+            CONFIG.fep_top_n = original_top_n
+
+
+# ── Test 4: ADMET expanded data ────────────────────────────────────
 
 
 class TestADMETExpandedData:
