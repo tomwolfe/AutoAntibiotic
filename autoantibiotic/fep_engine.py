@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -142,6 +143,8 @@ class FEPResistanceCalculator:
         are missing.
     """
 
+    _system_cache: Dict[str, Tuple[_openmm_app.Topology, _openmm_unit.Quantity]] = {}
+
     def __init__(
         self,
         receptor_wt_pdb: str,
@@ -161,6 +164,48 @@ class FEPResistanceCalculator:
                 self.ligand_rdkit = None
         elif ligand_rdkit is not None:
             self.ligand_rdkit = ligand_rdkit
+
+    @staticmethod
+    def _make_cache_key(pdb_path: str) -> str:
+        abs_path = os.path.abspath(pdb_path)
+        ff_id = (
+            "amber14/tip3p.xml:"
+            "tip3p:1.0:0.15:"
+            "amber14-all.xml,amber14/tip3pfb.xml"
+        )
+        raw = f"{abs_path}:{ff_id}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def _build_solvated_receptor(
+        self,
+        pdb_path: str,
+    ) -> Tuple[_openmm_app.Topology, _openmm_unit.Quantity]:
+        cache_key = self._make_cache_key(pdb_path)
+        if cache_key in self._system_cache:
+            try:
+                return self._system_cache[cache_key]
+            except Exception as exc:
+                log.warning(
+                    "System cache retrieval failed for %s: %s. Rebuilding.",
+                    pdb_path, exc,
+                )
+
+        from openmm.app import PDBFile, ForceField, Modeller
+
+        pdb = PDBFile(pdb_path)
+        modeller = Modeller(pdb.topology, pdb.positions)
+        modeller.addHydrogens(forcefield=None)
+
+        ff_solvent = ForceField("amber14/tip3p.xml")
+        modeller.addSolvent(
+            ff_solvent,
+            model="tip3p",
+            padding=1.0 * _openmm_unit.nanometer,
+            ionicStrength=0.15 * _openmm_unit.molar,
+        )
+
+        self._system_cache[cache_key] = (modeller.topology, modeller.positions)
+        return modeller.topology, modeller.positions
 
     def pre_screen_ligand(self) -> None:
         """Pre-screen the ligand for FEP feasibility.
@@ -701,8 +746,8 @@ class FEPResistanceCalculator:
         from io import StringIO
         from openmm.app import PDBFile, ForceField, Modeller
 
-        pdb = PDBFile(pdb_path)
-        modeller = Modeller(pdb.topology, pdb.positions)
+        receptor_topology, receptor_positions = self._build_solvated_receptor(pdb_path)
+        modeller = Modeller(receptor_topology, receptor_positions)
 
         # ── Prepare and add ligand ────────────────────────────────
         ligand_mol = self.ligand_rdkit
@@ -732,18 +777,6 @@ class FEPResistanceCalculator:
             ligand_pdb = PDBFile(StringIO(pdb_block))
             modeller.add(ligand_pdb.topology, ligand_pdb.positions)
 
-        # Add missing hydrogens to receptor (ligand already has explicit Hs)
-        modeller.addHydrogens(forcefield=None)
-
-        # Add explicit solvent (TIP3P)
-        ff_solvent = ForceField("amber14/tip3p.xml")
-        modeller.addSolvent(
-            ff_solvent,
-            model="tip3p",
-            padding=1.0 * _openmm_unit.nanometer,
-            ionicStrength=0.15 * _openmm_unit.molar,
-        )
-
         # ── Create system with GAFF2 ligand parameters ────────────
         from openmmforcefields.generators import SystemGenerator as _SystemGenerator
 
@@ -764,6 +797,7 @@ class FEPResistanceCalculator:
         )
 
         # Add barostat
+        pressure = 1.0 * _openmm_unit.atmospheres
         barostat = _openmm.MonteCarloBarostat(
             pressure, temperature,
         )

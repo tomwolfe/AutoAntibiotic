@@ -159,6 +159,101 @@ class TestFEPResistanceCalculator:
         assert calc.ligand_rdkit is None
         assert calc.ligand_smiles == ""
 
+    def test_solvated_receptor_caching(self):
+        """_build_solvated_receptor caches topology and positions."""
+        import sys
+
+        FEPResistanceCalculator._system_cache.clear()
+
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_smiles="CC(=O)OC",
+        )
+
+        mock_topology = MagicMock()
+        mock_positions = MagicMock()
+
+        mock_pdb = MagicMock()
+        mock_pdb.topology = mock_topology
+        mock_pdb.positions = mock_positions
+
+        mock_modeller = MagicMock()
+        mock_modeller.topology = mock_topology
+        mock_modeller.positions = mock_positions
+
+        mock_app = MagicMock()
+        mock_app.PDBFile.return_value = mock_pdb
+        mock_app.Modeller.return_value = mock_modeller
+
+        mock_unit = MagicMock()
+        mock_unit.nanometer = MagicMock()
+        mock_unit.molar = MagicMock()
+
+        with patch.dict(sys.modules, {"openmm": MagicMock(), "openmm.app": mock_app, "openmm.unit": mock_unit}, clear=False), \
+             patch("autoantibiotic.fep_engine._openmm_unit", mock_unit), \
+             patch("autoantibiotic.fep_engine._HAVE_OPENMM", True):
+
+            top1, pos1 = calc._build_solvated_receptor("wt.pdb")
+            assert mock_app.PDBFile.call_count == 1
+
+            top2, pos2 = calc._build_solvated_receptor("wt.pdb")
+            assert mock_app.PDBFile.call_count == 1
+            assert top1 is top2
+            assert pos1 is pos2
+
+    def test_build_system_uses_solvated_receptor_cache(self):
+        """_build_system uses cached solvated receptor."""
+        import sys
+
+        FEPResistanceCalculator._system_cache.clear()
+
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb="wt.pdb",
+            receptor_mut_pdb="mut.pdb",
+            ligand_smiles="CC(=O)OC",
+        )
+
+        mock_topology = MagicMock()
+        mock_positions = MagicMock()
+        mock_system = MagicMock()
+
+        mock_app = MagicMock()
+        mock_modeller_instance = MagicMock()
+        mock_modeller_instance.topology = mock_topology
+        mock_modeller_instance.positions = mock_positions
+        mock_app.Modeller.return_value = mock_modeller_instance
+
+        mock_unit = MagicMock()
+        mock_unit.nanometer = MagicMock()
+        mock_unit.molar = MagicMock()
+        mock_unit.atmospheres = MagicMock()
+
+        mock_gen = MagicMock()
+        mock_gen.create_system.return_value = mock_system
+
+        mock_ff_gen = MagicMock()
+        mock_ff_gen.SystemGenerator.return_value = mock_gen
+
+        with patch.object(calc, "_build_solvated_receptor", return_value=(mock_topology, mock_positions)) as mock_solvated, \
+             patch("autoantibiotic.fep_engine._openmm_app", mock_app), \
+             patch("autoantibiotic.fep_engine._openmm_unit", mock_unit), \
+             patch("autoantibiotic.fep_engine._openmm.MonteCarloBarostat"), \
+             patch.dict(sys.modules, {
+                 "openmm": MagicMock(),
+                 "openmm.app": mock_app,
+                 "openmm.unit": mock_unit,
+                 "openmmforcefields": MagicMock(),
+                 "openmmforcefields.generators": mock_ff_gen,
+             }, clear=False):
+
+            system, topology, positions = calc._build_system("wt.pdb", MagicMock())
+
+            mock_solvated.assert_called_once_with("wt.pdb")
+            mock_app.Modeller.assert_called_once_with(mock_topology, mock_positions)
+            assert topology is mock_topology
+            assert system is mock_system
+
 
 class TestConfigurationError:
     """Tests for ConfigurationError."""
