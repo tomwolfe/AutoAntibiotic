@@ -76,6 +76,21 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--use-mutation-sampling", action="store_true",
         help="Dock against mutant receptor variants to profile resistance risk.",
     )
+    parser.add_argument(
+        "--use-fep-resistance", action="store_true",
+        help="Use OpenMM FEP for resistance profiling (computationally expensive: requires "
+        "OpenMM + openmmtools + openmmforcefields, ~hours per compound).",
+    )
+    parser.add_argument(
+        "--use-explicit-solvent", action="store_true",
+        help="Use explicit-solvent (TIP3P) MM-GB/SA rescoring with pose relaxation instead of "
+        "implicit OBC2 (moderately expensive: ~minutes per compound with OpenMM).",
+    )
+    parser.add_argument(
+        "--generative-mode", action="store_true",
+        help="Use generative model (JT-VAE / graph-based) for novel scaffold design instead of "
+        "BRICS recombination (computationally expensive: requires model inference).",
+    )
     args = parser.parse_args(argv)
 
     # ── Create a local copy of CONFIG and apply CLI overrides ──
@@ -103,6 +118,15 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.use_mutation_sampling:
         cfg.use_mutation_sampling = True
+
+    if args.use_fep_resistance:
+        cfg.use_fep_resistance = True
+
+    if args.use_explicit_solvent:
+        cfg.use_explicit_solvent_mmgbsa = True
+
+    if args.generative_mode:
+        cfg.generative_mode = True
 
     if args.strict_scoring:
         cfg.use_strict_scoring = True

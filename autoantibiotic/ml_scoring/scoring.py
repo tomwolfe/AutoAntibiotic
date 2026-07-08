@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
+import pickle
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -936,6 +938,148 @@ def rescore_with_mmgbsa(
     return top_candidates
 
 
+def _process_one_candidate_explicit(args: Tuple) -> Dict[str, Any]:
+    """Process a single candidate for explicit-solvent MM-GB/SA.
+
+    This is a module-level function to allow pickling with
+    ``concurrent.futures.ProcessPoolExecutor``.
+
+    Each worker recreates its own OpenMM ForceField and CPU Platform
+    objects since they are not picklable across process boundaries.
+    """
+    (
+        compound_id, smiles, mol_bytes, rank, rec_pdb_out, work_dir_mm,
+        rec_energy, n_frames, n_to_rescore, use_ensemble,
+        high_energy_waters, include_entropy, use_strict_scoring,
+        receptor_pdb, random_seed,
+    ) = args
+
+    # Ensure logging is configured in the worker process
+    logger = logging.getLogger("AutoAntibiotic")
+    if not logger.handlers:
+        logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
+
+    # Recreate per-process resources (not picklable)
+    try:
+        forcefield = _openmm_app.ForceField(
+            "amber14-all.xml", "amber14/tip3pfb.xml",
+        )
+        cpu_platform = _openmm.Platform.getPlatformByName("CPU")
+    except Exception as exc:
+        logger.warning(f"  [{compound_id}] Failed to create OpenMM resources: {exc}")
+        return {"compound_id": compound_id, "error": f"openmm_init: {exc}"}
+
+    try:
+        if mol_bytes:
+            mol = pickle.loads(mol_bytes)
+        else:
+            mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            logger.warning(f"  [{compound_id}] No molecule available")
+            return {"compound_id": compound_id, "error": "no_mol"}
+    except Exception as exc:
+        logger.warning(f"  [{compound_id}] Failed to load molecule: {exc}")
+        return {"compound_id": compound_id, "error": f"mol_load: {exc}"}
+
+    tag = compound_id.replace("/", "_").replace(" ", "_")
+    binding_energies: List[float] = []
+    relaxation_failed_flag = False
+    seed = random_seed + rank * n_frames
+
+    for frame_idx in range(n_frames):
+        frame_seed = seed + frame_idx
+        lig_tag = f"{tag}_f{frame_idx}"
+
+        # Ligand conformer
+        lig_energy = _compute_ligand_gb_energy(
+            mol, forcefield, cpu_platform, work_dir_mm, lig_tag, frame_seed,
+        )
+        if lig_energy is None:
+            continue
+
+        # Build solvated complex
+        lig_pdb = os.path.join(work_dir_mm, f"lig_{lig_tag}.pdb")
+        complex_info = _build_explicit_complex_system(
+            rec_pdb_out, lig_pdb, work_dir_mm, lig_tag, forcefield,
+        )
+        if complex_info is None:
+            continue
+
+        complex_topology, complex_system, complex_positions = complex_info
+
+        # Pose relaxation
+        relaxed_positions, relax_ok = _perform_pose_relaxation(
+            complex_topology, complex_system, complex_positions,
+        )
+        if not relax_ok:
+            relaxation_failed_flag = True
+            relaxed_positions = complex_positions
+
+        # Compute GB/SA of relaxed complex
+        complex_energy = _compute_complex_gb_energy_relaxed(
+            complex_topology, relaxed_positions, forcefield, cpu_platform,
+        )
+        if complex_energy is None:
+            continue
+
+        binding_energy = complex_energy - rec_energy - lig_energy
+
+        # Water displacement correction
+        if high_energy_waters:
+            penalty = _compute_water_displacement_penalty(
+                mol, high_energy_waters, frame_seed,
+                receptor_pdb=receptor_pdb,
+                strict_mode=use_strict_scoring,
+            )
+            if penalty > 0.0:
+                binding_energy -= penalty
+                logger.info(
+                    f"      [{compound_id}] Water displacement penalty: "
+                    f"-{penalty:.2f} kcal/mol (frame {frame_idx})"
+                )
+
+        binding_energies.append(binding_energy)
+
+        if not use_ensemble:
+            break
+
+    if not binding_energies:
+        logger.warning(f"  [{compound_id}] No valid frames")
+        return {"compound_id": compound_id, "error": "no_valid_frames"}
+
+    mean_binding = float(np.mean(binding_energies))
+    std_binding = (
+        float(np.std(binding_energies, ddof=1))
+        if len(binding_energies) > 1 else 0.0
+    )
+
+    # Entropy estimation
+    entropy_delta_ts: Optional[float] = None
+    if include_entropy:
+        entropy_result = _compute_entropy_estimation(mol, work_dir_mm, tag, seed)
+        if entropy_result is not None:
+            entropy_delta_ts = entropy_result
+
+    final_score = mean_binding - (entropy_delta_ts or 0.0)
+
+    logger.info(
+        f"  Explicit MM-GB/SA [{rank + 1}/{n_to_rescore}]: "
+        f"{compound_id} — \u0394G \u2248 {final_score:.2f} \u00b1 {std_binding:.2f} kcal/mol "
+        f"(explicit TIP3P + relax)"
+    )
+
+    return {
+        "compound_id": compound_id,
+        "ml_score": final_score,
+        "ml_score_std": std_binding,
+        "relaxation_failed": relaxation_failed_flag,
+        "mean_binding": mean_binding,
+        "entropy_delta_ts": entropy_delta_ts or 0.0,
+        "n_frames_processed": len(binding_energies),
+        "error": None,
+    }
+
+
 def _rescore_explicit_solvent_loop(
     top_candidates: List[CompoundRecord],
     receptor_pdb: str,
@@ -1020,6 +1164,63 @@ def _rescore_explicit_solvent_loop(
     to_rescore = top_candidates[:n_to_rescore]
     water_string = "with water displacement" if water_results else "no water correction"
 
+    # ── Attempt parallel execution ──────────────────────────────────
+    max_workers = min(4, os.cpu_count() or 1)
+    if max_workers > 1 and len(to_rescore) > 1:
+        try:
+            high_energy_waters = (
+                water_results.high_energy_waters
+                if water_results is not None else None
+            )
+            candidate_args: List[Tuple] = []
+            for rank, rec in enumerate(to_rescore):
+                mol = rec.mol
+                if mol is None:
+                    mol = Chem.MolFromSmiles(rec.smiles)
+                    if mol is None:
+                        continue
+                mol_bytes = pickle.dumps(mol)
+                candidate_args.append((
+                    rec.compound_id, rec.smiles, mol_bytes, rank,
+                    rec_pdb_out, work_dir_mm, rec_energy, n_frames,
+                    n_to_rescore, use_ensemble, high_energy_waters,
+                    CONFIG.include_entropy, CONFIG.use_strict_scoring,
+                    receptor_pdb, CONFIG.random_seed,
+                ))
+
+            log.info(
+                f"  Launching parallel explicit MM-GB/SA with "
+                f"{max_workers} workers for {len(candidate_args)} candidates…"
+            )
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=max_workers,
+            ) as executor:
+                results = list(
+                    executor.map(_process_one_candidate_explicit, candidate_args)
+                )
+
+            n_failed = sum(1 for r in results if r.get("error"))
+            if n_failed == 0:
+                for rec, result in zip(to_rescore, results):
+                    rec.ml_score = result["ml_score"]
+                    rec.ml_score_std = result["ml_score_std"]
+                log.info(
+                    f"  Parallel explicit MM-GB/SA completed for "
+                    f"{len(results)} candidates."
+                )
+                return top_candidates
+
+            log.warning(
+                f"  {n_failed}/{len(results)} candidates failed in parallel; "
+                "falling back to sequential."
+            )
+        except Exception as exc:
+            log.warning(
+                f"  Parallel explicit MM-GB/SA failed ({exc}); "
+                "falling back to sequential."
+            )
+
+    # ── Sequential processing ──────────────────────────────────────
     for rank, rec in enumerate(to_rescore):
         log.info(
             f"  Explicit MM-GB/SA [{rank + 1}/{n_to_rescore}]: "
@@ -1079,8 +1280,6 @@ def _rescore_explicit_solvent_loop(
 
                 # ── Water displacement correction ──
                 if water_results is not None and water_results.high_energy_waters:
-                    # Check overlap with the relaxed ligand pose; generate 3D conformer
-                    # for the penalty calculation
                     penalty = _compute_water_displacement_penalty(
                         mol, water_results.high_energy_waters, seed,
                         receptor_pdb=receptor_pdb,
