@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 import random
 from dataclasses import dataclass, field
@@ -628,10 +629,11 @@ class PipelineConfig:
             try:
                 import pdbfixer  # noqa: F401
             except ImportError:
-                raise ConfigurationError(
-                    "Explicit solvent MM-GB/SA requested (mmgbsa_solvent_model='explicit') "
-                    "but pdbfixer is not installed. Please install via conda:\n"
-                    "  conda install -c conda-forge pdbfixer"
+                self.use_explicit_solvent_mmgbsa = False
+                logging.getLogger("AutoAntibiotic").warning(
+                    "Explicit-solvent MM-GB/SA disabled: pdbfixer not installed. "
+                    "Falling back to implicit-solvent (OBC2) heuristic. "
+                    "Install via: conda install -c conda-forge pdbfixer"
                 )
 
         if self.use_fep_resistance:
@@ -647,21 +649,20 @@ class PipelineConfig:
             try:
                 import openmmtools  # noqa: F401
             except ImportError:
-                raise ConfigurationError(
-                    "FEP resistance profiling requested (use_fep_resistance=True) "
-                    "but openmmtools is not installed. openmmtools provides the "
-                    "alchemical factory and MBAR estimator. Please install via conda:\n"
-                    "  conda install -c conda-forge openmmtools"
+                self.use_fep_resistance = False
+                logging.getLogger("AutoAntibiotic").warning(
+                    "FEP disabled: openmmtools not found. "
+                    "Falling back to heuristic resistance profiling. "
+                    "Install via: conda install -c conda-forge openmmtools"
                 )
             try:
                 import openmmforcefields  # noqa: F401
             except ImportError:
-                raise ConfigurationError(
-                    "FEP resistance profiling requested (use_fep_resistance=True) "
-                    "but openmmforcefields is not installed. openmmforcefields is "
-                    "required for GAFF2 ligand parameterization and AM1-BCC charge "
-                    "assignment. Please install via conda:\n"
-                    "  conda install -c conda-forge openmmforcefields"
+                self.use_fep_resistance = False
+                logging.getLogger("AutoAntibiotic").warning(
+                    "FEP disabled: openmmforcefields not found. "
+                    "Falling back to heuristic resistance profiling. "
+                    "Install via: conda install -c conda-forge openmmforcefields"
                 )
 
         if self.generative_mode:

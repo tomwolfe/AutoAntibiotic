@@ -22,6 +22,9 @@ from autoantibiotic.config import CONFIG, ConfigurationError
 from autoantibiotic.models import CompoundRecord
 from autoantibiotic.ml_scoring.meta_scorer import MetaScorer
 
+# Lower the minimum training threshold so small test datasets (4 samples)
+# continue to work without raising ConfigurationError.
+CONFIG.min_training_samples = 4
 
 # ── Pipeline ordering tests ──────────────────────────────────────
 

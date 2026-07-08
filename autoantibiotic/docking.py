@@ -340,64 +340,72 @@ def prepare_ligand_pdbqt(
         True on success, False if all conversion methods failed.
     """
     try:
-        from meeko import MoleculePreparation, PDBQTWriterLegacy
-
-        mol_3d = mol
-        if mol_3d.GetNumConformers() == 0:
-            mol_3d = Chem.RWMol(mol)
-            mol_3d = Chem.AddHs(mol_3d)
-            AllChem.EmbedMolecule(mol_3d, randomSeed=42)
-
-        preparator = MoleculePreparation()
-        mol_setups = preparator.prepare(mol_3d)
-        if not mol_setups:
+        if mol.GetNumAtoms() > 150 or mol.GetNumHeavyAtoms() > 100:
+            log.debug("Molecule too large for docking")
             return False
-        pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
-        with open(output_path, "w") as f:
-            f.write(pdbqt_str)
-        return True
-    except Exception as exc:
-        log.warning(f"  Meeko prep failed ({exc}), trying RDKit fallback…")
+
         try:
-            mol_tmp = Chem.RWMol(mol)
-            mol_tmp = Chem.AddHs(mol_tmp, addCoords=True)
-            if mol_tmp.GetNumConformers() == 0:
-                AllChem.EmbedMolecule(mol_tmp, randomSeed=42)
-            AllChem.ComputeGasteigerCharges(mol_tmp)
+            from meeko import MoleculePreparation, PDBQTWriterLegacy
 
-            _ad_type_map = {
-                "C": "C", "c": "C",
-                "N": "N", "n": "N",
-                "O": "O", "o": "O",
-                "S": "S", "s": "S",
-                "P": "P", "p": "P",
-                "F": "F", "f": "F",
-                "Cl": "Cl", "Br": "Br",
-                "I": "I",
-                "H": "H",
-            }
+            mol_3d = mol
+            if mol_3d.GetNumConformers() == 0:
+                mol_3d = Chem.RWMol(mol)
+                mol_3d = Chem.AddHs(mol_3d)
+                AllChem.EmbedMolecule(mol_3d, randomSeed=42)
 
-            conf = mol_tmp.GetConformer()
-            lines = ["ROOT\n"]
-            for i, atom in enumerate(mol_tmp.GetAtoms()):
-                pos = conf.GetAtomPosition(i)
-                charge = atom.GetDoubleProp("_GasteigerCharge")
-                elem = atom.GetSymbol()
-                ad_type = _ad_type_map.get(elem, "C")
-                atom_name = f" {elem:<3s}"[:4]
-                lines.append(
-                    f"ATOM  {i+1:>5d} {atom_name} LIG X   1    "
-                    f"{pos.x:>8.3f}{pos.y:>8.3f}{pos.z:>8.3f}  0.00  0.00"
-                    f"{charge:>10.4f} {ad_type:<2s}\n"
-                )
-            lines.append("ENDROOT\n")
-            lines.append("TORSDOF 0\n")
+            preparator = MoleculePreparation()
+            mol_setups = preparator.prepare(mol_3d)
+            if not mol_setups:
+                return False
+            pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
             with open(output_path, "w") as f:
-                f.writelines(lines)
+                f.write(pdbqt_str)
             return True
-        except Exception as exc2:
-            log.warning(f"  RDKit PDBQT fallback also failed: {exc2}")
-            return False
+        except Exception as exc:
+            log.warning(f"  Meeko prep failed ({exc}), trying RDKit fallback…")
+            try:
+                mol_tmp = Chem.RWMol(mol)
+                mol_tmp = Chem.AddHs(mol_tmp, addCoords=True)
+                if mol_tmp.GetNumConformers() == 0:
+                    AllChem.EmbedMolecule(mol_tmp, randomSeed=42)
+                AllChem.ComputeGasteigerCharges(mol_tmp)
+
+                _ad_type_map = {
+                    "C": "C", "c": "C",
+                    "N": "N", "n": "N",
+                    "O": "O", "o": "O",
+                    "S": "S", "s": "S",
+                    "P": "P", "p": "P",
+                    "F": "F", "f": "F",
+                    "Cl": "Cl", "Br": "Br",
+                    "I": "I",
+                    "H": "H",
+                }
+
+                conf = mol_tmp.GetConformer()
+                lines = ["ROOT\n"]
+                for i, atom in enumerate(mol_tmp.GetAtoms()):
+                    pos = conf.GetAtomPosition(i)
+                    charge = atom.GetDoubleProp("_GasteigerCharge")
+                    elem = atom.GetSymbol()
+                    ad_type = _ad_type_map.get(elem, "C")
+                    atom_name = f" {elem:<3s}"[:4]
+                    lines.append(
+                        f"ATOM  {i+1:>5d} {atom_name} LIG X   1    "
+                        f"{pos.x:>8.3f}{pos.y:>8.3f}{pos.z:>8.3f}  0.00  0.00"
+                        f"{charge:>10.4f} {ad_type:<2s}\n"
+                    )
+                lines.append("ENDROOT\n")
+                lines.append("TORSDOF 0\n")
+                with open(output_path, "w") as f:
+                    f.writelines(lines)
+                return True
+            except Exception as exc2:
+                log.warning(f"  RDKit PDBQT fallback also failed: {exc2}")
+                return False
+    except Exception as exc3:
+        log.warning(f"  Ligand preparation failed unexpectedly: {exc3}")
+        return False
 
 
 def _run_docking_tool(
@@ -544,7 +552,7 @@ def dock_compound(
     out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
 
     if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
-        return None, "None"
+        return None, "PrepFailure"
 
     method = "None"
     try:
@@ -905,8 +913,9 @@ def _worker_dock_wrapper(
     """Module-level worker for :func:`_parallel_dock` (pool.map compatible).
 
     Returns ``(cid, energy, error_reason, method)`` where *error_reason* is
-    ``"DockingFailure"`` when docking failed (energy is None) and
-    ``None`` otherwise.  *method* is the docking engine used.
+    ``"PrepFailure"`` when ligand preparation failed, ``"DockingFailure"``
+    when the docking tool failed, and ``None`` otherwise.  *method* is the
+    docking engine used.
 
     Callers use the error reason to populate
     :class:`~autoantibiotic.io_utils.PipelineAudit`.
@@ -932,7 +941,10 @@ def _worker_dock_wrapper(
         rec, receptor_pdbqt, center, box_size,
         work_dir, tag, cache=None, use_cache=False,
     )
-    error_reason = "DockingFailure" if energy is None else None
+    if energy is None:
+        error_reason = "PrepFailure" if method == "PrepFailure" else "DockingFailure"
+    else:
+        error_reason = None
     return cid, energy, error_reason, method
 
 
