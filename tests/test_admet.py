@@ -15,7 +15,7 @@ from autoantibiotic.analysis import (
     predict_logs,
     predict_herg_risk,
 )
-from autoantibiotic.config import CONFIG
+from autoantibiotic.config import CONFIG, ConfigurationError
 from autoantibiotic.library_gen import _filter_ml_admet, apply_filters, generate_candidate_library
 from autoantibiotic.models import CompoundRecord
 
@@ -89,6 +89,31 @@ class TestMLADMETPredictorInit:
             assert pred is None, "Predictor should be None when use_ml_admet=False"
         finally:
             CONFIG.use_ml_admet = original
+
+    def test_trains_on_curated_csv_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify that the predictor falls back to the curated CSV when
+        the ChEMBL API module is unavailable."""
+        import autoantibiotic.admet.predictors as pred_mod
+
+        # Mock benchmarks.reference_data to be import-failed
+        import builtins
+        original_import = builtins.__import__
+
+        def _mock_import(name, *args, **kwargs):
+            if name == "benchmarks.reference_data":
+                raise ImportError("Mocked: ChEMBL unavailable")
+            return original_import(name, *args, **kwargs)
+
+        with monkeypatch.context() as m:
+            m.setattr(builtins, "__import__", _mock_import)
+            # Clear the cached predictor singleton
+            m.setattr(pred_mod, "_ml_predictor", None)
+            pred = MLADMETPredictor()
+            assert pred.available, (
+                "Predictor should be available when trained on curated CSV"
+            )
+            assert pred.herg_model is not None
+            assert pred.cyp_model is not None
 
 
 class TestChemBERTaEmbedder:

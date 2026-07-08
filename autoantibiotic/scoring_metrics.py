@@ -40,10 +40,10 @@ _RESIDUE_IFP_CLASSES = {
     },
 }
 
-_IFP_HBA_DIST = 3.5
-_IFP_HBD_DIST = 3.5
-_IFP_HYD_DIST = 4.5
-_IFP_PI_DIST = 5.5
+_IFP_HBA_DIST = CONFIG.ifp_hba_dist
+_IFP_HBD_DIST = CONFIG.ifp_hbd_dist
+_IFP_HYD_DIST = CONFIG.ifp_hyd_dist
+_IFP_PI_DIST = CONFIG.ifp_pi_dist
 
 
 def _parse_pdbqt_ligand_coords(pose_pdbqt: str) -> List[np.ndarray]:

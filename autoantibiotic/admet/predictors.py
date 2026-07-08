@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -159,9 +160,6 @@ class MLADMETPredictor:
                 mol = Chem.MolFromSmiles(entry["smiles"])
                 if mol is None:
                     continue
-                mol = Chem.MolFromSmiles(entry["smiles"])
-                if mol is None:
-                    continue
                 try:
                     X_herg.append(self._get_features(mol))
                     y_herg.append(entry["label"])
@@ -208,6 +206,76 @@ class MLADMETPredictor:
             log.info(f"ML-ADMET: Models fitted ({len(y_herg)} hERG, {len(y_cyp)} CYP training compounds, "
                      f"{self._ndim} features).")
             return
+
+        # ── Try loading the curated CSV fallback ────────────────
+        csv_path = Path(CONFIG.admet_reference_csv)
+        if csv_path.is_file():
+            try:
+                import csv
+                csv_herg_X: List[np.ndarray] = []
+                csv_herg_y: List[int] = []
+                csv_cyp_X: List[np.ndarray] = []
+                csv_cyp_y: List[int] = []
+                with open(csv_path, newline="") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        smi = row["smiles"].strip()
+                        mol = Chem.MolFromSmiles(smi)
+                        if mol is None:
+                            log.warning(
+                                f"ML-ADMET: Skipping invalid SMILES in curated CSV: {smi!r}"
+                            )
+                            continue
+                        try:
+                            feats = self._get_features(mol)
+                            csv_herg_X.append(feats)
+                            csv_herg_y.append(int(row["herg_label"]))
+                            csv_cyp_X.append(feats)
+                            csv_cyp_y.append(int(row["cyp_label"]))
+                        except Exception as exc:
+                            log.warning(
+                                f"ML-ADMET: Skipping compound in curated CSV — {exc}"
+                            )
+                            continue
+
+                if len(csv_herg_y) >= 10:
+                    h_pos = sum(csv_herg_y)
+                    h_neg = len(csv_herg_y) - h_pos
+                    if h_pos >= 1 and h_neg >= 1:
+                        Xh = np.array(csv_herg_X, dtype=np.float32)
+                        self._ndim = Xh.shape[1]
+                        self.herg_model = _RandomForestClassifier(
+                            n_estimators=100, random_state=42, class_weight="balanced",
+                        )
+                        self.herg_model.fit(Xh, csv_herg_y)
+
+                        c_pos = sum(csv_cyp_y)
+                        c_neg = len(csv_cyp_y) - c_pos
+                        if c_pos >= 1 and c_neg >= 1:
+                            Xc = np.array(csv_cyp_X, dtype=np.float32)
+                            self.cyp_model = _RandomForestClassifier(
+                                n_estimators=100, random_state=42, class_weight="balanced",
+                            )
+                            self.cyp_model.fit(Xc, csv_cyp_y)
+
+                        self._fitted = True
+                        log.info(
+                            f"ML-ADMET: Models fitted from curated CSV "
+                            f"({len(csv_herg_y)} compounds, {self._ndim} features)."
+                        )
+                        return
+                    else:
+                        log.warning(
+                            "ML-ADMET: Curated CSV lacks both positive and negative "
+                            "hERG labels — falling back to hardcoded reference list."
+                        )
+                else:
+                    log.warning(
+                        f"ML-ADMET: Curated CSV has too few valid entries "
+                        f"({len(csv_herg_y)} — need >=10). Falling back."
+                    )
+            except Exception as exc:
+                log.warning(f"ML-ADMET: Failed to load curated CSV — {exc}. Falling back.")
 
         X_list: List[np.ndarray] = []
         y_herg: List[int] = []

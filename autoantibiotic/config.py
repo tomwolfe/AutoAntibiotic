@@ -298,6 +298,43 @@ class PipelineConfig:
     water_distance_cutoff: float = 5.0
     water_displacement_energy_threshold: float = 2.5
 
+    # ── IFP distance thresholds (moved from scoring_metrics.py) ──
+    ifp_hba_dist: float = 3.5
+    """Distance cutoff (Å) for H-bond acceptor interactions in IFP."""
+    ifp_hbd_dist: float = 3.5
+    """Distance cutoff (Å) for H-bond donor interactions in IFP."""
+    ifp_hyd_dist: float = 4.5
+    """Distance cutoff (Å) for hydrophobic interactions in IFP."""
+    ifp_pi_dist: float = 5.5
+    """Distance cutoff (Å) for pi-stacking interactions in IFP."""
+
+    # ── FEP physical constants (moved from fep_engine.py) ──
+    fep_collision_rate_per_ps: float = 5.0
+    """Collision rate (1/ps) for the Langevin integrator in FEP."""
+    fep_nonbonded_cutoff_nm: float = 1.0
+    """Non-bonded cutoff (nm) for FEP simulations."""
+    fep_solvent_padding_nm: float = 1.0
+    """Solvent padding (nm) for FEP solvation box."""
+    fep_ionic_strength_molar: float = 0.15
+    """Ionic strength (M) for FEP solvation."""
+    fep_pressure_atm: float = 1.0
+    """Pressure (atm) for FEP barostat."""
+    fep_min_samples_mbar: int = 100
+    """Minimum number of total samples required for MBAR estimation."""
+    fep_max_heavy_atoms: int = 50
+    """Maximum heavy-atom count for FEP pre-screening."""
+    fep_max_smiles_length: int = 100
+    """Maximum SMILES length for FEP pre-screening."""
+    fep_minimization_iterations: int = 500
+    """Number of minimization iterations for FEP energy pre-screening."""
+    fep_ewald_error_tolerance: float = 0.0005
+    """Ewald error tolerance for FEP simulations."""
+
+    # ── ADMET reference data path ──
+    admet_reference_csv: str = "data/admet_reference_curated.csv"
+    """Path to the curated ADMET reference CSV used as fallback when ChEMBL
+    API is unavailable."""
+
     # ── FEP / resistance profiling ──
     use_fep_resistance: bool = True
     """When True, use OpenMM-based Free Energy Perturbation (FEP) for
@@ -472,6 +509,10 @@ class PipelineConfig:
         """Validate the configuration for logical consistency.
 
         Checks that:
+        - All IFP distance thresholds are positive.
+        - ML-ADMET thresholds are in [0, 1].
+        - All FEP physical parameters are within physically reasonable
+          bounds.
         - If ``use_explicit_solvent_mmgbsa`` is True, OpenMM and pdbfixer
           are importable.
         - If ``use_fep_resistance`` is True, OpenMM and openmmtools are
@@ -486,10 +527,94 @@ class PipelineConfig:
         ------
         ConfigurationError
             If a required dependency for an enabled feature is not
-            installed.
+            installed, or if a config value is outside physically
+            reasonable bounds.
         """
         if self.dry_run:
             return
+
+        # ── Sanity-check IFP distance thresholds ────────────────
+        for name, val in [
+            ("ifp_hba_dist", self.ifp_hba_dist),
+            ("ifp_hbd_dist", self.ifp_hbd_dist),
+            ("ifp_hyd_dist", self.ifp_hyd_dist),
+            ("ifp_pi_dist", self.ifp_pi_dist),
+        ]:
+            if val <= 0.0:
+                raise ConfigurationError(
+                    f"{name} must be > 0, got {val}. "
+                    "Distance thresholds must be positive."
+                )
+
+        # ── Sanity-check ML-ADMET thresholds ────────────────────
+        for name, val in [
+            ("ml_admet_herg_threshold", self.ml_admet_herg_threshold),
+            ("max_dropout_rate", self.max_dropout_rate),
+            ("consensus_vina_weight", self.consensus_vina_weight),
+            ("consensus_shape_weight", self.consensus_shape_weight),
+            ("ifp_similarity_threshold", self.ifp_similarity_threshold),
+            ("fep_ifp_threshold", self.fep_ifp_threshold),
+        ]:
+            if not (0.0 <= val <= 1.0):
+                raise ConfigurationError(
+                    f"{name} must be in [0, 1], got {val}."
+                )
+
+        # ── Sanity-check FEP physical parameters ────────────────
+        if self.fep_nonbonded_cutoff_nm <= 0.0:
+            raise ConfigurationError(
+                f"fep_nonbonded_cutoff_nm must be > 0, got {self.fep_nonbonded_cutoff_nm}."
+            )
+        if self.fep_solvent_padding_nm <= 0.0:
+            raise ConfigurationError(
+                f"fep_solvent_padding_nm must be > 0, got {self.fep_solvent_padding_nm}."
+            )
+        if self.fep_collision_rate_per_ps <= 0.0:
+            raise ConfigurationError(
+                f"fep_collision_rate_per_ps must be > 0, got {self.fep_collision_rate_per_ps}."
+            )
+        if self.fep_pressure_atm <= 0.0:
+            raise ConfigurationError(
+                f"fep_pressure_atm must be > 0, got {self.fep_pressure_atm}."
+            )
+        if self.fep_ionic_strength_molar < 0.0:
+            raise ConfigurationError(
+                f"fep_ionic_strength_molar must be >= 0, got {self.fep_ionic_strength_molar}."
+            )
+        if self.fep_min_samples_mbar < 10:
+            raise ConfigurationError(
+                f"fep_min_samples_mbar must be >= 10, got {self.fep_min_samples_mbar}."
+            )
+        if self.fep_max_heavy_atoms < 1:
+            raise ConfigurationError(
+                f"fep_max_heavy_atoms must be >= 1, got {self.fep_max_heavy_atoms}."
+            )
+        if self.fep_max_smiles_length < 1:
+            raise ConfigurationError(
+                f"fep_max_smiles_length must be >= 1, got {self.fep_max_smiles_length}."
+            )
+        if self.fep_ewald_error_tolerance <= 0.0:
+            raise ConfigurationError(
+                f"fep_ewald_error_tolerance must be > 0, got {self.fep_ewald_error_tolerance}."
+            )
+
+        # ── Sanity-check box sizes are positive ────────────────
+        for name, box in [
+            ("allosteric_box_size", self.allosteric_box_size),
+            ("active_box_size", self.active_box_size),
+            ("offtarget_box_size", self.offtarget_box_size),
+            ("redocking_box_size", self.redocking_box_size),
+        ]:
+            if any(d <= 0 for d in box):
+                raise ConfigurationError(
+                    f"All dimensions of {name} must be > 0, got {box}."
+                )
+
+        # ── Sanity-check dynamic box padding ────────────────────
+        if self.dynamic_box_padding <= 0.0:
+            raise ConfigurationError(
+                f"dynamic_box_padding must be > 0, got {self.dynamic_box_padding}."
+            )
 
         if self.mmgbsa_solvent_model == "explicit" or self.use_explicit_solvent_mmgbsa:
             try:

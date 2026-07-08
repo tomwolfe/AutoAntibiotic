@@ -200,8 +200,8 @@ class FEPResistanceCalculator:
         modeller.addSolvent(
             ff_solvent,
             model="tip3p",
-            padding=1.0 * _openmm_unit.nanometer,
-            ionicStrength=0.15 * _openmm_unit.molar,
+            padding=CONFIG.fep_solvent_padding_nm * _openmm_unit.nanometer,
+            ionicStrength=CONFIG.fep_ionic_strength_molar * _openmm_unit.molar,
         )
 
         self._system_cache[cache_key] = (modeller.topology, modeller.positions)
@@ -222,16 +222,16 @@ class FEPResistanceCalculator:
         if self.ligand_rdkit is None:
             return
         num_heavy = self.ligand_rdkit.GetNumHeavyAtoms()
-        if num_heavy > 50:
+        if num_heavy > CONFIG.fep_max_heavy_atoms:
             raise ConfigurationError(
-                f"Ligand has {num_heavy} heavy atoms (>50). "
+                f"Ligand has {num_heavy} heavy atoms (>CONFIG.fep_max_heavy_atoms). "
                 "Molecule too large for practical FEP calculation. "
                 "Consider skipping FEP for this candidate."
             )
         smi = Chem.MolToSmiles(self.ligand_rdkit)
-        if len(smi) > 100:
+        if len(smi) > CONFIG.fep_max_smiles_length:
             raise ConfigurationError(
-                f"Ligand SMILES length is {len(smi)} characters (>100). "
+                f"Ligand SMILES length is {len(smi)} characters (>CONFIG.fep_max_smiles_length). "
                 "Molecule too large for practical FEP calculation. "
                 "Consider skipping FEP for this candidate."
             )
@@ -352,8 +352,8 @@ class FEPResistanceCalculator:
         n_windows = CONFIG.fep_lambda_windows
         temperature = 298.15 * _openmm_unit.kelvin
         kT = _openmm_unit.MOLAR_GAS_CONSTANT_R * temperature
-        pressure = 1.0 * _openmm_unit.atmospheres
-        collision_rate = 5.0 / _openmm_unit.picosecond
+        pressure = CONFIG.fep_pressure_atm * _openmm_unit.atmospheres
+        collision_rate = CONFIG.fep_collision_rate_per_ps / _openmm_unit.picosecond
         timestep = CONFIG.fep_time_step_ps * _openmm_unit.picosecond
 
         # ── Step 1: Build systems for WT and mutant ────────────────
@@ -463,7 +463,7 @@ class FEPResistanceCalculator:
             check_interval = CONFIG.fep_check_interval_steps
             conv_threshold = CONFIG.fep_convergence_threshold_kcal_per_mol
             unc_threshold = CONFIG.fep_uncertainty_threshold
-            min_samples_mbar = 100
+            min_samples_mbar = CONFIG.fep_min_samples_mbar
 
             all_window_samples: List[List[np.ndarray]] = []
             per_window_uncertainties: List[float] = []
@@ -787,17 +787,17 @@ class FEPResistanceCalculator:
             forcefield_kwargs={
                 "constraints": _openmm_app.HBonds,
                 "rigidWater": True,
-                "ewaldErrorTolerance": 0.0005,
+                "ewaldErrorTolerance": CONFIG.fep_ewald_error_tolerance,
             },
         )
         system = system_generator.create_system(
             modeller.topology,
             nonbondedMethod=_openmm_app.PME,
-            nonbondedCutoff=1.0 * _openmm_unit.nanometer,
+            nonbondedCutoff=CONFIG.fep_nonbonded_cutoff_nm * _openmm_unit.nanometer,
         )
 
         # Add barostat
-        pressure = 1.0 * _openmm_unit.atmospheres
+        pressure = CONFIG.fep_pressure_atm * _openmm_unit.atmospheres
         barostat = _openmm.MonteCarloBarostat(
             pressure, temperature,
         )
@@ -964,7 +964,7 @@ class FEPResistanceCalculator:
         kT = _openmm_unit.MOLAR_GAS_CONSTANT_R * temperature
         n_steps = CONFIG.fep_initial_short_steps
         timestep = CONFIG.fep_time_step_ps * _openmm_unit.picosecond
-        collision_rate = 5.0 / _openmm_unit.picosecond
+        collision_rate = CONFIG.fep_collision_rate_per_ps / _openmm_unit.picosecond
 
         factory = AbsoluteAlchemicalFactory()
         platform = _openmm.Platform.getPlatformByName("Reference")
@@ -1102,8 +1102,8 @@ class FEPResistanceCalculator:
         modeller.addSolvent(
             ff_solvent,
             model="tip3p",
-            padding=1.0 * _openmm_unit.nanometer,
-            ionicStrength=0.15 * _openmm_unit.molar,
+            padding=CONFIG.fep_solvent_padding_nm * _openmm_unit.nanometer,
+            ionicStrength=CONFIG.fep_ionic_strength_molar * _openmm_unit.molar,
         )
 
         system_generator = _SystemGenerator(
@@ -1123,22 +1123,23 @@ class FEPResistanceCalculator:
         )
 
         barostat = _openmm.MonteCarloBarostat(
-            1.0 * _openmm_unit.atmospheres, 298.15 * _openmm_unit.kelvin,
+            CONFIG.fep_pressure_atm * _openmm_unit.atmospheres,
+            298.15 * _openmm_unit.kelvin,
         )
         system.addForce(barostat)
 
         # Minimise energy and check threshold
         integrator = _openmm.LangevinIntegrator(
             298.15 * _openmm_unit.kelvin,
-            5.0 / _openmm_unit.picosecond,
-            0.002 * _openmm_unit.picosecond,
+            CONFIG.fep_collision_rate_per_ps / _openmm_unit.picosecond,
+            CONFIG.fep_time_step_ps * _openmm_unit.picosecond,
         )
         simulation = _openmm_app.Simulation(
             modeller.topology, system, integrator,
             _openmm.Platform.getPlatformByName("Reference"),
         )
         simulation.context.setPositions(modeller.positions)
-        simulation.minimizeEnergy(maxIterations=500)
+        simulation.minimizeEnergy(maxIterations=CONFIG.fep_minimization_iterations)
 
         state = simulation.context.getState(getEnergy=True)
         energy_kcal = state.getPotentialEnergy().value_in_unit(
