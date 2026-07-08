@@ -27,11 +27,17 @@ from autoantibiotic.ml_scoring.meta_scorer import (
     predict_meta_score,
 )
 
+from autoantibiotic.ml_scoring.gnn_scorer import (
+    GNNScorer,
+    mol_pose_to_graph,
+)
+
 __all__ = [
     "MetaScorer",
     "_get_meta_scorer",
     "predict_meta_score",
+    "GNNScorer",
+    "mol_pose_to_graph",
     "rescore_with_mmgbsa",
-    "rescore_with_ml",
     "rescore_with_ml",
 ]

@@ -966,6 +966,8 @@ def apply_filters(
             f"  Only {len(passed)} compounds passed strict filters (< {CONFIG.diversity_min_count}). "
             f"Relaxing similarity threshold to {CONFIG.similarity_threshold_relaxed} and re-running."
         )
+        if audit is not None:
+            audit.reset()
         return apply_filters(records, similarity_threshold=CONFIG.similarity_threshold_relaxed, audit=audit)
 
     log.info("─── Phase 2 complete ───")

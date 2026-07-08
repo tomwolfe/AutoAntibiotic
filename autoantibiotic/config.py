@@ -63,6 +63,10 @@ class PipelineConfig:
     use_meta_scoring: bool = True
     meta_scorer_model_path: str = "output/meta_scorer.joblib"
 
+    # GNN rescoring (replaces/ augments meta-scorer when enabled)
+    use_gnn_rescoring: bool = False
+    gnn_model_path: str = "output/gnn_model.pt"
+
     # MD validation
     md_validation_duration_ns: int = 10
     md_production_duration_ns: int = 50

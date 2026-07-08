@@ -34,9 +34,14 @@ generative = [
 explainability = [
     "shap>=0.46.0",
 ]
+gnn = [
+    "torch>=2.0.0",
+    "torch-geometric>=2.4.0",
+]
 all = [
     "autoantibiotic[fep]",
     "autoantibiotic[generative]",
+    "autoantibiotic[gnn]",
     "autoantibiotic[explainability]",
 ]
 

@@ -46,6 +46,12 @@ from .ml_scoring.meta_scorer import (      # noqa: F401
     predict_meta_score,
 )
 
+# GNN rescoring
+from .ml_scoring.gnn_scorer import (       # noqa: F401
+    GNNScorer,
+    mol_pose_to_graph,
+)
+
 # ADMET predictors
 from .admet.predictors import (            # noqa: F401
     ChemBERTaEmbedder,

@@ -20,6 +20,7 @@ from .docking import run_redocking_validation, screen_library
 from .analysis import analyze_selectivity_and_resistance, predict_meta_score
 from .scoring_metrics import check_key_interactions, compute_ifp_similarity
 from .ml_scoring.meta_scorer import _get_meta_scorer
+from .ml_scoring.gnn_scorer import GNNScorer
 from .io_utils import (
     ensure_output_dir,
     load_json_cache,
@@ -440,20 +441,25 @@ class PipelineOrchestrator:
             log.warning(f"  Explicit-solvent rescoring failed: {exc}")
 
     def apply_meta_scoring(self) -> None:
-        """Phase 4.5 — Meta-learner consensus scoring on top candidates.
+        """Phase 4.5 — Meta-learner / GNN consensus scoring on top candidates.
 
-        Uses a trained stacking regressor when ``self.config.use_meta_scoring``
-        is enabled.  After scoring, flags uncertain predictions for manual
-        review and saves them to ``output/review_queue.csv``.
+        When ``self.config.use_gnn_rescoring`` is *True* a
+        :class:`GNNScorer` is tried first.  If the GNN scorer is
+        available it replaces the Random-Forest MetaScorer entirely.
+        Otherwise the pipeline falls back to the existing
+        ``MetaScorer`` path.
+
+        After scoring, uncertain predictions are flagged for manual
+        review and saved to ``output/review_queue.csv`` (MetaScorer
+        path only).
         """
         if not self.config.use_meta_scoring:
             log.info("  Meta-scoring disabled (use_meta_scoring=False).")
             return
         if not self.top_candidates:
             return
-        log.info("─── Phase 4.5: Meta-Learner Consensus Scoring ───")
 
-        # Populate IFP/Water dynamic features if available
+        # Populate water displacement energy once
         water_disp_energy: Optional[float] = None
         if self.water_results is not None and self.water_results.all_waters:
             energies = [w.displacement_energy for w in self.water_results.all_waters]
@@ -463,15 +469,35 @@ class PipelineOrchestrator:
         for rec in self.top_candidates:
             if water_disp_energy is not None:
                 rec.water_displacement_energy = water_disp_energy
+
+        # ── GNN rescoring path (takes over completely when available) ──
+        if self.config.use_gnn_rescoring:
+            log.info("─── Phase 4.5: GNN Rescoring ───")
+            gnn_scorer = GNNScorer()
+            if gnn_scorer.available:
+                for rec in self.top_candidates:
+                    gnn_score = gnn_scorer.predict(rec)
+                    if gnn_score is not None:
+                        rec.ml_score = gnn_score
+                        log.debug(
+                            "  %s: GNN score = %.4f kcal/mol",
+                            rec.compound_id, gnn_score,
+                        )
+                    else:
+                        log.debug("  %s: GNN score not computed.", rec.compound_id)
+                return  # GNN path complete
+
+            log.info("  GNN rescoring unavailable; falling back to MetaScorer.")
+
+        # ── MetaScorer path (default / fallback) ──
+        log.info("─── Phase 4.5: Meta-Learner Consensus Scoring ───")
+
+        for rec in self.top_candidates:
             meta_score = predict_meta_score(rec)
             if meta_score is not None:
-                log.debug(
-                    f"  {rec.compound_id}: meta-score = {meta_score:.4f}"
-                )
+                log.debug(f"  {rec.compound_id}: meta-score = {meta_score:.4f}")
             else:
-                log.debug(
-                    f"  {rec.compound_id}: meta-score not computed."
-                )
+                log.debug(f"  {rec.compound_id}: meta-score not computed.")
 
         # Active learning: flag uncertain predictions
         scorer = _get_meta_scorer()
