@@ -12,7 +12,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 from rdkit import RDLogger as rdklog
@@ -589,10 +589,226 @@ def download_with_retry(
     )
 
 
+# ── BinaryManager ────────────────────────────────────────────────
+
+
+class BinaryManager:
+    """Manages discovery, version-checking, and validation of external
+    binaries required by the AutoAntibiotic pipeline."""
+
+    _BINARIES: Dict[str, str] = {
+        "vina": "vina",
+        "gnina": "gnina",
+        "obabel": "obabel",
+        "prepare_receptor": "prepare_receptor",
+    }
+    """Mapping from logical name to expected binary name on PATH."""
+
+    def __init__(self) -> None:
+        self._cache: Dict[str, bool] = {}
+
+    def check_binary(self, name: str, path: Optional[str] = None) -> bool:
+        """Check whether a binary exists and is executable.
+
+        Args:
+            name: Logical binary name (e.g. ``"vina"``, ``"obabel"``).
+            path: Optional explicit path to the binary.  If not provided,
+                  the binary is looked up on ``PATH``.
+
+        Returns:
+            ``True`` if the binary is found and executable.
+        """
+        import shutil
+
+        binary_path = path or name
+        resolved = shutil.which(binary_path)
+        if resolved is None:
+            return False
+        if not os.access(resolved, os.X_OK):
+            return False
+        return True
+
+    def get_version(self, name: str) -> str:
+        """Return the version string for a binary by running ``--version``.
+
+        Args:
+            name: Logical binary name.
+
+        Returns:
+            Version string (stripped), or ``"unknown"`` if the binary
+            cannot be executed or returns no output.
+        """
+        if name not in self._BINARIES:
+            return "unknown"
+        binary = self._BINARIES[name]
+        try:
+            result = run_tool(
+                [binary, "--help" if name == "prepare_receptor" else "--version"],
+                timeout=10,
+                check=False,
+            )
+            version = (result.stdout or result.stderr or "").strip()
+            return version if version else "unknown"
+        except (RuntimeError, OSError, AutoAntibioticError):
+            return "unknown"
+
+    def validate_all(self) -> Dict[str, bool]:
+        """Check all registered binaries and return their availability.
+
+        Returns:
+            Dict mapping logical binary name to ``True`` if the binary
+            is found and executable.
+        """
+        results: Dict[str, bool] = {}
+        for name in self._BINARIES:
+            available = self.check_binary(name)
+            results[name] = available
+            self._cache[name] = available
+        return results
+
+
+# ── Safe subprocess runner with retry ─────────────────────────────
+
+
+def safe_run_tool(
+    cmd: List[str],
+    timeout: int = 120,
+    check: bool = True,
+    ignore_stderr_warnings: bool = False,
+) -> ToolResult:
+    """Execute an external binary with a single retry on failure.
+
+    Wraps :func:`run_tool` with one automatic retry.  If the first
+    attempt fails (raises :class:`AutoAntibioticError` or returns a
+    non-zero exit code when *check* is True), a detailed warning
+    including the full stderr is logged and the command is retried
+    once.  If the retry also fails, the original exception is
+    re-raised.
+
+    All parameters match :func:`run_tool`.
+
+    Returns:
+        :class:`ToolResult` from the successful run.
+    """
+    binary_name = os.path.basename(cmd[0])
+    try:
+        return run_tool(cmd, timeout=timeout, check=check,
+                        ignore_stderr_warnings=ignore_stderr_warnings)
+    except (AutoAntibioticError, RuntimeError, OSError) as exc:
+        stderr_detail = ""
+        if hasattr(exc, "args") and exc.args:
+            stderr_detail = str(exc.args[0])
+        log.warning(
+            "  Tool '%s' failed on first attempt — retrying once.\n"
+            "  Command: %s\n"
+            "  Error: %s",
+            binary_name, " ".join(cmd), stderr_detail,
+        )
+        try:
+            return run_tool(cmd, timeout=timeout, check=check,
+                            ignore_stderr_warnings=ignore_stderr_warnings)
+        except (AutoAntibioticError, RuntimeError, OSError) as retry_exc:
+            log.error(
+                "  Tool '%s' failed again on retry.\n"
+                "  Command: %s\n"
+                "  Error: %s",
+                binary_name, " ".join(cmd),
+                str(retry_exc.args[0]) if retry_exc.args else str(retry_exc),
+            )
+            raise
+
+
+# ── Pipeline input validation ────────────────────────────────────
+
+
+def validate_pipeline_inputs(config: PipelineConfig) -> Dict[str, List[str]]:
+    """Validate all pipeline inputs and return a report of issues.
+
+    Checks:
+    - *output_dir* is writable.
+    - All SMILES in *reference_antibiotics* and *brics_building_blocks*
+      parse correctly with RDKit.
+    - *ensemble_structures_dir* exists if set.
+    - All registered binaries via :meth:`BinaryManager.validate_all`.
+
+    Args:
+        config: The pipeline configuration to validate.
+
+    Returns:
+        Dict with keys ``"errors"`` and ``"warnings"``, each containing
+        a list of human-readable issue descriptions.  An empty list
+        means no issues were found.
+    """
+    from rdkit import Chem as _Chem
+
+    issues: Dict[str, List[str]] = {"errors": [], "warnings": []}
+
+    # ── Output directory writability ──
+    try:
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        test_file = config.output_dir / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+    except (OSError, IOError) as exc:
+        issues["errors"].append(
+            f"Output directory '{config.output_dir}' is not writable: {exc}"
+        )
+
+    # ── Validate SMILES in reference_antibiotics ──
+    for name, smi in config.reference_antibiotics.items():
+        if not smi or not smi.strip():
+            issues["warnings"].append(
+                f"Reference antibiotic '{name}' has an empty SMILES string."
+            )
+            continue
+        mol = _Chem.MolFromSmiles(smi)
+        if mol is None:
+            issues["errors"].append(
+                f"Reference antibiotic '{name}' has an invalid SMILES: '{smi}'."
+            )
+
+    # ── Validate SMILES in brics_building_blocks ──
+    for smi in config.brics_building_blocks:
+        if not smi or not smi.strip():
+            issues["warnings"].append("Empty SMILES in brics_building_blocks.")
+            continue
+        mol = _Chem.MolFromSmiles(smi)
+        if mol is None:
+            issues["errors"].append(
+                f"Invalid BRICS building block SMILES: '{smi}'."
+            )
+
+    # ── Check ensemble_structures_dir ──
+    if config.ensemble_structures_dir is not None:
+        if not config.ensemble_structures_dir.exists():
+            issues["warnings"].append(
+                f"Ensemble structures directory "
+                f"'{config.ensemble_structures_dir}' does not exist."
+            )
+        elif not config.ensemble_structures_dir.is_dir():
+            issues["errors"].append(
+                f"Ensemble structures path "
+                f"'{config.ensemble_structures_dir}' is not a directory."
+            )
+
+    # ── Check binaries ──
+    bm = BinaryManager()
+    binary_status = bm.validate_all()
+    for name, available in binary_status.items():
+        if not available:
+            guide = _INSTALL_GUIDE.get(name, "")
+            issues["errors"].append(
+                f"Required binary '{name}' not found or not executable.\n{guide}"
+            )
+
+    return issues
+
+
 def verify_dependencies() -> Dict[str, Any]:
     """Phase 0 — Dependency Verification.
 
-    Checks all required Python libraries and external binaries.
+    Checks all required Python libraries and external binaries using
+    :class:`BinaryManager`.
 
     Returns a dictionary with keys:
         - 'rdkit' / 'meeko' / 'biopython': bool
@@ -624,16 +840,14 @@ def verify_dependencies() -> Dict[str, Any]:
                 f"Please run: pip install -r requirements.txt"
             )
 
+    bm = BinaryManager()
+    binary_status = bm.validate_all()
     for bin_name in ("vina", "gnina", "obabel", "prepare_receptor"):
-        try:
-            run_tool(
-                [bin_name, "--help" if bin_name == "prepare_receptor" else "--version"],
-                timeout=10,
-            )
-            status[bin_name] = True
+        available = binary_status.get(bin_name, False)
+        status[bin_name] = available
+        if available:
             log.info(f"  ✓  {bin_name} binary found on PATH.")
-        except (RuntimeError, OSError, AutoAntibioticError):
-            status[bin_name] = False
+        else:
             log.warning(f"  ⚠  '{bin_name}' not found.")
             log.warning(_INSTALL_GUIDE.get(bin_name, ""))
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from .config import CONFIG, PipelineConfig, ConfigurationError
+from .io_utils import validate_pipeline_inputs
 from .orchestrator import PipelineOrchestrator
 
 
@@ -91,6 +92,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Use generative model (JT-VAE / graph-based) for novel scaffold design instead of "
         "BRICS recombination (computationally expensive: requires model inference).",
     )
+    parser.add_argument(
+        "--validate-inputs", action="store_true",
+        help="Validate all pipeline inputs (binaries, SMILES, directories) and exit. "
+        "Returns exit code 0 on success, 1 if any issues are found.",
+    )
     args = parser.parse_args(argv)
 
     # ── Create a local copy of CONFIG and apply CLI overrides ──
@@ -134,6 +140,28 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.retrain_model is not None:
         cfg.retrain_model_path = args.retrain_model
+
+    # ── Validate inputs (if requested) ──
+    if args.validate_inputs:
+        print("─── Input Validation Report ───")
+        issues = validate_pipeline_inputs(cfg)
+        has_errors = len(issues["errors"]) > 0
+        has_warnings = len(issues["warnings"]) > 0
+
+        if has_errors:
+            print(f"\nErrors ({len(issues['errors'])}):")
+            for err in issues["errors"]:
+                print(f"  ✗  {err}")
+        if has_warnings:
+            print(f"\nWarnings ({len(issues['warnings'])}):")
+            for warn in issues["warnings"]:
+                print(f"  ⚠  {warn}")
+        if not has_errors and not has_warnings:
+            print("  ✓  All inputs are valid.")
+
+        print(f"\nSummary: {len(issues['errors'])} error(s), "
+              f"{len(issues['warnings'])} warning(s).")
+        raise SystemExit(1 if has_errors else 0)
 
     # ── Validate configuration ──
     try:

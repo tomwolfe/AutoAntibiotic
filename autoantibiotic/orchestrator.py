@@ -317,11 +317,44 @@ class PipelineOrchestrator:
                     )
             fep_candidates.append(rec)
 
-        candidates = fep_candidates[:fep_top_n]
+        # ── Strict pre-screening (Phase 4.8a) ──
+        # Filter by higher IFP threshold and allosteric energy cut-off,
+        # then limit to top fep_top_n_strict candidates.
+        fep_top_n_strict = getattr(self.config, "fep_top_n_strict", 5)
+        strict_threshold = 0.7
+        energy_cutoff = -8.0
+
+        strict_candidates: List[CompoundRecord] = []
+        for rec in fep_candidates:
+            if rec.pb2pa_allosteric_energy is None or rec.pb2pa_allosteric_energy >= energy_cutoff:
+                continue
+            if rec.docked_pose_path and os.path.isfile(rec.docked_pose_path) and ref_mol is not None and rec.mol is not None:
+                try:
+                    ifp_score = compute_ifp_similarity(rec.mol, ref_mol, receptor_pdb)
+                    if ifp_score >= strict_threshold:
+                        strict_candidates.append(rec)
+                except Exception:
+                    continue
+            else:
+                continue
+
+        strict_candidates.sort(key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else 0.0)
+        strict_candidates = strict_candidates[:fep_top_n_strict]
+
+        n_skipped = len(fep_candidates) - len(strict_candidates)
+        if n_skipped > 0:
+            log.info(
+                f"  Strict pre-screening skipped {n_skipped}/{len(fep_candidates)} "
+                f"candidates (IFP < {strict_threshold} or allosteric energy "
+                f">= {energy_cutoff} kcal/mol)."
+            )
+
+        candidates = strict_candidates[:fep_top_n_strict]
         log.info(
             f"  Pre-screening selected {len(candidates)}/"
             f"{len(candidates_pool)} candidates for FEP based on "
-            f"IFP threshold (threshold={ifp_threshold})."
+            f"IFP threshold (threshold={ifp_threshold}, "
+            f"strict_threshold={strict_threshold})."
         )
 
         from .fep_engine import FEPResistanceCalculator, ConfigurationError as FEPConfigError

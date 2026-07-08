@@ -427,6 +427,9 @@ class PipelineConfig:
     """Minimum IFP Tanimoto similarity to the reference ligand
     (Ceftaroline) required for a candidate to proceed to FEP after
     pre-screening.  Default 0.5."""
+    fep_top_n_strict: int = 5
+    """Number of top candidates to run FEP on after strict pre-screening
+    (IFP >= 0.7 and allosteric energy < -8.0 kcal/mol).  Default 5."""
 
     # ── Entropy estimation ──
     include_entropy: bool = False
@@ -593,6 +596,10 @@ class PipelineConfig:
         if self.fep_max_smiles_length < 1:
             raise ConfigurationError(
                 f"fep_max_smiles_length must be >= 1, got {self.fep_max_smiles_length}."
+            )
+        if self.fep_top_n_strict < 1:
+            raise ConfigurationError(
+                f"fep_top_n_strict must be >= 1, got {self.fep_top_n_strict}."
             )
         if self.fep_ewald_error_tolerance <= 0.0:
             raise ConfigurationError(

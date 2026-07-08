@@ -16,6 +16,7 @@ from .io_utils import (
     download_with_retry,
     log,
     run_tool,
+    safe_run_tool,
 )
 from .water_analysis import get_waters_to_remove
 
@@ -271,7 +272,7 @@ def clean_pdb_structure(
 
         if deps.get("prepare_receptor"):
             try:
-                run_tool(
+                safe_run_tool(
                     ["prepare_receptor", "-r", out_path, "-o", pdbqt_path],
                     timeout=CONFIG.prepare_receptor_timeout,
                 )
@@ -288,7 +289,7 @@ def clean_pdb_structure(
 
         if not converted and deps.get("obabel"):
             try:
-                run_tool(
+                safe_run_tool(
                     ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
                     timeout=CONFIG.obabel_timeout_s,
                 )

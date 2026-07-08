@@ -38,6 +38,7 @@ from .io_utils import (
     parse_gnina_energy,
     parse_vina_energy,
     run_tool,
+    safe_run_tool,
 )
 
 try:
@@ -126,7 +127,7 @@ def _extract_native_ligand_from_holo(
             log.warning("  ⚠  RDKit could not read ligand PDB, trying obabel…")
             smi_file = output_ligand_smi
             try:
-                run_tool(["obabel", lig_pdb, "-O", smi_file], timeout=CONFIG.obabel_timeout_s)
+                safe_run_tool(["obabel", lig_pdb, "-O", smi_file], timeout=CONFIG.obabel_timeout_s)
                 with open(smi_file) as f:
                     smi = f.readline().strip()
                 if smi:
@@ -282,13 +283,13 @@ def run_redocking_validation(
     ]
 
     try:
-        run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s, ignore_stderr_warnings=True)
+        safe_run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s, ignore_stderr_warnings=True)
     except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
         log.warning(f"  Vina redocking failed: {exc}")
         return False, None
 
     try:
-        run_tool(
+        safe_run_tool(
             ["obabel", docked_pdbqt, "-O", docked_pdb, "--gen3d"],
             timeout=CONFIG.obabel_timeout_s,
         )
@@ -467,7 +468,7 @@ def _run_docking_tool(
         and not _DOCKING_BINARY_VALIDATED
     ):
         try:
-            version_result = run_tool(
+            version_result = safe_run_tool(
                 [binary, "--version"], timeout=10, check=False,
             )
             version_out = version_result.stdout or version_result.stderr
@@ -485,7 +486,7 @@ def _run_docking_tool(
         _DOCKING_BINARY_VALIDATED = True
 
     try:
-        result = run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
+        result = safe_run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
         if result.returncode != 0:
             log.warning(f"  {binary} error: {result.stderr.strip()}")
             raise DockingParseError(
