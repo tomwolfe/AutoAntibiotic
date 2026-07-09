@@ -119,7 +119,7 @@ class TestRunGninaDocking:
         CONFIG.gnina_binary_path, CONFIG.dry_run, CONFIG.validate_docking_binaries_on_startup = saved
 
     def test_successful_docking_returns_cnnscore(self) -> None:
-        with patch("autoantibiotic.docking.run_tool", return_value=_make_tool_result()):
+        with patch("autoantibiotic.docking.safe_run_tool", return_value=_make_tool_result()):
             score = _run_docking_tool(
                 "gnina",
                 receptor_pdbqt="rec.pdbqt",
@@ -132,7 +132,7 @@ class TestRunGninaDocking:
 
     def test_nonzero_returncode_raises_error(self) -> None:
         with patch(
-            "autoantibiotic.docking.run_tool",
+            "autoantibiotic.docking.safe_run_tool",
             return_value=_make_tool_result(returncode=1, stderr=_GNINA_FAILURE_STDERR),
         ):
             with pytest.raises(DockingParseError):
@@ -166,7 +166,7 @@ class TestRunGninaDocking:
         saved_path = CONFIG.gnina_binary_path
         CONFIG.gnina_binary_path = "/custom/path/gnina"
         try:
-            with patch("autoantibiotic.docking.run_tool") as mock_run:
+            with patch("autoantibiotic.docking.safe_run_tool") as mock_run:
                 mock_run.return_value = _make_tool_result()
                 _run_docking_tool(
                     "gnina",

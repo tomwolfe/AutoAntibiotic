@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
@@ -1128,6 +1129,21 @@ class FEPResistanceCalculator:
         )
         system.addForce(barostat)
 
+        # Record initial positions of ligand heavy atoms for RMSD check
+        ligand_heavy_indices: List[int] = []
+        for atom in modeller.topology.atoms():
+            if atom.residue.name == "LIG" and atom.element is not None and atom.element.symbol != "H":
+                ligand_heavy_indices.append(atom.index)
+
+        initial_lig_positions: List[np.ndarray] = []
+        for idx in ligand_heavy_indices:
+            pos = modeller.positions[idx]
+            initial_lig_positions.append(np.array([
+                pos[0].value_in_unit(_openmm_unit.angstroms),
+                pos[1].value_in_unit(_openmm_unit.angstroms),
+                pos[2].value_in_unit(_openmm_unit.angstroms),
+            ]))
+
         # Minimise energy and check threshold
         integrator = _openmm.LangevinIntegrator(
             298.15 * _openmm_unit.kelvin,
@@ -1141,10 +1157,35 @@ class FEPResistanceCalculator:
         simulation.context.setPositions(modeller.positions)
         simulation.minimizeEnergy(maxIterations=CONFIG.fep_minimization_iterations)
 
-        state = simulation.context.getState(getEnergy=True)
+        state = simulation.context.getState(getEnergy=True, getPositions=True)
         energy_kcal = state.getPotentialEnergy().value_in_unit(
             _openmm_unit.kilocalories_per_mole,
         )
+
+        # Check ligand RMSD after minimisation
+        if ligand_heavy_indices:
+            min_positions = state.getPositions()
+            rmsd_sq_sum = 0.0
+            for i, idx in enumerate(ligand_heavy_indices):
+                pos = min_positions[idx]
+                min_p = np.array([
+                    pos[0].value_in_unit(_openmm_unit.angstroms),
+                    pos[1].value_in_unit(_openmm_unit.angstroms),
+                    pos[2].value_in_unit(_openmm_unit.angstroms),
+                ])
+                rmsd_sq_sum += float(np.sum((initial_lig_positions[i] - min_p) ** 2))
+            rmsd = math.sqrt(rmsd_sq_sum / len(ligand_heavy_indices))
+            if rmsd > 2.0:
+                log.warning(
+                    "Pre-screen rejected: ligand RMSD %.3f Å exceeds 2.0 Å threshold",
+                    rmsd,
+                )
+                return FEPResistanceResult(
+                    delta_delta_g=0.0,
+                    confidence=0.0,
+                    n_windows=0,
+                    error="Skipped: High Ligand RMSD",
+                )
 
         max_energy = CONFIG.fep_max_initial_energy_kcal_per_mol
         if energy_kcal > max_energy:

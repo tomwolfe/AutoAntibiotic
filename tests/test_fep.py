@@ -288,8 +288,8 @@ class TestFEPConfigValidation:
         for name in restore:
             sys.modules[name] = restore[name]
 
-    def test_validate_config_raises_if_openmmforcefields_missing(self):
-        """validate_config raises ConfigurationError when use_fep_resistance=True
+    def test_validate_config_falls_back_if_openmmforcefields_missing(self):
+        """validate_config falls back gracefully when use_fep_resistance=True
         but openmmforcefields is not installed."""
         original_fep = CONFIG.use_fep_resistance
         original_mmgbsa = CONFIG.use_explicit_solvent_mmgbsa
@@ -300,8 +300,10 @@ class TestFEPConfigValidation:
                 "openmm": MagicMock(),
                 "openmmtools": MagicMock(),
             })
-            with pytest.raises(ConfigConfigurationError, match="openmmforcefields is not installed"):
-                CONFIG.validate_config()
+            CONFIG.validate_config()
+            assert not CONFIG.use_fep_resistance, (
+                "use_fep_resistance should be set to False when openmmforcefields is missing"
+            )
         finally:
             self._restore_modules(restore)
             CONFIG.use_fep_resistance = original_fep
@@ -903,6 +905,22 @@ class TestFEPAdaptiveLambdaInsertion:
         )
         assert len(refined) == 6, f"Expected 6 windows, got {len(refined)}"
         assert 0.625 in refined, "Expected 0.625 (midpoint) in refined schedule"
+
+    def test_refine_lambda_schedule_inserts_midpoint_three_windows(self):
+        """Insert midpoint in a 3-window schedule [0.0, 0.5, 1.0]
+        with poor index [0], expected result [0.0, 0.25, 0.5, 1.0]."""
+        lambda_schedule = np.array([0.0, 0.5, 1.0])
+        poor_indices = [0]
+
+        refined = FEPResistanceCalculator._refine_lambda_schedule(
+            lambda_schedule, poor_indices,
+        )
+        expected = [0.0, 0.25, 0.5, 1.0]
+        assert len(refined) == len(expected), (
+            f"Expected {len(expected)} windows, got {len(refined)}"
+        )
+        for val in expected:
+            assert val in refined, f"Expected {val} in refined schedule"
 
     def test_refine_lambda_schedule_multiple_pairs(self):
         """Multiple poor-overlap pairs each get an inserted window."""

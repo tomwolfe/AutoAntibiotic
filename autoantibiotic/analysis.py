@@ -295,7 +295,7 @@ def analyze_selectivity_and_resistance(
         cache=cache, use_cache=use_cache,
     )
     cid_map = {r.compound_id: r for r in top10}
-    for cid, energy in trypsin_results:
+    for cid, energy, _err, _method in trypsin_results:
         if cid in cid_map:
             cid_map[cid].human_trypsin_energy = energy
 
@@ -308,7 +308,7 @@ def analyze_selectivity_and_resistance(
         work_dir, "ces1", n_jobs=min(4, len(top10)),
         cache=cache, use_cache=use_cache,
     )
-    for cid, energy in ces1_results:
+    for cid, energy, _err, _method in ces1_results:
         if cid in cid_map:
             cid_map[cid].human_ces1_energy = energy
 

@@ -1098,7 +1098,9 @@ class TestPoseRelaxationAndWater:
 
         saved_explicit = CONFIG.use_explicit_solvent_mmgbsa
         saved_top_n = CONFIG.mm_gbsa_top_n
+        saved_solvent = CONFIG.mmgbsa_solvent_model
         CONFIG.use_explicit_solvent_mmgbsa = True
+        CONFIG.mmgbsa_solvent_model = "explicit"
         CONFIG.mm_gbsa_top_n = 1
         try:
             with patch(
@@ -1116,6 +1118,7 @@ class TestPoseRelaxationAndWater:
         finally:
             CONFIG.use_explicit_solvent_mmgbsa = saved_explicit
             CONFIG.mm_gbsa_top_n = saved_top_n
+            CONFIG.mmgbsa_solvent_model = saved_solvent
 
         score_no = result_no_water[0].ml_score
         score_with = result_with_water[0].ml_score

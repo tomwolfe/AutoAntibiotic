@@ -624,6 +624,15 @@ class PipelineConfig:
                 f"dynamic_box_padding must be > 0, got {self.dynamic_box_padding}."
             )
 
+        if self.use_explicit_solvent_mmgbsa and self.mmgbsa_solvent_model != "explicit":
+            logging.getLogger("AutoAntibiotic").warning(
+                "DEPRECATED: use_explicit_solvent_mmgbsa=True is deprecated. "
+                "Set mmgbsa_solvent_model='explicit' to use the explicit-solvent "
+                "path. Currently mmgbsa_solvent_model='%s', so the implicit OBC2 "
+                "path will be used.",
+                self.mmgbsa_solvent_model,
+            )
+
         if self.mmgbsa_solvent_model == "explicit" or self.use_explicit_solvent_mmgbsa:
             try:
                 import openmm  # noqa: F401
