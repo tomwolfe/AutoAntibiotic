@@ -22,6 +22,7 @@ from autoantibiotic.docking import (
 from autoantibiotic.io_utils import (
     DockingParseError,
     DockingResultValidator,
+    ToolExecutor,
     parse_gnina_energy,
     parse_vina_energy,
     ToolResult,
@@ -119,7 +120,7 @@ class TestRunGninaDocking:
         CONFIG.gnina_binary_path, CONFIG.dry_run, CONFIG.validate_docking_binaries_on_startup = saved
 
     def test_successful_docking_returns_cnnscore(self) -> None:
-        with patch("autoantibiotic.docking.safe_run_tool", return_value=_make_tool_result()):
+        with patch("autoantibiotic.io_utils.ToolExecutor.run", return_value=_make_tool_result()):
             score = _run_docking_tool(
                 "gnina",
                 receptor_pdbqt="rec.pdbqt",
@@ -132,7 +133,7 @@ class TestRunGninaDocking:
 
     def test_nonzero_returncode_raises_error(self) -> None:
         with patch(
-            "autoantibiotic.docking.safe_run_tool",
+            "autoantibiotic.docking.ToolExecutor.run",
             return_value=_make_tool_result(returncode=1, stderr=_GNINA_FAILURE_STDERR),
         ):
             with pytest.raises(DockingParseError):
@@ -166,7 +167,7 @@ class TestRunGninaDocking:
         saved_path = CONFIG.gnina_binary_path
         CONFIG.gnina_binary_path = "/custom/path/gnina"
         try:
-            with patch("autoantibiotic.docking.safe_run_tool") as mock_run:
+            with patch("autoantibiotic.docking.ToolExecutor.run") as mock_run:
                 mock_run.return_value = _make_tool_result()
                 _run_docking_tool(
                     "gnina",
@@ -176,8 +177,8 @@ class TestRunGninaDocking:
                     center=np.array([1.0, 2.0, 3.0]),
                     box_size=(15.0, 15.0, 15.0),
                 )
-                cmd = mock_run.call_args[0][0]
-                assert cmd[0] == "/custom/path/gnina"
+                binary_arg = mock_run.call_args[0][0]
+                assert binary_arg == "/custom/path/gnina"
         finally:
             CONFIG.gnina_binary_path = saved_path
 

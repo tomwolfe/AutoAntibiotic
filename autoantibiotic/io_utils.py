@@ -667,6 +667,95 @@ class BinaryManager:
         return results
 
 
+# ── ToolExecutor ──────────────────────────────────────────────────
+
+
+class ToolExecutor:
+    """Standardized executor for external pipeline binaries.
+
+    Wraps :func:`subprocess.run` with consistent timeout handling,
+    :class:`FileNotFoundError` → :class:`AutoAntibioticError` translation,
+    and optional single automatic retry on failure.
+
+    Usage::
+
+        executor = ToolExecutor()
+        result = executor.run("vina", ["--receptor", "rec.pdbqt", ...], timeout=120)
+        if result.timed_out:
+            ...
+        if result.returncode != 0:
+            ...
+    """
+
+    def __init__(self, retry: bool = True) -> None:
+        self._retry = retry
+
+    def run(
+        self,
+        binary: str,
+        args: List[str],
+        timeout: int = 120,
+    ) -> ToolResult:
+        """Execute *binary* with the given *args*.
+
+        Args:
+            binary: Binary name or full path (e.g. ``"vina"``, ``"obabel"``).
+            args: List of command-line arguments.
+            timeout: Maximum wall-clock seconds for the subprocess.
+
+        Returns:
+            :class:`ToolResult` with ``returncode``, ``stdout``, ``stderr``,
+            and ``timed_out`` populated.  *timed_out* is ``True`` when the
+            subprocess was killed after *timeout* seconds.
+
+        Raises:
+            AutoAntibioticError: If the binary cannot be found on ``PATH``.
+        """
+        cmd = [binary] + list(args)
+
+        def _run_once() -> ToolResult:
+            try:
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=timeout,
+                )
+                return ToolResult(
+                    returncode=proc.returncode,
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                )
+            except subprocess.TimeoutExpired:
+                return ToolResult(
+                    returncode=-1, stdout="", stderr="",
+                    timed_out=True,
+                )
+            except FileNotFoundError:
+                raise AutoAntibioticError(
+                    f"Binary '{binary}' not found. "
+                    "Please ensure it is installed and on your PATH. "
+                    f"Command was: {' '.join(cmd)}"
+                )
+
+        result = _run_once()
+        if self._retry and result.returncode != 0 and not result.timed_out:
+            binary_name = os.path.basename(binary)
+            log.warning(
+                "  Tool '%s' failed on first attempt (exit %d) — retrying once.\n"
+                "  Command: %s\n"
+                "  stderr: %s",
+                binary_name, result.returncode, " ".join(cmd), result.stderr.strip(),
+            )
+            result = _run_once()
+            if result.returncode != 0 and not result.timed_out:
+                log.error(
+                    "  Tool '%s' failed again on retry (exit %d).\n"
+                    "  Command: %s\n"
+                    "  stderr: %s",
+                    binary_name, result.returncode, " ".join(cmd), result.stderr.strip(),
+                )
+
+        return result
+
+
 # ── Safe subprocess runner with retry ─────────────────────────────
 
 

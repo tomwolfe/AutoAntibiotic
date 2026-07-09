@@ -20,7 +20,7 @@ from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.DataStructs import TanimotoSimilarity
 from rdkit.SimDivFilters.rdSimDivPickers import MaxMinPicker
 
-from .config import CONFIG
+from .config import CONFIG, PipelineConfig
 from .models import CompoundRecord
 from .io_utils import PipelineAudit, log
 from .utils.brics_utils import decompose_molecule, recombine_fragments
@@ -134,6 +134,7 @@ def _brics_recombination(
     target_count: int,
     seen_smiles: set,
     seed: int = CONFIG.random_seed,
+    config: Optional[PipelineConfig] = None,
 ) -> Tuple[List[CompoundRecord], set]:
     """Recombine BRICS fragments using BRICSBuild, then pick a diverse subset via MaxMin.
 
@@ -154,7 +155,8 @@ def _brics_recombination(
         the list of selected ``CompoundRecord`` objects and
         *updated_seen_smiles* includes the newly generated SMILES.
     """
-    pool_mult = CONFIG.diversity_pool_multiplier
+    cfg = config or CONFIG
+    pool_mult = cfg.diversity_pool_multiplier
     target_pool = target_count * pool_mult
     max_products = target_count * pool_mult * 4
 
@@ -175,7 +177,7 @@ def _brics_recombination(
         has_undefined = _check_undefined_stereo(product)
         base_id = f"AA-{n_produced:04d}"
         if has_undefined:
-            isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
+            isomers = _enumerate_stereoisomers(product, cfg.max_stereoisomers)
             if isomers:
                 for j, iso in enumerate(isomers):
                     iso_smi = Chem.MolToSmiles(iso)
@@ -205,7 +207,7 @@ def _brics_recombination(
 
     fps = [
         AllChem.GetMorganFingerprintAsBitVect(
-            r.mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+            r.mol, radius=cfg.morgan_radius, nBits=cfg.morgan_nbits,
         )
         for r in records
     ]
@@ -226,13 +228,15 @@ def _brics_recombination(
 def _generate_records(
     target_count: int,
     seed: int,
+    config: Optional[PipelineConfig] = None,
 ) -> Iterator[CompoundRecord]:
     """Generator that yields CompoundRecord objects for the library.
 
     Used internally by :func:`generate_candidate_library` to allow
     streaming when the target count is large.
     """
-    all_scaffolds: List[str] = CONFIG.natural_product_scaffolds + CONFIG.additional_scaffolds
+    cfg = config or CONFIG
+    all_scaffolds: List[str] = cfg.natural_product_scaffolds + cfg.additional_scaffolds
     scaffold_mols: List[Chem.Mol] = []
     for smi in all_scaffolds:
         mol = _validate_mol(smi)
@@ -241,22 +245,22 @@ def _generate_records(
 
     log.info(f"  Loaded {len(scaffold_mols)} / {len(all_scaffolds)} valid scaffolds.")
 
-    if not scaffold_mols and not CONFIG.brics_building_blocks:
+    if not scaffold_mols and not cfg.brics_building_blocks:
         log.error("  ✗  No valid scaffolds or building blocks. Aborting library generation.")
         return
 
     decomposed_frags: set = set()
     for mol in scaffold_mols:
-        fragments = decompose_molecule(mol, min_size=CONFIG.brics_min_fragment_size)
+        fragments = decompose_molecule(mol, min_size=cfg.brics_min_fragment_size)
         for frag_smi in fragments:
             frag_mol = _validate_mol(frag_smi)
-            if frag_mol is not None and _count_atoms(frag_mol) >= CONFIG.brics_min_fragment_size:
+            if frag_mol is not None and _count_atoms(frag_mol) >= cfg.brics_min_fragment_size:
                 decomposed_frags.add(frag_smi)
 
     log.info(f"  Decomposed {len(decomposed_frags)} unique BRICS fragments from scaffolds.")
 
     all_building_blocks: set = set()
-    for smi in CONFIG.brics_building_blocks:
+    for smi in cfg.brics_building_blocks:
         mol = _validate_mol(smi)
         if mol is not None:
             all_building_blocks.add(smi)
@@ -292,7 +296,7 @@ def _generate_records(
 
     if len(frag_mols) >= 2:
         recon_records, seen_smiles = _brics_recombination(
-            frag_mols, target_count, seen_smiles, seed,
+            frag_mols, target_count, seen_smiles, seed, config,
         )
         for rec in recon_records:
             yield rec
@@ -303,7 +307,7 @@ def _generate_records(
             "Using scaffold enumeration only."
         )
 
-    for name, smi in CONFIG.control_smiles.items():
+    for name, smi in cfg.control_smiles.items():
         mol = _validate_mol(smi)
         if mol is None:
             continue
@@ -320,31 +324,21 @@ def _generate_records(
 def generate_candidate_library(
     target_count: int = CONFIG.library_target_count,
     seed: int = CONFIG.random_seed,
+    config: Optional[PipelineConfig] = None,
 ) -> Union[List[CompoundRecord], Iterator[CompoundRecord]]:
-    """Phase 2.1 — Library Generation via BRICS fragment recombination.
-
-    Returns a list of CompoundRecord objects. When *target_count* exceeds
-    :attr:`CONFIG.library_generator_threshold` (default 1000), returns a
-    generator that yields records lazily to reduce memory pressure.
-
-    When ``CONFIG.generativemode`` is True, the function uses a
-    JT-VAE-based generative model to produce novel scaffold analogs
-    instead of rigid BRICS recombination.
-    """
     log.info("─── Phase 2: Library Generation ───")
+    cfg = config or CONFIG
 
-    # ── Generative mode ──
-    if CONFIG.generative_mode:
+    if cfg.generative_mode:
         try:
             from .generative_design import generate_novel_scaffolds
             log.info("  Generative mode enabled: using JT-VAE for scaffold generation.")
 
-            # Use the first scaffold as the core for generation
-            all_scaffolds: List[str] = CONFIG.natural_product_scaffolds + CONFIG.additional_scaffolds
+            all_scaffolds: List[str] = cfg.natural_product_scaffolds + cfg.additional_scaffolds
             core_smiles = all_scaffolds[0] if all_scaffolds else ""
 
             if core_smiles:
-                n_samples = CONFIG.generative_n_samples or target_count
+                n_samples = cfg.generative_n_samples or target_count
                 scaffolds = generate_novel_scaffolds(
                     core_smiles,
                     n_samples=n_samples,
@@ -367,11 +361,11 @@ def generate_candidate_library(
             log.warning(f"  Generative mode failed: {exc}. Falling back to BRICS.")
 
     # ── BRICS fallback ──
-    use_generator = target_count > CONFIG.library_generator_threshold
-    gen = _generate_records(target_count, seed)
+    use_generator = target_count > cfg.library_generator_threshold
+    gen = _generate_records(target_count, seed, config)
 
     if use_generator:
-        log.info(f"  Streaming generator mode (target > {CONFIG.library_generator_threshold} compounds).")
+        log.info(f"  Streaming generator mode (target > {cfg.library_generator_threshold} compounds).")
         return gen
 
     records = list(gen)
@@ -424,7 +418,7 @@ def _get_pharmacophore_points_3d(
     return points
 
 
-def _build_allosteric_pharmacophore() -> Optional[Dict[str, Any]]:
+def _build_allosteric_pharmacophore(config: Optional[PipelineConfig] = None) -> Optional[Dict[str, Any]]:
     """Build a pharmacophore query model based on PBP2a allosteric pocket features.
 
     When ``CONFIG.pharmacophore_ref_ligand_smi`` is set, a 3-D pharmacophore
@@ -439,17 +433,18 @@ def _build_allosteric_pharmacophore() -> Optional[Dict[str, Any]]:
         A dict with mode-specific keys, or ``None`` if the RDKit feature
         factory cannot be loaded.
     """
+    cfg = config or CONFIG
     if not _HAVE_PHARMACOPHORE or _PHARM_FACTORY is None:
         return None
 
     # ── 3-D pharmacophore from reference ligand ──
-    if CONFIG.pharmacophore_ref_ligand_smi:
-        ref_mol = Chem.MolFromSmiles(CONFIG.pharmacophore_ref_ligand_smi)
+    if cfg.pharmacophore_ref_ligand_smi:
+        ref_mol = Chem.MolFromSmiles(cfg.pharmacophore_ref_ligand_smi)
         if ref_mol is not None:
             ref_mol_3d = Chem.RWMol(ref_mol)
             ref_mol_3d = Chem.AddHs(ref_mol_3d)
             params = Chem.rdDistGeom.ETKDGv3()
-            params.randomSeed = CONFIG.random_seed
+            params.randomSeed = cfg.random_seed
             if Chem.rdDistGeom.EmbedMolecule(ref_mol_3d, params) >= 0:
                 AllChem.MMFFOptimizeMolecule(ref_mol_3d, maxIters=500)
                 ref_features = _get_pharmacophore_points_3d(ref_mol_3d)
@@ -480,6 +475,7 @@ def check_pharmacophore_match(
     query: Optional[Dict[str, Any]] = None,
     min_matches: int = 2,
     tolerance: float = 2.0,
+    config: Optional[PipelineConfig] = None,
 ) -> bool:
     """Check whether *mol* satisfies at least *min_matches* pharmacophore features.
 
@@ -510,8 +506,9 @@ def check_pharmacophore_match(
         ``True`` if the molecule passes the pharmacophore filter,
         ``False`` otherwise.
     """
+    cfg = config or CONFIG
     if query is None:
-        query = _build_allosteric_pharmacophore()
+        query = _build_allosteric_pharmacophore(config)
     if query is None or not _HAVE_PHARMACOPHORE or _PHARM_FACTORY is None:
         return True  # pass-through when pharmacophore is unavailable
 
@@ -528,7 +525,7 @@ def check_pharmacophore_match(
         mol_3d = Chem.RWMol(mol)
         mol_3d = Chem.AddHs(mol_3d)
         params = Chem.rdDistGeom.ETKDGv3()
-        params.randomSeed = CONFIG.random_seed
+        params.randomSeed = cfg.random_seed
         if Chem.rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
             return False
         AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
@@ -577,7 +574,7 @@ def check_pharmacophore_match(
             return False
 
         rmsd = float(np.sqrt(np.mean(np.square(matched_distances))))
-        return rmsd < CONFIG.pharmacophore_rmsd_threshold
+        return rmsd < cfg.pharmacophore_rmsd_threshold
 
     # ── 2-D feature-counting fallback ───────────────────────────────
     try:
@@ -602,6 +599,7 @@ def generate_pharmacophore_aware_library(
     target_count: int = CONFIG.library_target_count,
     seed: int = CONFIG.random_seed,
     allosteric_pocket_coords: Optional[np.ndarray] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> List[CompoundRecord]:
     """Generate a focused library enriched for PBP2a allosteric-site binding.
 
@@ -628,17 +626,18 @@ def generate_pharmacophore_aware_library(
         List of pharmacophore-enriched ``CompoundRecord`` objects.
     """
     log.info("─── Pharmacophore-Aware Library Generation ───")
-    query = _build_allosteric_pharmacophore()
+    cfg = config or CONFIG
+    query = _build_allosteric_pharmacophore(config)
     if query is None or not _HAVE_PHARMACOPHORE:
         log.warning("  Pharmacophore factory unavailable; falling back to standard library.")
-        return list(generate_candidate_library(target_count, seed))
+        return list(generate_candidate_library(target_count, seed, config=config))
 
     pharm_feats = query["feat_types"]
     log.info(f"  Pharmacophore features: {pharm_feats}")
     if allosteric_pocket_coords is not None:
         log.info(f"  3D pocket coords provided ({allosteric_pocket_coords.shape[0]} residues).")
 
-    standard_records = list(generate_candidate_library(target_count, seed))
+    standard_records = list(generate_candidate_library(target_count, seed, config=config))
     log.info(f"  Standard library size: {len(standard_records)}")
 
     passed: List[CompoundRecord] = []
@@ -651,13 +650,14 @@ def generate_pharmacophore_aware_library(
             rec.mol = mol
         if check_pharmacophore_match(
             mol, query,
-            min_matches=CONFIG.pharmacophore_min_matches,
-            tolerance=CONFIG.pharmacophore_tolerance,
+            min_matches=cfg.pharmacophore_min_matches,
+            tolerance=cfg.pharmacophore_tolerance,
+            config=config,
         ):
             passed.append(rec)
 
     passed = passed[:target_count]
-    log.info(f"  Pharmacophore-enriched library: {len(passed)} compounds (≥{CONFIG.pharmacophore_min_matches} feat. matches).")
+    log.info(f"  Pharmacophore-enriched library: {len(passed)} compounds (≥{cfg.pharmacophore_min_matches} feat. matches).")
     return passed
 
 
@@ -679,18 +679,13 @@ def _setup_reactive_catalog() -> Optional[FilterCatalog]:
         return None
 
 
-def _compute_strain_energy(mol: Chem.Mol) -> Optional[float]:
-    """Compute the MMFF94 strain energy (kcal/mol) for a molecule.
-
-    Generates a 3-D conformer with ETKDGv3, optimises with MMFF94, and
-    returns the strain energy = initial energy - final energy.
-    Returns ``None`` if 3-D embedding or FF setup fails.
-    """
+def _compute_strain_energy(mol: Chem.Mol, config: Optional[PipelineConfig] = None) -> Optional[float]:
+    cfg = config or CONFIG
     try:
         mol_3d = Chem.RWMol(mol)
         mol_3d = Chem.AddHs(mol_3d)
         params = rdDistGeom.ETKDGv3()
-        params.randomSeed = CONFIG.random_seed
+        params.randomSeed = cfg.random_seed
         if rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
             return None
         props = AllChem.MMFFGetMoleculeProperties(mol_3d)
@@ -725,14 +720,14 @@ def _setup_filter_catalogs() -> tuple:
     return pains_catalog, tox_catalog, reactive_catalog
 
 
-def _build_ref_fingerprints() -> Dict[str, Any]:
-    """Build Morgan fingerprints for all reference antibiotics."""
+def _build_ref_fingerprints(config: Optional[PipelineConfig] = None) -> Dict[str, Any]:
+    cfg = config or CONFIG
     ref_mols: Dict[str, Any] = {}
-    for name, smi in CONFIG.reference_antibiotics.items():
+    for name, smi in cfg.reference_antibiotics.items():
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             ref_mols[name] = AllChem.GetMorganFingerprintAsBitVect(
-                mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+                mol, radius=cfg.morgan_radius, nBits=cfg.morgan_nbits,
             )
     return ref_mols
 
@@ -749,10 +744,11 @@ def _filter_beta_lactam(
 def _filter_similarity(
     record: CompoundRecord, mol: Chem.Mol, ref_fps: Dict[str, Any],
     threshold: float,
+    config: Optional[PipelineConfig] = None,
 ) -> tuple[bool, str]:
-    """Skip compounds too similar to known antibiotics."""
+    cfg = config or CONFIG
     fp = AllChem.GetMorganFingerprintAsBitVect(
-        mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+        mol, radius=cfg.morgan_radius, nBits=cfg.morgan_nbits,
     )
     max_sim = 0.0
     for ref_fp in ref_fps.values():
@@ -767,18 +763,19 @@ def _filter_similarity(
 
 def _filter_lipinski(
     record: CompoundRecord, mol: Chem.Mol,
+    config: Optional[PipelineConfig] = None,
 ) -> tuple[bool, str]:
-    """Enforce Lipinski Rule-of-5 and QED threshold."""
+    cfg = config or CONFIG
     try:
         mw = Descriptors.MolWt(mol)
         logp = Crippen.MolLogP(mol)
         hbd = Descriptors.NumHDonors(mol)
         hba = Descriptors.NumHAcceptors(mol)
         lipinski_ok = (
-            mw <= CONFIG.lipinski_mw_max
-            and logp <= CONFIG.lipinski_logp_max
-            and hbd <= CONFIG.lipinski_hbd_max
-            and hba <= CONFIG.lipinski_hba_max
+            mw <= cfg.lipinski_mw_max
+            and logp <= cfg.lipinski_logp_max
+            and hbd <= cfg.lipinski_hbd_max
+            and hba <= cfg.lipinski_hba_max
         )
         qed = QED.qed(mol)
     except Exception:
@@ -787,7 +784,7 @@ def _filter_lipinski(
     record.passes_lipinski = lipinski_ok
     record.qed_score = qed
 
-    if not lipinski_ok or qed <= CONFIG.qed_threshold:
+    if not lipinski_ok or qed <= cfg.qed_threshold:
         return False, "admet"
     return True, ""
 
@@ -805,12 +802,13 @@ def _filter_pains(
 
 def _filter_sa_score(
     record: CompoundRecord, mol: Chem.Mol,
+    config: Optional[PipelineConfig] = None,
 ) -> tuple[bool, str]:
-    """Filter by synthetic accessibility score."""
+    cfg = config or CONFIG
     if _HAVE_SA_SCORE:
         try:
             sa_score = _compute_sa_score(mol)
-            if sa_score > CONFIG.sa_score_threshold:
+            if sa_score > cfg.sa_score_threshold:
                 return False, "sa_score"
         except Exception:
             pass
@@ -841,33 +839,30 @@ def _filter_reactive(
 
 def _filter_strain(
     record: CompoundRecord, mol: Chem.Mol,
+    config: Optional[PipelineConfig] = None,
 ) -> tuple[bool, str]:
-    """Remove conformationally strained compounds."""
+    cfg = config or CONFIG
     strain = _compute_strain_energy(mol)
-    if strain is not None and strain > CONFIG.strain_energy_threshold:
+    if strain is not None and strain > cfg.strain_energy_threshold:
         return False, "strain"
     return True, ""
 
 
 def _filter_ml_admet(
     record: CompoundRecord, mol: Chem.Mol,
+    config: Optional[PipelineConfig] = None,
 ) -> tuple[bool, str]:
-    """Remove compounds flagged by the ML-ADMET predictor.
-
-    Runs *after* Lipinski/QED but *before* PAINS and docking.
-    Uses the same predictor instance as :func:`predict_admet_profile`.
-    """
-    if not CONFIG.use_ml_admet:
+    cfg = config or CONFIG
+    if not cfg.use_ml_admet:
         return True, ""
 
     predictor = _get_ml_admet_predictor()
     if predictor is None:
-        # ML unavailable — pass through (rule-based ADMET is separate)
         return True, ""
 
     try:
         herg_prob = predictor.predict_herg_probability(mol)
-        if herg_prob is not None and herg_prob > CONFIG.ml_admet_herg_threshold:
+        if herg_prob is not None and herg_prob > cfg.ml_admet_herg_threshold:
             return False, "ml_admet"
     except Exception:
         pass
@@ -879,42 +874,25 @@ def apply_filters(
     records: Union[List[CompoundRecord], Iterator[CompoundRecord]],
     similarity_threshold: float = CONFIG.similarity_threshold,
     audit: Optional[PipelineAudit] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> List[CompoundRecord]:
-    """Phase 2.2 — Apply structural, similarity, ADMET, PAINS, toxicity, and strain filters.
-
-    Filter chain:
-        1. Structural exclusion (β-lactam SMARTS).
-        2. Similarity filter vs reference antibiotics.
-        3. ADMET: Lipinski Rule of 5 + QED > 0.6.
-        4. PAINS alerts via RDKit FilterCatalog.
-        5. Synthetic Accessibility (SA Score ≤ 6.0).
-        6. Toxicity alerts (mutagenicity / cardiotoxicity if available).
-        7. Reactive group filter (BRENK catalog).
-        8. 3D strain energy check (MMFF94 via ETKDGv3).
-        9. Diversity check: if < 100 pass, relax similarity to 0.5.
-
-    When *audit* is provided, each dropped compound is recorded with the
-    filter name as the dropout reason.
-
-    Returns filtered list of CompoundRecord.
-    """
     log.info("─── Phase 2: Filtering ───")
+    cfg = config or CONFIG
 
-    lactam_pattern = Chem.MolFromSmarts(CONFIG.beta_lactam_smarts)
-    ref_fps = _build_ref_fingerprints()
+    lactam_pattern = Chem.MolFromSmarts(cfg.beta_lactam_smarts)
+    ref_fps = _build_ref_fingerprints(config)
     pains_catalog, tox_catalog, reactive_catalog = _setup_filter_catalogs()
 
-    # Build filter pipeline as a list of (name, function) tuples
     filter_pipeline: List[tuple] = [
         ("structural", lambda r, m: _filter_beta_lactam(r, m, lactam_pattern)),
-        ("similarity", lambda r, m: _filter_similarity(r, m, ref_fps, similarity_threshold)),
-        ("admet", _filter_lipinski),
-        ("ml_admet", _filter_ml_admet),
+        ("similarity", lambda r, m: _filter_similarity(r, m, ref_fps, similarity_threshold, config)),
+        ("admet", lambda r, m: _filter_lipinski(r, m, config)),
+        ("ml_admet", lambda r, m: _filter_ml_admet(r, m, config)),
         ("pains", lambda r, m: _filter_pains(r, m, pains_catalog)),
-        ("sa_score", _filter_sa_score),
+        ("sa_score", lambda r, m: _filter_sa_score(r, m, config)),
         ("toxicity", lambda r, m: _filter_toxicity(r, m, tox_catalog)),
         ("reactive", lambda r, m: _filter_reactive(r, m, reactive_catalog)),
-        ("strain", _filter_strain),
+        ("strain", lambda r, m: _filter_strain(r, m, config)),
     ]
 
     skipped: Dict[str, int] = {name: 0 for name, _ in filter_pipeline}
@@ -941,13 +919,13 @@ def apply_filters(
     log.info(f"  Structural exclusion (β-lactam): {skipped['structural']} removed.")
     log.info(f"  Similarity filter (Tc < {similarity_threshold}): {skipped['similarity']} removed.")
     log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped['admet']} removed.")
-    if CONFIG.use_ml_admet:
-        log.info(f"  ML-ADMET filter (hERG probability > {CONFIG.ml_admet_herg_threshold}): {skipped['ml_admet']} removed.")
+    if cfg.use_ml_admet:
+        log.info(f"  ML-ADMET filter (hERG probability > {cfg.ml_admet_herg_threshold}): {skipped['ml_admet']} removed.")
     else:
         log.info("  ML-ADMET filter: disabled (use_ml_admet=False).")
     log.info(f"  PAINS filter: {skipped['pains']} removed.")
     if _HAVE_SA_SCORE:
-        log.info(f"  SA Score filter (> {CONFIG.sa_score_threshold}): {skipped['sa_score']} removed.")
+        log.info(f"  SA Score filter (> {cfg.sa_score_threshold}): {skipped['sa_score']} removed.")
     else:
         log.info("  SA Score filter: skipped (sascore not installed).")
     if tox_catalog is not None:
@@ -958,17 +936,17 @@ def apply_filters(
         log.info(f"  Reactive group filter: {skipped['reactive']} removed.")
     else:
         log.info("  Reactive group filter: skipped (BRENK catalog unavailable).")
-    log.info(f"  Strain energy filter (> {CONFIG.strain_energy_threshold} kcal/mol): {skipped['strain']} removed.")
+    log.info(f"  Strain energy filter (> {cfg.strain_energy_threshold} kcal/mol): {skipped['strain']} removed.")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
-    if len(passed) < CONFIG.diversity_min_count and similarity_threshold < CONFIG.similarity_threshold_relaxed:
+    if len(passed) < cfg.diversity_min_count and similarity_threshold < cfg.similarity_threshold_relaxed:
         log.warning(
-            f"  Only {len(passed)} compounds passed strict filters (< {CONFIG.diversity_min_count}). "
-            f"Relaxing similarity threshold to {CONFIG.similarity_threshold_relaxed} and re-running."
+            f"  Only {len(passed)} compounds passed strict filters (< {cfg.diversity_min_count}). "
+            f"Relaxing similarity threshold to {cfg.similarity_threshold_relaxed} and re-running."
         )
         if audit is not None:
             audit.reset()
-        return apply_filters(records, similarity_threshold=CONFIG.similarity_threshold_relaxed, audit=audit)
+        return apply_filters(records, similarity_threshold=cfg.similarity_threshold_relaxed, audit=audit, config=config)
 
     log.info("─── Phase 2 complete ───")
     return passed
@@ -979,43 +957,10 @@ def generate_grown_library(
     building_blocks: Optional[List[str]] = None,
     max_growth_steps: int = 1,
     target_per_core: int = 50,
+    config: Optional[PipelineConfig] = None,
 ) -> Iterator[CompoundRecord]:
-    """Iteratively grow core fragments by attaching BRICS-compatible
-    building blocks to reactive sites on the core.
-
-    For each core record:
-
-    1. Decompose the core into BRICS fragments to expose reactive
-       (dummy-atom) sites.
-    2. Combine the core fragments with the provided *building_blocks*
-       using RDKit's :func:`BRICS.BRICSBuild`.
-    3. Filter intermediate products by Lipinski Rule-of-5 and QED
-       at each growth step to prevent combinatorial explosion.
-    4. Apply MaxMin diversity picking on the final pool.
-    5. Yield each valid product as a ``CompoundRecord``.
-
-    Only products that contain at least one core fragment as a
-    substructure are retained, ensuring that the core scaffold is
-    preserved.
-
-    Parameters
-    ----------
-    core_records : list of CompoundRecord
-        High-scoring core fragments from a previous pipeline run.
-    building_blocks : list of str, optional
-        BRICS-compatible building block SMILES (with dummy atoms).
-        Defaults to ``CONFIG.brics_building_blocks``.
-    max_growth_steps : int
-        Number of iterative growth cycles (default 1).
-    target_per_core : int
-        Maximum number of grown compounds to yield per core (default 50).
-
-    Yields
-    ------
-    CompoundRecord
-        Each valid growth product.
-    """
-    bbs: List[str] = building_blocks if building_blocks is not None else CONFIG.brics_building_blocks
+    cfg = config or CONFIG
+    bbs: List[str] = building_blocks if building_blocks is not None else cfg.brics_building_blocks
     bb_mols: List[Chem.Mol] = [
         m for m in (Chem.MolFromSmiles(s) for s in bbs) if m is not None
     ]
@@ -1025,7 +970,7 @@ def generate_grown_library(
 
     seen_smiles: set = set()
     compound_counter: int = 0
-    rng = np.random.default_rng(CONFIG.random_seed)
+    rng = np.random.default_rng(cfg.random_seed)
 
     all_records: List[CompoundRecord] = []
 
@@ -1038,8 +983,7 @@ def generate_grown_library(
         core_smi = Chem.MolToSmiles(core_mol)
         seen_smiles.add(core_smi)
 
-        # Decompose core to expose BRICS reactive sites
-        core_frag_smiles = decompose_molecule(core_mol, min_size=CONFIG.brics_min_fragment_size)
+        core_frag_smiles = decompose_molecule(core_mol, min_size=cfg.brics_min_fragment_size)
         if not core_frag_smiles:
             continue
 
@@ -1055,7 +999,7 @@ def generate_grown_library(
         for step in range(max_growth_steps):
             next_gen: List[Chem.Mol] = []
             for parent in growth_mols:
-                parent_frag_smiles = decompose_molecule(parent, min_size=CONFIG.brics_min_fragment_size)
+                parent_frag_smiles = decompose_molecule(parent, min_size=cfg.brics_min_fragment_size)
                 parent_frags: List[Chem.Mol] = [
                     m for m in (Chem.MolFromSmiles(s) for s in parent_frag_smiles)
                     if m is not None
@@ -1089,19 +1033,16 @@ def generate_grown_library(
                     if ring_info.NumRings() == 0:
                         continue
 
-                    # Early pharmacophore pruning: discard fragments that
-                    # lack the minimum required Donor/Acceptor/Hydrophobe
-                    # features before attempting further growth.
-                    min_features = CONFIG.pharmacophore_min_matches
-                    if CONFIG.use_pharmacophore_filter:
+                    min_features = cfg.pharmacophore_min_matches
+                    if cfg.use_pharmacophore_filter:
                         if not check_pharmacophore_match(
                             product,
                             min_matches=min_features,
-                            tolerance=CONFIG.pharmacophore_tolerance,
+                            tolerance=cfg.pharmacophore_tolerance,
+                            config=config,
                         ):
                             continue
 
-                    # Lipinski + QED filter
                     try:
                         mw = Descriptors.MolWt(product)
                         logp_val = Crippen.MolLogP(product)
@@ -1112,19 +1053,19 @@ def generate_grown_library(
                         continue
 
                     lipinski_ok = (
-                        mw <= CONFIG.lipinski_mw_max
-                        and logp_val <= CONFIG.lipinski_logp_max
-                        and hbd <= CONFIG.lipinski_hbd_max
-                        and hba <= CONFIG.lipinski_hba_max
+                        mw <= cfg.lipinski_mw_max
+                        and logp_val <= cfg.lipinski_logp_max
+                        and hbd <= cfg.lipinski_hbd_max
+                        and hba <= cfg.lipinski_hba_max
                     )
-                    if not lipinski_ok or qed < CONFIG.qed_threshold:
+                    if not lipinski_ok or qed < cfg.qed_threshold:
                         continue
 
                     seen_smiles.add(smi)
                     has_undefined = _check_undefined_stereo(product)
                     base_id = f"GROWN-{compound_counter:04d}"
                     if has_undefined:
-                        isomers = _enumerate_stereoisomers(product, CONFIG.max_stereoisomers)
+                        isomers = _enumerate_stereoisomers(product, cfg.max_stereoisomers)
                         if isomers:
                             for j, iso in enumerate(isomers):
                                 iso_smi = Chem.MolToSmiles(iso)
@@ -1136,14 +1077,14 @@ def generate_grown_library(
                                     iso_hbd = Descriptors.NumHDonors(iso)
                                     iso_hba = Descriptors.NumHAcceptors(iso)
                                     iso_lipinski = (
-                                        iso_mw <= CONFIG.lipinski_mw_max
-                                        and iso_logp <= CONFIG.lipinski_logp_max
-                                        and iso_hbd <= CONFIG.lipinski_hbd_max
-                                        and iso_hba <= CONFIG.lipinski_hba_max
+                                        iso_mw <= cfg.lipinski_mw_max
+                                        and iso_logp <= cfg.lipinski_logp_max
+                                        and iso_hbd <= cfg.lipinski_hbd_max
+                                        and iso_hba <= cfg.lipinski_hba_max
                                     )
                                 except Exception:
                                     continue
-                                if not iso_lipinski or iso_qed < CONFIG.qed_threshold:
+                                if not iso_lipinski or iso_qed < cfg.qed_threshold:
                                     continue
                                 rec = CompoundRecord(
                                     compound_id=f"{base_id}-{suf}",
@@ -1178,17 +1119,16 @@ def generate_grown_library(
             if not growth_mols:
                 break
 
-    # MaxMin diversity picking on the final pool
     if len(all_records) > target_per_core:
         fps = [
             AllChem.GetMorganFingerprintAsBitVect(
-                r.mol, radius=CONFIG.morgan_radius, nBits=CONFIG.morgan_nbits,
+                r.mol, radius=cfg.morgan_radius, nBits=cfg.morgan_nbits,
             )
             for r in all_records
         ]
         picker = MaxMinPicker()
         pick_ids = picker.LazyBitVectorPick(
-            fps, len(fps), target_per_core, seed=CONFIG.random_seed,
+            fps, len(fps), target_per_core, seed=cfg.random_seed,
         )
         all_records = [all_records[i] for i in pick_ids]
         log.info(

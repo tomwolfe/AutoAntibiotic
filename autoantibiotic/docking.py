@@ -23,7 +23,7 @@ if not hasattr(rdkit, "six"):
     rdkit.six = _six_mod
     del _sys, _io, _six_mod
 
-from .config import CONFIG, ConfigurationError
+from .config import CONFIG, PipelineConfig, ConfigurationError
 from .models import CompoundRecord
 from .io_utils import (
     AutoAntibioticError,
@@ -31,6 +31,7 @@ from .io_utils import (
     DockingResultValidator,
     GninaError,
     PipelineAudit,
+    ToolExecutor,
     VinaError,
     OpenBabelError,
     log,
@@ -83,10 +84,12 @@ def _extract_native_ligand_from_holo(
     holo_pdb_path: str,
     output_ligand_smi: str,
     output_ligand_pdbqt: str,
+    config: Optional[PipelineConfig] = None,
 ) -> Optional[str]:
     """Parse the holo structure, locate the co-crystallised ligand,
     write its SMILES to *output_ligand_smi* and its PDBQT to *output_ligand_pdbqt*."""
-    holo_pdb_id = CONFIG.pdb_ids["PBP2a_holo"]
+    cfg = config or CONFIG
+    holo_pdb_id = cfg.pdb_ids["PBP2a_holo"]
     try:
         from Bio.PDB import PDBIO, PDBParser, Select
 
@@ -127,12 +130,18 @@ def _extract_native_ligand_from_holo(
             log.warning("  ⚠  RDKit could not read ligand PDB, trying obabel…")
             smi_file = output_ligand_smi
             try:
-                safe_run_tool(["obabel", lig_pdb, "-O", smi_file], timeout=CONFIG.obabel_timeout_s)
+                executor = ToolExecutor(retry=True)
+                result = executor.run(
+                    "obabel", [lig_pdb, "-O", smi_file],
+                    timeout=cfg.obabel_timeout_s,
+                )
+                if result.returncode != 0 or result.timed_out:
+                    return None
                 with open(smi_file) as f:
                     smi = f.readline().strip()
                 if smi:
                     return smi
-            except (RuntimeError, OSError, AutoAntibioticError):
+            except AutoAntibioticError:
                 pass
             return None
 
@@ -242,6 +251,7 @@ def run_redocking_validation(
     work_dir: str,
     deps: Dict[str, Any],
     center: Optional[np.ndarray] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> Tuple[bool, Optional[float]]:
     """Phase 0 — Protocol Validation.
 
@@ -250,13 +260,14 @@ def run_redocking_validation(
 
     Returns (success: bool, rmsd: float | None).
     """
+    cfg = config or CONFIG
     log.info("─── Phase 0: Redocking Validation ───")
 
     lig_smi = os.path.join(work_dir, "native_ligand.smi")
     lig_pdbqt = os.path.join(work_dir, "native_ligand.pdbqt")
     docked_pdb = os.path.join(work_dir, "native_docked.pdb")
 
-    smi = _extract_native_ligand_from_holo(holo_pdb_path, lig_smi, lig_pdbqt)
+    smi = _extract_native_ligand_from_holo(holo_pdb_path, lig_smi, lig_pdbqt, config=cfg)
     if smi is None:
         log.warning("  ⚠  Could not extract native ligand. Skipping redocking validation.")
         return False, None
@@ -269,9 +280,8 @@ def run_redocking_validation(
     docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
     if center is None:
         center = np.array([0.0, 0.0, 0.0])
-    bx, by, bz = CONFIG.redocking_box_size
+    bx, by, bz = cfg.redocking_box_size
     vina_cmd = [
-        "vina",
         "--receptor", target_pdbqt_path,
         "--ligand", lig_pdbqt,
         "--out", docked_pdbqt,
@@ -279,21 +289,27 @@ def run_redocking_validation(
         "--center_y", f"{center[1]:.3f}",
         "--center_z", f"{center[2]:.3f}",
         "--size_x", f"{bx:.1f}", "--size_y", f"{by:.1f}", "--size_z", f"{bz:.1f}",
-        "--exhaustiveness", str(CONFIG.vina_exhaustiveness),
+        "--exhaustiveness", str(cfg.vina_exhaustiveness),
     ]
 
+    executor = ToolExecutor(retry=True)
     try:
-        safe_run_tool(vina_cmd, timeout=CONFIG.vina_timeout_s, ignore_stderr_warnings=True)
-    except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
+        vina_result = executor.run("vina", vina_cmd, timeout=cfg.vina_timeout_s)
+        if vina_result.returncode != 0 or vina_result.timed_out:
+            log.warning(f"  Vina redocking failed: {vina_result.stderr.strip() or 'timed out'}")
+            return False, None
+    except AutoAntibioticError as exc:
         log.warning(f"  Vina redocking failed: {exc}")
         return False, None
 
     try:
-        safe_run_tool(
-            ["obabel", docked_pdbqt, "-O", docked_pdb, "--gen3d"],
-            timeout=CONFIG.obabel_timeout_s,
+        obabel_result = executor.run(
+            "obabel", [docked_pdbqt, "-O", docked_pdb, "--gen3d"],
+            timeout=cfg.obabel_timeout_s,
         )
-    except (RuntimeError, OpenBabelError, AutoAntibioticError):
+        if obabel_result.returncode != 0 or obabel_result.timed_out:
+            raise AutoAntibioticError("obabel conversion failed")
+    except AutoAntibioticError:
         log.warning("  Could not convert docked PDBQT to PDB. Trying RDKit PDBQT reader.")
         mol = Chem.MolFromPDBQT(docked_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
         if mol is None:
@@ -309,7 +325,7 @@ def run_redocking_validation(
         return False, None
 
     log.info(f"  Redocking RMSD = {rmsd:.3f} Å")
-    cutoff = CONFIG.redocking_rmsd_cutoff
+    cutoff = cfg.redocking_rmsd_cutoff
     if rmsd > cutoff:
         log.warning(
             f"  ⚠  Redocking RMSD ({rmsd:.3f} Å) exceeds {cutoff} Å threshold. "
@@ -325,6 +341,7 @@ def run_redocking_validation(
 def prepare_ligand_pdbqt(
     mol: Chem.Mol,
     output_path: str,
+    config: Optional[PipelineConfig] = None,
 ) -> bool:
     """Convert an RDKit Mol to PDBQT via Meeko.
 
@@ -336,6 +353,7 @@ def prepare_ligand_pdbqt(
     Args:
         mol: RDKit molecule with at least one conformer.
         output_path: Path for the output PDBQT file.
+        config: Optional pipeline config.
 
     Returns:
         True on success, False if all conversion methods failed.
@@ -416,7 +434,8 @@ def _run_docking_tool(
     output_pdbqt: str,
     center: np.ndarray,
     box_size: Tuple[float, float, float],
-    timeout: int = CONFIG.vina_timeout_s,
+    timeout: Optional[int] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> Optional[float]:
     """Run a single docking job via the external tool wrapper.
 
@@ -432,20 +451,24 @@ def _run_docking_tool(
         center: 3-element array of (x, y, z) box centre coordinates.
         box_size: Tuple of (x, y, z) box dimensions in Ångström.
         timeout: Maximum wall-clock seconds for the subprocess.
+        config: Optional pipeline config.
 
     Returns:
         Best binding energy (kcal/mol) for vina, CNNscore (0–1) for
         gnina, or None if docking failed or timed out.
     """
-    if CONFIG.dry_run:
+    cfg = config or CONFIG
+    if timeout is None:
+        timeout = cfg.vina_timeout_s
+
+    if cfg.dry_run:
         if tool_name == "gnina":
             return float(np.random.uniform(0.5, 0.95))
         return float(np.random.uniform(-10.0, -5.0))
 
-    binary = CONFIG.gnina_binary_path if tool_name == "gnina" else "vina"
+    binary = cfg.gnina_binary_path if tool_name == "gnina" else "vina"
 
-    cmd = [
-        binary,
+    args = [
         "--receptor", receptor_pdbqt,
         "--ligand", ligand_pdbqt,
         "--out", output_pdbqt,
@@ -455,8 +478,8 @@ def _run_docking_tool(
         "--size_x", f"{box_size[0]:.1f}",
         "--size_y", f"{box_size[1]:.1f}",
         "--size_z", f"{box_size[2]:.1f}",
-        "--exhaustiveness", str(CONFIG.vina_exhaustiveness),
-        "--num_modes", str(CONFIG.vina_num_modes),
+        "--exhaustiveness", str(cfg.vina_exhaustiveness),
+        "--num_modes", str(cfg.vina_num_modes),
     ]
 
     validator = DockingResultValidator()
@@ -464,13 +487,12 @@ def _run_docking_tool(
     # One-time binary health check at startup
     global _DOCKING_BINARY_VALIDATED
     if (
-        CONFIG.validate_docking_binaries_on_startup
+        cfg.validate_docking_binaries_on_startup
         and not _DOCKING_BINARY_VALIDATED
     ):
+        health_executor = ToolExecutor(retry=False)
         try:
-            version_result = safe_run_tool(
-                [binary, "--version"], timeout=10, check=False,
-            )
+            version_result = health_executor.run(binary, ["--version"], timeout=10)
             version_out = version_result.stdout or version_result.stderr
             if not validator.validate_binary_health(tool_name, version_out):
                 raise ConfigurationError(
@@ -479,16 +501,17 @@ def _run_docking_tool(
                     f"{version_out.strip()!r}"
                 )
             log.info(f"  ✓  {binary} binary health validated.")
-        except (RuntimeError, OSError, AutoAntibioticError) as exc:
+        except AutoAntibioticError as exc:
             raise ConfigurationError(
                 f"Cannot run {binary} for version check: {exc}"
             )
         _DOCKING_BINARY_VALIDATED = True
 
+    executor = ToolExecutor(retry=True)
     try:
-        result = safe_run_tool(cmd, timeout=timeout, check=False, ignore_stderr_warnings=True)
-        if result.returncode != 0:
-            log.warning(f"  {binary} error: {result.stderr.strip()}")
+        result = executor.run(binary, args, timeout=timeout)
+        if result.returncode != 0 or result.timed_out:
+            log.warning(f"  {binary} error: {result.stderr.strip() or 'timed out'}")
             raise DockingParseError(
                 f"{binary} returned non-zero exit code {result.returncode}. "
                 f"stderr: {result.stderr.strip()}"
@@ -531,13 +554,15 @@ def dock_compound(
     tag: str = "",
     cache: _CacheLike = None,
     use_cache: bool = False,
+    config: Optional[PipelineConfig] = None,
 ) -> Tuple[Optional[float], str]:
     """Full docking pipeline for a single compound: PDBQT prep → dock → parse.
 
     Returns ``(energy, method)`` where *method* is ``"GNINA"``, ``"Vina"``,
     ``"None"``, or ``"Unknown"`` (cache hit).
     """
-    tool_name = "gnina" if CONFIG.use_gnina else "vina"
+    cfg = config or CONFIG
+    tool_name = "gnina" if cfg.use_gnina else "vina"
     cache_key = make_cache_key(record.smiles, tool_name)
     if use_cache and cache is not None and cache_key in cache:
         return cache[cache_key], "Unknown"
@@ -552,20 +577,20 @@ def dock_compound(
     lig_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_lig.pdbqt")
     out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
 
-    if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
+    if not prepare_ligand_pdbqt(record.mol, lig_pdbqt, config=cfg):
         return None, "PrepFailure"
 
     method = "None"
     try:
-        energy = _run_docking_tool(tool_name, receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+        energy = _run_docking_tool(tool_name, receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size, config=cfg)
         method = "GNINA" if tool_name == "gnina" else "Vina"
     except DockingParseError:
         energy = None
 
-    if energy is None and CONFIG.use_gnina:
+    if energy is None and cfg.use_gnina:
         log.warning("  GNINA docking failed, falling back to Vina.")
         try:
-            energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size)
+            energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size, config=cfg)
             method = "Vina"
         except DockingParseError:
             energy = None
@@ -621,11 +646,12 @@ def dock_compound_ensemble(
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str = "",
+    config: Optional[PipelineConfig] = None,
 ) -> Tuple[Optional[float], str]:
     """Dock a compound against an ensemble of receptor structures.
 
     Each receptor structure is docked independently.  The final score
-    is aggregated via ``CONFIG.consensus_scoring_method`` ("mean",
+    is aggregated via ``config.consensus_scoring_method`` ("mean",
     "median", "min", or "rank").
 
     .. note::
@@ -637,12 +663,13 @@ def dock_compound_ensemble(
 
     Returns ``(consensus_score, method)``.
     """
+    cfg = config or CONFIG
     energies: List[float] = []
-    method = "GNINA" if CONFIG.use_gnina else "Vina"
+    method = "GNINA" if cfg.use_gnina else "Vina"
     for i, (rec_pdbqt, ctr) in enumerate(zip(receptor_pdbqt_list, center_list)):
         e, _ = dock_compound(
             record, rec_pdbqt, ctr, box_size,
-            work_dir, f"{tag}_ens{i}",
+            work_dir, f"{tag}_ens{i}", config=cfg,
         )
         if e is not None:
             energies.append(e)
@@ -650,7 +677,7 @@ def dock_compound_ensemble(
     if not energies:
         return None, "None"
 
-    consensus = CONFIG.consensus_scoring_method
+    consensus = cfg.consensus_scoring_method
     if consensus == "min":
         return min(energies), method
     elif consensus == "median":
@@ -762,6 +789,7 @@ def _generate_flexible_conformers(
     receptor_pdb: str,
     flexible_residues: List[str],
     max_conformers: int = 9,
+    config: Optional[PipelineConfig] = None,
 ) -> List[str]:
     """Generate multiple receptor PDB conformers by rotating side-chain
     dihedral angles of the given *flexible_residues*.
@@ -780,6 +808,7 @@ def _generate_flexible_conformers(
     list of str
         Paths to the generated conformer PDB files (may be empty).
     """
+    cfg = config or CONFIG
     if not _HAVE_BIOPDB:
         log.warning("  Bio.PDB not available for flexible docking.")
         return []
@@ -833,7 +862,7 @@ def _generate_flexible_conformers(
 
     state_combos = list(_product(*(rs for _, rs in residue_states)))
     if len(state_combos) > max_conformers:
-        rng = np.random.default_rng(CONFIG.random_seed)
+        rng = np.random.default_rng(cfg.random_seed)
         indices = rng.choice(len(state_combos), size=max_conformers, replace=False)
         state_combos = [state_combos[i] for i in sorted(indices)]
 
@@ -880,6 +909,7 @@ def _prepare_flexible_receptors(
     flexible_residues: List[str],
     max_conformers: int,
     deps: Dict[str, Any],
+    config: Optional[PipelineConfig] = None,
 ) -> List[Tuple[str, np.ndarray]]:
     """Generate flexible receptor conformers and convert them to PDBQT.
 
@@ -887,7 +917,7 @@ def _prepare_flexible_receptors(
     ensemble docking.  The center is the same for all conformers
     (placeholder — caller should overwrite)."""
     conformer_pdbs = _generate_flexible_conformers(
-        receptor_pdb, flexible_residues, max_conformers,
+        receptor_pdb, flexible_residues, max_conformers, config=config,
     )
     result: List[Tuple[str, np.ndarray]] = []
     for pdb_path in conformer_pdbs:
@@ -909,7 +939,7 @@ def _prepare_flexible_receptors(
 
 
 def _worker_dock_wrapper(
-    args: Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int],
+    args: Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int, bool],
 ) -> Tuple[str, Optional[float], Optional[str], str]:
     """Module-level worker for :func:`_parallel_dock` (pool.map compatible).
 
@@ -928,11 +958,11 @@ def _worker_dock_wrapper(
     Accepts a seed value so that dry-run mode produces deterministic
     results across workers.
     """
-    cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run, seed = args
+    cid, smiles, receptor_pdbqt, center, box_size, work_dir, tag, dry_run, seed, use_gnina = args
 
     rng = np.random.default_rng(seed)
     if dry_run:
-        method = "GNINA" if CONFIG.use_gnina else "Vina"
+        method = "GNINA" if use_gnina else "Vina"
         return cid, float(rng.uniform(-10.0, -5.0)), None, method
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -970,6 +1000,7 @@ def _parallel_dock(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
+    config: Optional[PipelineConfig] = None,
 ) -> List[Tuple[str, Optional[float], Optional[str], str]]:
     """Dock a list of compounds in parallel with batched processing.
 
@@ -986,10 +1017,11 @@ def _parallel_dock(
     where *error_reason* is ``"DockingFailure"`` when the compound could not
     be docked and ``None`` otherwise.  *method* is the docking engine used.
     """
+    cfg = config or CONFIG
     results: List[Tuple[str, Optional[float], Optional[str], str]] = []
     to_dock: List[Tuple[str, str, str, Optional[np.ndarray], Optional[Tuple[float, float, float]]]] = []
 
-    tool_name = "gnina" if CONFIG.use_gnina else "vina"
+    tool_name = "gnina" if cfg.use_gnina else "vina"
     for item in items:
         if len(item) == 4:
             cid, smiles, per_center, per_box = item
@@ -1008,18 +1040,18 @@ def _parallel_dock(
         return results
 
     n_jobs_eff = min(n_jobs, len(to_dock))
-    batch_size = CONFIG.batch_size_docking
+    batch_size = cfg.batch_size_docking
 
     for batch_start in range(0, len(to_dock), batch_size):
         batch = to_dock[batch_start:batch_start + batch_size]
 
-        worker_seed = CONFIG.random_seed + batch_start
-        work_items: List[Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int]] = [
+        worker_seed = cfg.random_seed + batch_start
+        work_items: List[Tuple[str, str, str, np.ndarray, Tuple[float, float, float], str, str, bool, int, bool]] = [
             (
                 cid, smiles, receptor_pdbqt,
                 per_center if per_center is not None else center,
                 per_box if per_box is not None else box_size,
-                work_dir, tag, dry_run, worker_seed,
+                work_dir, tag, dry_run, worker_seed, cfg.use_gnina,
             )
             for cid, smiles, _, per_center, per_box in batch
         ]
@@ -1049,6 +1081,7 @@ def _compute_shape_fallback_score(
     mol: Chem.Mol,
     ref_mol: Chem.Mol,
     seed: int = CONFIG.random_seed,
+    config: Optional[PipelineConfig] = None,
 ) -> Optional[float]:
     """Fallback scoring via RDKit Shape Protrude Distance and Pharmacophore matching.
 
@@ -1056,6 +1089,7 @@ def _compute_shape_fallback_score(
     both are available.  Falls back to shape score alone if the
     pharmacophore calculation fails.
     """
+    cfg = config or CONFIG
     try:
         mol_3d = Chem.RWMol(mol)
         mol_3d = Chem.AddHs(mol_3d)
@@ -1083,7 +1117,7 @@ def _compute_shape_fallback_score(
             except Exception:
                 return None
 
-        shape_score = min(protrude / CONFIG.shape_score_norm_factor, 10.0) if protrude > 0 else 0.0
+        shape_score = min(protrude / cfg.shape_score_norm_factor, 10.0) if protrude > 0 else 0.0
 
         from .scoring_metrics import compute_pharmacophore_score
 
@@ -1108,20 +1142,22 @@ def _parallel_dock_ensemble(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
+    config: Optional[PipelineConfig] = None,
 ) -> List[Tuple[str, Optional[float], str]]:
     """Dock a list of compounds against an ensemble of receptors.
 
     Each compound is docked independently against every receptor,
-    then a consensus score is computed via ``CONFIG.consensus_scoring_method``.
+    then a consensus score is computed via ``config.consensus_scoring_method``.
 
     Returns list of ``(compound_id, consensus_energy, method)`` tuples.
     """
+    cfg = config or CONFIG
     results: List[Tuple[str, Optional[float], str]] = []
 
-    rng = np.random.default_rng(CONFIG.random_seed)
+    rng = np.random.default_rng(cfg.random_seed)
     for cid, smiles in items:
         if dry_run:
-            method = "GNINA" if CONFIG.use_gnina else "Vina"
+            method = "GNINA" if cfg.use_gnina else "Vina"
             results.append((cid, float(rng.uniform(-10.0, -5.0)), method))
             continue
         mol = Chem.MolFromSmiles(smiles)
@@ -1131,7 +1167,7 @@ def _parallel_dock_ensemble(
         rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
         energy, method = dock_compound_ensemble(
             rec, receptor_pdbqt_list, center_list,
-            box_size, work_dir, tag,
+            box_size, work_dir, tag, config=cfg,
         )
         results.append((cid, energy, method))
 
@@ -1144,6 +1180,7 @@ def _build_flexible_ensemble(
     flexible_residues: List[str],
     max_conformers: int,
     deps: Dict[str, Any],
+    config: Optional[PipelineConfig] = None,
 ) -> Tuple[List[str], List[np.ndarray]]:
     """Generate flexible-receptor PDBQT conformers and return
     ``(pdbqt_list, center_list)`` suitable for ensemble docking.
@@ -1156,7 +1193,7 @@ def _build_flexible_ensemble(
 
     pdb_dir = os.path.dirname(receptor_pdb)
     conformer_pdbs = _generate_flexible_conformers(
-        receptor_pdb, flexible_residues, max_conformers,
+        receptor_pdb, flexible_residues, max_conformers, config=config,
     )
     flex_list: List[str] = [receptor_pdbqt]
     for pdb_path in conformer_pdbs:
@@ -1180,6 +1217,7 @@ def _apply_consensus_scoring(
     records: List[CompoundRecord],
     receptor_energies: List[List[Optional[float]]],
     attr_name: str = "pb2pa_allosteric_energy",
+    config: Optional[PipelineConfig] = None,
 ) -> None:
     """Compute consensus score per compound from per-receptor energies.
 
@@ -1188,11 +1226,12 @@ def _apply_consensus_scoring(
     *receptor_energies* is ``[receptor_idx][compound_idx]``, matching
     the order of *records*.
     """
+    cfg = config or CONFIG
     n_rec = len(receptor_energies)
     if n_rec == 0:
         return
 
-    method = CONFIG.consensus_scoring_method
+    method = cfg.consensus_scoring_method
     n_compounds = len(records)
 
     if method == "rank":
@@ -1240,6 +1279,7 @@ def _screen_ensemble(
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
     audit: Optional[PipelineAudit] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> List[CompoundRecord]:
     """Ensemble docking against multiple receptor structures with consensus scoring.
 
@@ -1248,6 +1288,7 @@ def _screen_ensemble(
     ``CONFIG.consensus_scoring_method`` ("mean", "min", "median", or
     "rank").
     """
+    cfg = config or CONFIG
     ensemble_targets = targets["PBP2a_ensemble"]
     receptor_pdbqt_list = [t["pdbqt"] for t in ensemble_targets]
     allosteric_center_list = [t["allosteric_center"] for t in ensemble_targets]
@@ -1258,10 +1299,11 @@ def _screen_ensemble(
 
     # Pre-compute per-compound box parameters (same for all receptors)
     per_compound_box: Dict[str, Tuple[float, float, float]] = {}
-    if CONFIG.use_dynamic_box_sizing:
+    if cfg.use_dynamic_box_sizing:
         for r in records:
             _, per_box = _compute_dynamic_box_params(
-                r, allosteric_center_list[0], CONFIG.allosteric_box_size,
+                r, allosteric_center_list[0], cfg.allosteric_box_size,
+                config=cfg,
             )
             per_compound_box[r.compound_id] = per_box
 
@@ -1276,14 +1318,15 @@ def _screen_ensemble(
         else:
             items = [(r.compound_id, r.smiles, None, None) for r in records]
         results = _parallel_dock(
-            items, rec_pdbqt, center, CONFIG.allosteric_box_size,
+            items, rec_pdbqt, center, cfg.allosteric_box_size,
             work_dir, f"ens_alloc_{i}",
             cache=cache, use_cache=use_cache, dry_run=dry_run,
+            config=cfg,
         )
         receptor_energies.append([e for _, e, _, _ in results])
 
     # Phase 2: consensus scoring across receptors
-    _apply_consensus_scoring(records, receptor_energies)
+    _apply_consensus_scoring(records, receptor_energies, config=cfg)
 
     n_scored = sum(1 for r in records if r.pb2pa_allosteric_energy is not None)
     log.info(f"  Ensemble allosteric docking complete: {n_scored}/{len(records)} scored.")
@@ -1295,11 +1338,11 @@ def _screen_ensemble(
                 audit.record_dropout(r.compound_id, "DockingFailure")
 
     scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
-    primary_tool = "GNINA" if CONFIG.use_gnina else "Vina"
+    primary_tool = "GNINA" if cfg.use_gnina else "Vina"
     for r in scored:
         r.docking_method = primary_tool
     scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-    top50 = scored[:CONFIG.top_n_for_active]
+    top50 = scored[:cfg.top_n_for_active]
 
     if top50:
         log.info(f"  Ensemble docking top {len(top50)} against active site ({n_rec} structures)…")
@@ -1313,14 +1356,15 @@ def _screen_ensemble(
             else:
                 active_items = [(r.compound_id, r.smiles, None, None) for r in top50]
             results = _parallel_dock(
-                active_items, rec_pdbqt, center, CONFIG.active_box_size,
+                active_items, rec_pdbqt, center, cfg.active_box_size,
                 work_dir, f"ens_act_{i}",
                 cache=cache, use_cache=use_cache, dry_run=dry_run,
+                config=cfg,
             )
             active_receptor_energies.append([e for _, e, _, _ in results])
-        _apply_consensus_scoring(top50, active_receptor_energies, "pb2pa_active_energy")
+        _apply_consensus_scoring(top50, active_receptor_energies, "pb2pa_active_energy", config=cfg)
 
-    return scored[:CONFIG.top_n]
+    return scored[:cfg.top_n]
 
 
 def _screen_flexible(
@@ -1331,8 +1375,10 @@ def _screen_flexible(
     cache: _CacheLike = None,
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
+    config: Optional[PipelineConfig] = None,
 ) -> List[CompoundRecord]:
     """Flexible docking with side-chain rotamer conformers (min-score consensus)."""
+    cfg = config or CONFIG
     pb2pa = targets["PBP2a"]
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
@@ -1343,30 +1389,32 @@ def _screen_flexible(
 
     if not os.path.exists(receptor_pdb):
         log.warning("  Receptor PDB not found for flexible docking; falling back to standard.")
-        return _screen_standard(records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run)
+        return _screen_standard(records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run, config=cfg)
 
     log.info("  Flexible-docking mode enabled — generating side-chain conformers…")
     flex_alloc_pdbqt_list, flex_alloc_center_list = _build_flexible_ensemble(
         receptor_pdb, pb2pa["pdbqt"],
-        CONFIG.flexible_residues_allosteric,
-        CONFIG.max_flexible_conformers, deps,
+        cfg.flexible_residues_allosteric,
+        cfg.max_flexible_conformers, deps,
+        config=cfg,
     )
     flex_alloc_center_list = [allosteric_center] * len(flex_alloc_pdbqt_list)
     log.info(f"  Flexible allosteric docking using {len(flex_alloc_pdbqt_list)} conformers (min-score consensus)…")
 
-    saved_method = CONFIG.consensus_scoring_method
-    CONFIG.consensus_scoring_method = "min"
+    saved_method = cfg.consensus_scoring_method
+    cfg.consensus_scoring_method = "min"
 
     allosteric_results = _parallel_dock_ensemble(
         [(r.compound_id, r.smiles) for r in records],
         flex_alloc_pdbqt_list, flex_alloc_center_list,
-        CONFIG.allosteric_box_size, work_dir, "flex_alloc",
+        cfg.allosteric_box_size, work_dir, "flex_alloc",
         cache=cache, use_cache=use_cache, dry_run=dry_run,
+        config=cfg,
     )
-    CONFIG.consensus_scoring_method = saved_method
+    cfg.consensus_scoring_method = saved_method
 
     cid_to_record = {r.compound_id: r for r in records}
-    primary_tool = "GNINA" if CONFIG.use_gnina else "Vina"
+    primary_tool = "GNINA" if cfg.use_gnina else "Vina"
     for cid, energy, method in allosteric_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_allosteric_energy = energy
@@ -1377,39 +1425,42 @@ def _screen_flexible(
 
     scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
     scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-    top50 = scored[:CONFIG.top_n_for_active]
+    top50 = scored[:cfg.top_n_for_active]
 
     flex_act_pdbqt_list, flex_act_center_list = _build_flexible_ensemble(
         receptor_pdb, pb2pa["pdbqt"],
-        CONFIG.flexible_residues_active,
-        max(3, CONFIG.max_flexible_conformers // 2), deps,
+        cfg.flexible_residues_active,
+        max(3, cfg.max_flexible_conformers // 2), deps,
+        config=cfg,
     )
     flex_act_center_list = [active_center] * len(flex_act_pdbqt_list)
     log.info(f"  Flexible active-site docking top {len(top50)} using {len(flex_act_pdbqt_list)} conformers…")
 
-    saved_method = CONFIG.consensus_scoring_method
-    CONFIG.consensus_scoring_method = "min"
+    saved_method = cfg.consensus_scoring_method
+    cfg.consensus_scoring_method = "min"
 
     active_results = _parallel_dock_ensemble(
         [(r.compound_id, r.smiles) for r in top50],
         flex_act_pdbqt_list, flex_act_center_list,
-        CONFIG.active_box_size, work_dir, "flex_act",
+        cfg.active_box_size, work_dir, "flex_act",
         cache=cache, use_cache=use_cache, dry_run=dry_run,
+        config=cfg,
     )
-    CONFIG.consensus_scoring_method = saved_method
+    cfg.consensus_scoring_method = saved_method
 
     for cid, energy, method in active_results:
         if cid in cid_to_record:
             cid_to_record[cid].pb2pa_active_energy = energy
             cid_to_record[cid].docking_method = method or primary_tool
 
-    return scored[:CONFIG.top_n]
+    return scored[:cfg.top_n]
 
 
 def _compute_dynamic_box_params(
     record: CompoundRecord,
     center: np.ndarray,
     base_box_size: Tuple[float, float, float],
+    config: Optional[PipelineConfig] = None,
 ) -> Tuple[np.ndarray, Tuple[float, float, float]]:
     """Compute per-compound dynamic box parameters.
 
@@ -1425,7 +1476,8 @@ def _compute_dynamic_box_params(
     Returns:
         ``(center, box_size)`` tuple — either the defaults or an expanded box.
     """
-    if not CONFIG.use_dynamic_box_sizing or record.mol is None:
+    cfg = config or CONFIG
+    if not cfg.use_dynamic_box_sizing or record.mol is None:
         return center, base_box_size
 
     try:
@@ -1433,7 +1485,7 @@ def _compute_dynamic_box_params(
     except Exception:
         return center, base_box_size
 
-    half_buffer = ligand_max_dim / 2.0 + CONFIG.dynamic_box_padding
+    half_buffer = ligand_max_dim / 2.0 + cfg.dynamic_box_padding
     base = np.array(base_box_size, dtype=float)
     dyn = np.maximum(base, half_buffer)
     return center, (float(dyn[0]), float(dyn[1]), float(dyn[2]))
@@ -1447,8 +1499,10 @@ def _screen_standard(
     use_cache: bool = False,
     dry_run: bool = CONFIG.dry_run,
     audit: Optional[PipelineAudit] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> List[CompoundRecord]:
     """Standard Vina/GNINA docking: allosteric site → top 50 to active site."""
+    cfg = config or CONFIG
     pb2pa = targets["PBP2a"]
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
@@ -1457,14 +1511,16 @@ def _screen_standard(
     items: List[_Item] = []
     for r in records:
         per_center, per_box = _compute_dynamic_box_params(
-            r, allosteric_center, CONFIG.allosteric_box_size,
+            r, allosteric_center, cfg.allosteric_box_size,
+            config=cfg,
         )
         items.append((r.compound_id, r.smiles, per_center, per_box))
     allosteric_results = _parallel_dock(
         items, pb2pa["pdbqt"],
-        allosteric_center, CONFIG.allosteric_box_size,
+        allosteric_center, cfg.allosteric_box_size,
         work_dir, "allosteric",
         cache=cache, use_cache=use_cache, dry_run=dry_run,
+        config=cfg,
     )
 
     cid_to_record = {r.compound_id: r for r in records}
@@ -1481,20 +1537,22 @@ def _screen_standard(
     scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
     scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
 
-    top50 = scored[:CONFIG.top_n_for_active]
+    top50 = scored[:cfg.top_n_for_active]
     log.info(f"  Docking top {len(top50)} compounds against active site…")
 
     active_items: List[_Item] = []
     for r in top50:
         per_center, per_box = _compute_dynamic_box_params(
-            r, active_center, CONFIG.active_box_size,
+            r, active_center, cfg.active_box_size,
+            config=cfg,
         )
         active_items.append((r.compound_id, r.smiles, per_center, per_box))
     active_results = _parallel_dock(
         active_items, pb2pa["pdbqt"],
-        active_center, CONFIG.active_box_size,
+        active_center, cfg.active_box_size,
         work_dir, "active",
         cache=cache, use_cache=use_cache, dry_run=dry_run,
+        config=cfg,
     )
 
     for cid, energy, err, method in active_results:
@@ -1504,15 +1562,17 @@ def _screen_standard(
         if err is not None and audit is not None:
             audit.record_dropout(cid, err)
 
-    return scored[:CONFIG.top_n]
+    return scored[:cfg.top_n]
 
 
 def _screen_shape_fallback(
     records: List[CompoundRecord],
     targets: Dict[str, Any],
     work_dir: str,
+    config: Optional[PipelineConfig] = None,
 ) -> List[CompoundRecord]:
     """Fallback scoring using RDKit Shape Protrude Distance + Pharmacophore."""
+    cfg = config or CONFIG
     log.info("  Vina unavailable. Using RDKit Shape Fallback.")
 
     ref_mol = None
@@ -1548,14 +1608,14 @@ def _screen_shape_fallback(
             pass
 
     if ref_mol is None:
-        ref_smi = list(CONFIG.control_smiles.values())[0]
+        ref_smi = list(cfg.control_smiles.values())[0]
         ref_mol = Chem.MolFromSmiles(ref_smi)
 
     if ref_mol is None:
         log.error("  Cannot obtain reference molecule for shape scoring.")
-        for rec in records[:CONFIG.top_n]:
+        for rec in records[:cfg.top_n]:
             rec.docking_method = "Failed"
-        return records[:CONFIG.top_n]
+        return records[:cfg.top_n]
 
     total = len(records)
     shape_iter = _tqdm(
@@ -1568,7 +1628,7 @@ def _screen_shape_fallback(
             if mol is None:
                 continue
             rec.mol = mol
-        score = _compute_shape_fallback_score(rec.mol, ref_mol)
+        score = _compute_shape_fallback_score(rec.mol, ref_mol, config=cfg)
         rec.shape_score = score
         rec.docking_method = "ShapeFallback"
         if (i + 1) % 100 == 0 and not _HAVE_TQDM:
@@ -1581,7 +1641,7 @@ def _screen_shape_fallback(
     else:
         log.warning("  No shape scores computed.")
 
-    return scored_shape[:CONFIG.top_n]
+    return scored_shape[:cfg.top_n]
 
 
 def _apply_ml_rescoring(
@@ -1589,11 +1649,13 @@ def _apply_ml_rescoring(
     pb2pa_pdbqt: str,
     work_dir: str,
     water_results: Optional[WaterAnalysisResult] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> None:
     """Apply ML rescoring to top N Vina hits (in-place)."""
-    if not (CONFIG.use_ml_rescoring and _HAVE_ML_SCORING and scored):
+    cfg = config or CONFIG
+    if not (cfg.use_ml_rescoring and _HAVE_ML_SCORING and scored):
         return
-    n_rescore = min(len(scored), CONFIG.mm_gbsa_top_n) if (CONFIG.use_mm_gbsa or CONFIG.use_mm_gbsa_rescoring) else 50
+    n_rescore = min(len(scored), cfg.mm_gbsa_top_n) if (cfg.use_mm_gbsa or cfg.use_mm_gbsa_rescoring) else 50
     log.info(f"  Applying ML rescoring to top {n_rescore} Vina hits…")
     try:
         top_to_rescore = scored[:n_rescore]
@@ -1612,6 +1674,7 @@ def screen_library(
     water_results: Optional[WaterAnalysisResult] = None,
     dry_run: bool = CONFIG.dry_run,
     audit: Optional[PipelineAudit] = None,
+    config: Optional[PipelineConfig] = None,
 ) -> List[CompoundRecord]:
     """Phase 3 — Virtual screening.
 
@@ -1631,6 +1694,7 @@ def screen_library(
 
     Returns top 10 candidates.
     """
+    cfg = config or CONFIG
     log.info("─── Phase 3: Virtual Screening ───")
 
     pb2pa = targets["PBP2a"]
@@ -1641,35 +1705,36 @@ def screen_library(
         ensemble_active = ensemble_targets is not None and len(ensemble_targets) > 0
 
         if ensemble_active:
-            if CONFIG.flexible_docking:
+            if cfg.flexible_docking:
                 log.info("  Both ensemble and flexible-docking enabled; ensemble takes priority.")
-            log.info(f"  Ensemble docking (method={CONFIG.consensus_scoring_method}) against {len(ensemble_targets)} structures…")
+            log.info(f"  Ensemble docking (method={cfg.consensus_scoring_method}) against {len(ensemble_targets)} structures…")
             top_candidates = _screen_ensemble(
                 records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run,
-                audit=audit,
+                audit=audit, config=cfg,
             )
-        elif CONFIG.flexible_docking and _HAVE_BIOPDB:
+        elif cfg.flexible_docking and _HAVE_BIOPDB:
             top_candidates = _screen_flexible(
                 records, targets, work_dir, deps, cache=cache, use_cache=use_cache, dry_run=dry_run,
+                config=cfg,
             )
         else:
             top_candidates = _screen_standard(
                 records, targets, work_dir, cache=cache, use_cache=use_cache, dry_run=dry_run,
-                audit=audit,
+                audit=audit, config=cfg,
             )
 
         # ML rescoring on top N Vina hits
         scored = [r for r in records if r.pb2pa_allosteric_energy is not None]
         scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-        _apply_ml_rescoring(scored, pb2pa["pdbqt"], work_dir, water_results)
+        _apply_ml_rescoring(scored, pb2pa["pdbqt"], work_dir, water_results, config=cfg)
 
         ranked = scored
     else:
-        rank = _screen_shape_fallback(records, targets, work_dir)
+        rank = _screen_shape_fallback(records, targets, work_dir, config=cfg)
         ranked = rank
 
     ranked.sort(key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else float("inf"))
-    top10 = ranked[:CONFIG.top_n]
+    top10 = ranked[:cfg.top_n]
 
     # Assign docked pose PDBQT paths for top candidates (used in IFP filtering)
     tags_to_try = ["active", "allosteric", "flex_act", "flex_alloc",

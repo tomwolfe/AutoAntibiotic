@@ -183,6 +183,7 @@ class PipelineOrchestrator:
             work_dir=str(self.config.work_dir),
             deps=self.deps,
             center=self.targets["PBP2a"]["active_center"],
+            config=self.config,
         )
 
     def generate_and_filter_library(self) -> None:
@@ -193,14 +194,18 @@ class PipelineOrchestrator:
             self.all_records = generate_pharmacophore_aware_library(
                 target_count=self.config.library_target_count,
                 seed=self.config.random_seed,
+                config=self.config,
             )
         else:
             self.all_records = list(
-                generate_candidate_library(target_count=self.config.library_target_count)
+                generate_candidate_library(
+                    target_count=self.config.library_target_count,
+                    config=self.config,
+                )
             )
         self.n_total = len(self.all_records)
 
-        self.filtered = apply_filters(self.all_records, audit=self.audit)
+        self.filtered = apply_filters(self.all_records, audit=self.audit, config=self.config)
         self.n_filtered = len(self.filtered)
 
         if self.audit is not None:
@@ -216,7 +221,7 @@ class PipelineOrchestrator:
             self.filtered, self.targets, str(self.config.work_dir),
             self.deps, cache=self.cache, use_cache=self.use_cache,
             water_results=self.water_results, dry_run=self.config.dry_run,
-            audit=self.audit,
+            audit=self.audit, config=self.config,
         )
 
         if self.audit is not None:
@@ -274,7 +279,7 @@ class PipelineOrchestrator:
         pharmacophore_query = _build_pharmacophore()
 
         # Parse reference ligand (Ceftaroline) for IFP comparison
-        ref_smiles = CONFIG.reference_antibiotics.get("Ceftaroline", "")
+        ref_smiles = self.config.reference_antibiotics.get("Ceftaroline", "")
         ref_mol = Chem.MolFromSmiles(ref_smiles) if ref_smiles else None
 
         fep_candidates: List[CompoundRecord] = []
@@ -284,8 +289,9 @@ class PipelineOrchestrator:
                 if not check_pharmacophore_match(
                     rec.mol,
                     query=pharmacophore_query,
-                    min_matches=CONFIG.pharmacophore_min_matches,
-                    tolerance=CONFIG.pharmacophore_tolerance,
+                    min_matches=self.config.pharmacophore_min_matches,
+                    tolerance=self.config.pharmacophore_tolerance,
+                    config=self.config,
                 ):
                     log.info(
                         f"  {rec.compound_id}: Failed pharmacophore match — "
@@ -389,8 +395,9 @@ class PipelineOrchestrator:
             if pharmacophore_query is not None and not check_pharmacophore_match(
                 rec.mol,
                 query=pharmacophore_query,
-                min_matches=CONFIG.pharmacophore_min_matches,
-                tolerance=CONFIG.pharmacophore_tolerance,
+                min_matches=self.config.pharmacophore_min_matches,
+                tolerance=self.config.pharmacophore_tolerance,
+                config=self.config,
             ):
                 log.info(
                     f"  {rec.compound_id}: Failed pharmacophore match — "
