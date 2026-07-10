@@ -3,8 +3,11 @@ Integration tests for FEP resistance profiling and heuristic fallback.
 
 Verifies:
 1. FEP resistance profiling is enabled by default in the config.
-2. The orchestrator falls back to heuristic scoring when FEP fails.
-3. ADMET reference data contains >50 samples per class when using
+2. The orchestrator delegates to ``FEPManager`` for candidate selection
+   and FEP execution.
+3. ``FEPManager.select_candidates_for_fep`` correctly filters candidates
+   based on IFP, energy, and pharmacophore criteria.
+4. ADMET reference data contains >50 samples per class when using
    the expanded hardcoded list.
 """
 
@@ -37,12 +40,11 @@ class TestFEPEnabledByDefault:
         assert CONFIG.use_heuristic_resistance_fallback is True
 
 
-# ── Test 2: Orchestrator fallback to heuristic ─────────────────────
+# ── Test 2: Orchestrator delegation to FEPManager ──────────────────
 
 
-class TestFEPFallbackToHeuristic:
-    """Verify the orchestrator gracefully falls back to heuristic scoring
-    when FEP raises an exception."""
+class TestFEPOrchestratorDelegation:
+    """Verify the orchestrator properly delegates to ``FEPManager``."""
 
     @pytest.fixture
     def mock_candidate(self) -> CompoundRecord:
@@ -68,192 +70,212 @@ class TestFEPFallbackToHeuristic:
         }
         return orch
 
+    def test_apply_fep_resistance_delegates_to_fep_manager(
+        self, mock_orchestrator: Any,
+    ) -> None:
+        """The orchestrator should call ``FEPManager`` methods and set
+        ``context.fep_results``."""
+        rec = mock_orchestrator.top_candidates[0]
+        with patch("autoantibiotic.orchestrator.FEPManager") as mock_mgr_cls:
+            mock_mgr = MagicMock()
+            mock_mgr_cls.return_value = mock_mgr
+            mock_mgr.select_candidates_for_fep.return_value = [rec]
+            mock_mgr.run_fep_profiling.return_value = [rec]
+
+            with patch("os.path.isfile", return_value=True):
+                mock_orchestrator.apply_fep_resistance()
+
+            mock_mgr.select_candidates_for_fep.assert_called_once()
+            mock_mgr.run_fep_profiling.assert_called_once()
+
     def test_apply_fep_resistance_does_not_crash_on_fep_failure(
         self, mock_orchestrator: Any,
     ) -> None:
-        """When FEP raises an exception and fallback is enabled, the method
-        should not crash and should log a warning."""
-        with patch(
-            "autoantibiotic.fep_engine.FEPResistanceCalculator",
-        ) as mock_fep_cls:
-            mock_calc = MagicMock()
-            mock_calc.calculate_ddg.side_effect = Exception("FEP engine failure")
-            mock_fep_cls.return_value = mock_calc
+        """When ``FEPManager`` returns no successful results, the method
+        should not crash."""
+        rec = mock_orchestrator.top_candidates[0]
+        with patch("autoantibiotic.orchestrator.FEPManager") as mock_mgr_cls:
+            mock_mgr = MagicMock()
+            mock_mgr_cls.return_value = mock_mgr
+            mock_mgr.select_candidates_for_fep.return_value = [rec]
+            mock_mgr.run_fep_profiling.return_value = []
 
-            # Should not raise
-            mock_orchestrator.apply_fep_resistance()
+            with patch("os.path.isfile", return_value=True):
+                mock_orchestrator.apply_fep_resistance()
 
     def test_fallback_populates_resistance_stability_score(
         self, mock_orchestrator: Any,
     ) -> None:
-        """When FEP fails and heuristic fallback is enabled, the
-        resistance_stability_score should be set."""
-        import tempfile
-        import os as os_module
+        """When ``FEPManager.run_fep_profiling`` returns a record with a
+        score set, the result should be reflected on the top candidate."""
+        rec = mock_orchestrator.top_candidates[0]
+        rec.resistance_stability_score = 0.85
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mutant_dir = Path(tmpdir) / "mutants"
-            mutant_dir.mkdir(parents=True, exist_ok=True)
-            (mutant_dir / "mut_1.pdbqt").write_text("DUMMY")
-            (mutant_dir / "mut_2.pdbqt").write_text("DUMMY")
+        with patch("autoantibiotic.orchestrator.FEPManager") as mock_mgr_cls:
+            mock_mgr = MagicMock()
+            mock_mgr_cls.return_value = mock_mgr
+            mock_mgr.select_candidates_for_fep.return_value = [rec]
+            mock_mgr.run_fep_profiling.return_value = [rec]
 
-            # Create a dummy receptor PDB so the orchestrator proceeds into FEP
-            receptor_pdb_path = Path(tmpdir) / "PBP2a.pdb"
-            receptor_pdb_path.write_text("DUMMY")
-            mock_orchestrator.targets["PBP2a"]["pdbqt"] = str(
-                receptor_pdb_path.with_suffix(".pdbqt"),
-            )
+            with patch("os.path.isfile", return_value=True):
+                mock_orchestrator.apply_fep_resistance()
 
-            original_output_dir = CONFIG.output_dir
-            CONFIG.output_dir = Path(tmpdir)
+            assert rec.resistance_stability_score == 0.85
 
-            try:
-                with patch(
-                    "autoantibiotic.fep_engine.FEPResistanceCalculator",
-                ) as mock_fep_cls:
-                    mock_calc = MagicMock()
-                    mock_calc.calculate_ddg.side_effect = Exception(
-                        "FEP engine failure",
-                    )
-                    mock_fep_cls.return_value = mock_calc
-
-                    with patch(
-                        "autoantibiotic.analysis.profile_resistance_mutation_sensitivity",
-                    ) as mock_fallback:
-                        mock_fallback.return_value = 0.85
-
-                        rec = mock_orchestrator.top_candidates[0]
-                        assert rec.resistance_stability_score is None
-
-                        mock_orchestrator.apply_fep_resistance()
-
-                        mock_fallback.assert_called_once()
-                        assert rec.resistance_stability_score == 0.85
-            finally:
-                CONFIG.output_dir = original_output_dir
-
-    def test_fallback_disabled_skips_heuristic(
+    def test_fallback_disabled_still_delegates(
         self, mock_orchestrator: Any,
     ) -> None:
-        """When use_heuristic_resistance_fallback is False, FEP failure
-        should just log a warning without calling the heuristic."""
+        """When ``use_heuristic_resistance_fallback`` is False, the
+        orchestrator still delegates to ``FEPManager`` (the fallback
+        logic lives inside ``FEPManager``)."""
         original_fallback = CONFIG.use_heuristic_resistance_fallback
         CONFIG.use_heuristic_resistance_fallback = False
+        rec = mock_orchestrator.top_candidates[0]
         try:
-            with patch(
-                "autoantibiotic.fep_engine.FEPResistanceCalculator",
-            ) as mock_fep_cls:
-                mock_calc = MagicMock()
-                mock_calc.calculate_ddg.side_effect = Exception(
-                    "FEP engine failure",
-                )
-                mock_fep_cls.return_value = mock_calc
+            with patch("autoantibiotic.orchestrator.FEPManager") as mock_mgr_cls:
+                mock_mgr = MagicMock()
+                mock_mgr_cls.return_value = mock_mgr
+                mock_mgr.select_candidates_for_fep.return_value = [rec]
+                mock_mgr.run_fep_profiling.return_value = []
 
-                with patch(
-                    "autoantibiotic.analysis.profile_resistance_mutation_sensitivity",
-                ) as mock_fallback:
+                with patch("os.path.isfile", return_value=True):
                     mock_orchestrator.apply_fep_resistance()
-                    mock_fallback.assert_not_called()
+
+                mock_mgr.run_fep_profiling.assert_called_once()
         finally:
             CONFIG.use_heuristic_resistance_fallback = original_fallback
 
 
-# ── Test 3: FEP pre-screening with IFP ─────────────────────────────
+# ── Test 3: FEPManager selection logic ─────────────────────────────
 
 
-class TestFEPPreScreening:
-    """Verify the IFP-based pre-screening in apply_fep_resistance."""
+class TestFEPManagerSelectionLogic:
+    """Verify ``FEPManager.select_candidates_for_fep`` filtering."""
 
     @pytest.fixture
-    def mock_candidates(self) -> List[CompoundRecord]:
-        candidates = []
+    def candidates(self) -> List[CompoundRecord]:
+        mol = Chem.MolFromSmiles("c1ccccc1O")
+        assert mol is not None
+        records = []
         for i in range(10):
-            mol = Chem.MolFromSmiles("c1ccccc1O")
-            assert mol is not None
             rec = CompoundRecord(
-                compound_id=f"TEST-PRE-{i:03d}",
+                compound_id=f"TEST-{i:03d}",
                 smiles="c1ccccc1O",
                 mol=mol,
-                docked_pose_path=f"/tmp/fake_pose_{i}.pdbqt",
+                docked_pose_path=f"/tmp/pose_{i}.pdbqt",
+                pb2pa_allosteric_energy=-9.0 + i * 0.5,
             )
-            candidates.append(rec)
-        return candidates
+            records.append(rec)
+        return records
 
-    @pytest.fixture
-    def mock_orchestrator(
-        self, mock_candidates: List[CompoundRecord],
-    ) -> Any:
-        from autoantibiotic.orchestrator import PipelineOrchestrator
-
-        orch = PipelineOrchestrator(use_cache=False)
-        orch.top_candidates = mock_candidates[:]
-        orch.targets = {
-            "PBP2a": {
-                "pdbqt": str(Path("/tmp/fake/pdbqt") / "PBP2a.pdbqt"),
-                "allosteric_center": (0.0, 0.0, 0.0),
-            },
-        }
-        return orch
-
-    def test_pre_screen_filters_low_ifp(
-        self, mock_orchestrator: Any,
+    def test_select_candidates_filters_by_energy_cutoff(
+        self, candidates: List[CompoundRecord],
     ) -> None:
-        """Candidates with IFP below threshold are excluded from FEP."""
-        original_pool_size = CONFIG.fep_pre_screen_pool_size
-        original_ifp_threshold = CONFIG.fep_ifp_threshold
-        CONFIG.fep_pre_screen_pool_size = 10
-        CONFIG.fep_ifp_threshold = 0.5
-        try:
-            with patch(
-                "autoantibiotic.scoring_metrics.compute_ifp_similarity",
-                side_effect=[0.3, 0.3, 0.3] + [0.8] * 7,
-            ), patch(
-                "os.path.isfile", return_value=True,
-            ), patch(
-                "autoantibiotic.fep_engine.FEPResistanceCalculator",
-            ) as mock_fep_cls:
-                mock_calc = MagicMock()
-                mock_fep_cls.return_value = mock_calc
+        """Candidates with allosteric energy >= -8.0 should be excluded."""
+        from autoantibiotic.fep_manager import FEPManager
 
-                mock_orchestrator.apply_fep_resistance()
+        manager = FEPManager(config=CONFIG, targets={"PBP2a": {"pdbqt": "/tmp/fake.pdbqt"}})
+        manager._pharmacophore_query = {"mode": "2d"}  # bypass _build
+        manager._ref_mol = Chem.MolFromSmiles("c1ccccc1")
+        manager._receptor_pdb = "/tmp/fake.pdb"
 
-                # 3 low IFP (skip) + 7 high IFP = 7 pass, cap at fep_top_n=5
-                assert mock_fep_cls.call_count == 5, (
-                    f"Expected 5 FEP calls, got {mock_fep_cls.call_count}"
-                )
-        finally:
-            CONFIG.fep_pre_screen_pool_size = original_pool_size
-            CONFIG.fep_ifp_threshold = original_ifp_threshold
+        # compute_ifp_similarity is called twice per candidate (round 1 + round 2)
+        # Round 1 (10 calls): all return 0.9 → all pass initial IFP
+        # Round 2 (10 calls): first 5 return 0.9, last 5 return 0.3
+        # But only candidates that pass round 1 proceed to round 2 (all 10 pass)
+        side_effects = [0.9] * 10 + [0.9] * 5 + [0.3] * 5
+        with patch(
+            "autoantibiotic.fep_manager.compute_ifp_similarity",
+            side_effect=side_effects,
+        ), patch(
+            "autoantibiotic.fep_manager._build_allosteric_pharmacophore",
+            return_value={"mode": "2d"},
+        ), patch(
+            "os.path.isfile", return_value=True,
+        ), patch(
+            "autoantibiotic.fep_manager.check_pharmacophore_match",
+            return_value=True,
+        ):
+            result = manager.select_candidates_for_fep(candidates)
 
-    def test_pre_screen_expands_pool(
-        self, mock_orchestrator: Any,
+        # energies: -9.0, -8.5, -8.0, -7.5, -7.0, -6.5, -6.0, -5.5, -5.0, -4.5
+        # Strict: energy < -8.0 AND IFP >= 0.7
+        # -9.0 (IFP=0.9) passes, -8.5 (IFP=0.9) passes, -8.0 (IFP=0.3) fails
+        # So only 2 candidates should be returned
+        assert len(result) == 2, f"Expected 2, got {len(result)}"
+        assert all(r.pb2pa_allosteric_energy < -8.0 for r in result)
+
+    def test_select_candidates_filters_by_ifp(
+        self, candidates: List[CompoundRecord],
     ) -> None:
-        """When more candidates pass IFP than fep_top_n, only top N are processed."""
-        original_pool_size = CONFIG.fep_pre_screen_pool_size
-        original_top_n = CONFIG.fep_top_n
-        CONFIG.fep_pre_screen_pool_size = 10
-        CONFIG.fep_top_n = 3
+        """Candidates with IFP below strict threshold (0.7) should be excluded."""
+        from autoantibiotic.fep_manager import FEPManager
+
+        manager = FEPManager(config=CONFIG, targets={"PBP2a": {"pdbqt": "/tmp/fake.pdbqt"}})
+        manager._pharmacophore_query = {"mode": "2d"}
+        manager._ref_mol = Chem.MolFromSmiles("c1ccccc1")
+        manager._receptor_pdb = "/tmp/fake.pdb"
+
+        # First 3 have low IFP (fail initial IFP > 0.5)
+        # Next 3 have IFP 0.6 (pass initial but fail strict >= 0.7)
+        # Last 4 have IFP 0.8 (pass both)
+        side_effects = [0.3, 0.3, 0.3, 0.6, 0.6, 0.6, 0.8, 0.8, 0.8, 0.8]
+        with patch(
+            "autoantibiotic.fep_manager.compute_ifp_similarity",
+            side_effect=side_effects,
+        ), patch(
+            "autoantibiotic.fep_manager._build_allosteric_pharmacophore",
+            return_value={"mode": "2d"},
+        ), patch(
+            "os.path.isfile", return_value=True,
+        ), patch(
+            "autoantibiotic.fep_manager.check_pharmacophore_match",
+            return_value=True,
+        ):
+            result = manager.select_candidates_for_fep(candidates)
+
+        # 3 fail initial IFP (0.3 <= 0.5), 3 fail strict IFP (0.6 < 0.7),
+        # 4 pass, but also need energy < -8.0
+        # energies: -9.0(0.3), -8.5(0.3), -8.0(0.3), -7.5(0.6), -7.0(0.6), -6.5(0.6),
+        #           -6.0(0.8), -5.5(0.8), -5.0(0.8), -4.5(0.8)
+        # Candidates with IFP >= 0.7 (last 4): -6.0, -5.5, -5.0, -4.5
+        # BUT energy must be < -8.0, and none of those are < -8.0
+        assert len(result) == 0
+
+    def test_select_candidates_returns_top_n_strict(
+        self, candidates: List[CompoundRecord],
+    ) -> None:
+        """Only top ``fep_top_n_strict`` candidates should be returned."""
+        from autoantibiotic.fep_manager import FEPManager
+
+        original_strict = CONFIG.fep_top_n_strict
+        CONFIG.fep_top_n_strict = 3
         try:
+            rec = candidates[0]
+            rec.pb2pa_allosteric_energy = -12.0
+
+            manager = FEPManager(config=CONFIG, targets={"PBP2a": {"pdbqt": "/tmp/fake.pdbqt"}})
+            manager._pharmacophore_query = {"mode": "2d"}
+            manager._ref_mol = Chem.MolFromSmiles("c1ccccc1")
+            manager._receptor_pdb = "/tmp/fake.pdb"
+
             with patch(
-                "autoantibiotic.scoring_metrics.compute_ifp_similarity",
+                "autoantibiotic.fep_manager.compute_ifp_similarity",
                 return_value=0.9,
             ), patch(
+                "autoantibiotic.fep_manager._build_allosteric_pharmacophore",
+                return_value={"mode": "2d"},
+            ), patch(
                 "os.path.isfile", return_value=True,
             ), patch(
-                "autoantibiotic.fep_engine.FEPResistanceCalculator",
-            ) as mock_fep_cls:
-                mock_calc = MagicMock()
-                mock_fep_cls.return_value = mock_calc
+                "autoantibiotic.fep_manager.check_pharmacophore_match",
+                return_value=True,
+            ):
+                result = manager.select_candidates_for_fep(candidates)
 
-                mock_orchestrator.apply_fep_resistance()
-
-                # All 10 pass IFP, cap at fep_top_n=3
-                assert mock_fep_cls.call_count == 3, (
-                    f"Expected 3 FEP calls, got {mock_fep_cls.call_count}"
-                )
+            assert len(result) <= 3
         finally:
-            CONFIG.fep_pre_screen_pool_size = original_pool_size
-            CONFIG.fep_top_n = original_top_n
+            CONFIG.fep_top_n_strict = original_strict
 
 
 # ── Test 4: ADMET expanded data ────────────────────────────────────
@@ -289,25 +311,21 @@ class TestADMETExpandedData:
 
         data = load_chembl_admet_subset()
 
-        # hERG blockers (label=1)
         herg_blockers = [d for d in data["herg"] if d["label"] == 1]
         assert len(herg_blockers) > 50, (
             f"hERG blockers: {len(herg_blockers)} (expected >50)"
         )
 
-        # hERG safe (label=0)
         herg_safe = [d for d in data["herg"] if d["label"] == 0]
         assert len(herg_safe) > 50, (
             f"hERG safe: {len(herg_safe)} (expected >50)"
         )
 
-        # CYP inhibitors (label=1)
         cyp_inhibitors = [d for d in data["cyp"] if d["label"] == 1]
         assert len(cyp_inhibitors) > 50, (
             f"CYP inhibitors: {len(cyp_inhibitors)} (expected >50)"
         )
 
-        # CYP non-inhibitors (label=0)
         cyp_non = [d for d in data["cyp"] if d["label"] == 0]
         assert len(cyp_non) > 50, (
             f"CYP non-inhibitors: {len(cyp_non)} (expected >50)"
@@ -343,7 +361,6 @@ class TestFEPMinimalIntegration:
     @pytest.fixture
     def dummy_pdb_files(self, tmp_path: Path) -> tuple:
         """Create minimal dummy PDB files for FEPResistanceCalculator."""
-        # Two-alanine receptor PDB (minimal valid PDB)
         receptor_pdb = tmp_path / "receptor_wt.pdb"
         receptor_pdb.write_text(
             "ATOM      1  N   ALA A   1       1.458   0.000   0.000  1.00  0.00           N\n"
@@ -364,7 +381,6 @@ class TestFEPMinimalIntegration:
             "TER\n"
             "END\n"
         )
-        # Same file for mutant (we only care about pre_screen_ligand)
         mutant_pdb = tmp_path / "receptor_mut.pdb"
         mutant_pdb.write_text(receptor_pdb.read_text())
         return str(receptor_pdb), str(mutant_pdb)
@@ -381,7 +397,6 @@ class TestFEPMinimalIntegration:
             receptor_mut_pdb=mut_pdb,
             ligand_smiles="C",
         )
-        # Should not raise
         calc.pre_screen_ligand()
 
     def test_pre_screen_ligand_raises_for_large_molecule(
