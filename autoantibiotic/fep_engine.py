@@ -47,6 +47,22 @@ class ConfigurationError(AutoAntibioticError):
     missing for a requested feature."""
 
 
+class FEPConvergenceError(AutoAntibioticError):
+    """Error raised when the FEP calculation fails to converge within
+    the allowed number of lambda windows or steps."""
+
+
+class FETopologyError(AutoAntibioticError):
+    """Error raised when the FEP calculation encounters an invalid
+    molecular topology (e.g. missing atom types, ligand parameterisation
+    failure, or inconsistent residue naming)."""
+
+
+class FEResourceError(AutoAntibioticError):
+    """Error raised when the FEP calculation exhausts computational
+    resources (e.g. out-of-memory, disk full, GPU OOM)."""
+
+
 class FEPResistanceResult:
     """Result of a Free Energy Perturbation (FEP) resistance calculation.
 
@@ -259,6 +275,12 @@ class FEPResistanceCalculator:
         ConfigurationError
             If OpenMM or openmmtools are not installed, if the PDB
             files cannot be found, or if no ligand is available.
+        FEPConvergenceError
+            If the MBAR estimator fails to converge.
+        FETopologyError
+            If the molecular topology is invalid for FEP.
+        FEResourceError
+            If computational resources are exhausted.
 
         Examples
         --------
@@ -321,7 +343,73 @@ class FEPResistanceCalculator:
         if initial_energy is not None:
             return initial_energy
 
-        return self._compute_fep_delta_ddg()
+        try:
+            return self._compute_fep_delta_ddg()
+        except FEPConvergenceError:
+            raise
+        except FETopologyError:
+            raise
+        except FEResourceError:
+            raise
+        except Exception as exc:
+            exc_msg = str(exc)
+            exc_type = type(exc).__name__
+
+            # Topology / parameterisation errors
+            if any(kw in exc_msg.lower() for kw in (
+                "residue", "topology", "parameter", "gaff", "atom type",
+                "ligand", "forcefield", "nonbonded",
+            )):
+                raise FETopologyError(
+                    f"FEP topology error for ligand {self.ligand_smiles}: "
+                    f"{exc_type}: {exc_msg}"
+                ) from exc
+
+            # Resource errors
+            if any(kw in exc_msg.lower() for kw in (
+                "memory", "cuda", "out of memory", "oom", "disk",
+                "resource", "cudart",
+            )):
+                raise FEResourceError(
+                    f"FEP resource error: {exc_type}: {exc_msg}"
+                ) from exc
+
+            # Default to convergence error for other OpenMM/MBAR failures
+            raise FEPConvergenceError(
+                f"FEP calculation failed: {exc_type}: {exc_msg}"
+            ) from exc
+
+    def retry_with_increased_windows(self, extra_windows: int = 4) -> FEPResistanceResult:
+        """Retry the FEP calculation with an increased number of lambda
+        windows.  This is useful when a :class:`FEPConvergenceError`
+        indicates that the original lambda schedule had insufficient
+        phase-space overlap.
+
+        Parameters
+        ----------
+        extra_windows : int
+            Number of additional lambda windows to add (default 4).
+
+        Returns
+        -------
+        FEPResistanceResult
+            The result of the retried calculation.
+
+        Raises
+        ------
+        FEPConvergenceError
+            If the retry also fails to converge.
+        """
+        original_windows = CONFIG.fep_lambda_windows
+        CONFIG.fep_lambda_windows = original_windows + extra_windows
+        try:
+            log.info(
+                "Retrying FEP with %d lambda windows (was %d).",
+                CONFIG.fep_lambda_windows, original_windows,
+            )
+            return self.calculate_ddg()
+        finally:
+            CONFIG.fep_lambda_windows = original_windows
 
     def _compute_fep_delta_ddg(self) -> FEPResistanceResult:
         """Perform the actual OpenMM alchemical free energy calculation.
@@ -747,7 +835,13 @@ class FEPResistanceCalculator:
         from io import StringIO
         from openmm.app import PDBFile, ForceField, Modeller
 
-        receptor_topology, receptor_positions = self._build_solvated_receptor(pdb_path)
+        try:
+            receptor_topology, receptor_positions = self._build_solvated_receptor(pdb_path)
+        except Exception as exc:
+            raise FETopologyError(
+                f"Failed to build solvated receptor from {pdb_path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
         modeller = Modeller(receptor_topology, receptor_positions)
 
         # ── Prepare and add ligand ────────────────────────────────
@@ -765,7 +859,12 @@ class FEPResistanceCalculator:
                     _AllChem.MMFFOptimizeMolecule(mol)
 
             # Convert RDKit Mol to PDB block for OpenMM
-            pdb_block = Chem.MolToPDBBlock(mol)
+            try:
+                pdb_block = Chem.MolToPDBBlock(mol)
+            except Exception as exc:
+                raise FETopologyError(
+                    f"Failed to convert ligand to PDB block: {type(exc).__name__}: {exc}"
+                ) from exc
             pdb_block = pdb_block.replace("HETATM", "ATOM  ")
             # Rename the residue to "LIG" for consistent identification
             lines = []
@@ -775,27 +874,42 @@ class FEPResistanceCalculator:
                 lines.append(ln)
             pdb_block = "\n".join(lines)
 
-            ligand_pdb = PDBFile(StringIO(pdb_block))
-            modeller.add(ligand_pdb.topology, ligand_pdb.positions)
+            try:
+                ligand_pdb = PDBFile(StringIO(pdb_block))
+                modeller.add(ligand_pdb.topology, ligand_pdb.positions)
+            except Exception as exc:
+                raise FETopologyError(
+                    f"Failed to add ligand to receptor model: {type(exc).__name__}: {exc}"
+                ) from exc
 
         # ── Create system with GAFF2 ligand parameters ────────────
         from openmmforcefields.generators import SystemGenerator as _SystemGenerator
 
-        system_generator = _SystemGenerator(
-            forcefields=["amber14-all.xml", "amber14/tip3pfb.xml"],
-            small_molecule_forcefield="gaff-2.11",
-            molecules=[self.ligand_rdkit] if self.ligand_rdkit else [],
-            forcefield_kwargs={
-                "constraints": _openmm_app.HBonds,
-                "rigidWater": True,
-                "ewaldErrorTolerance": CONFIG.fep_ewald_error_tolerance,
-            },
-        )
-        system = system_generator.create_system(
-            modeller.topology,
-            nonbondedMethod=_openmm_app.PME,
-            nonbondedCutoff=CONFIG.fep_nonbonded_cutoff_nm * _openmm_unit.nanometer,
-        )
+        try:
+            system_generator = _SystemGenerator(
+                forcefields=["amber14-all.xml", "amber14/tip3pfb.xml"],
+                small_molecule_forcefield="gaff-2.11",
+                molecules=[self.ligand_rdkit] if self.ligand_rdkit else [],
+                forcefield_kwargs={
+                    "constraints": _openmm_app.HBonds,
+                    "rigidWater": True,
+                    "ewaldErrorTolerance": CONFIG.fep_ewald_error_tolerance,
+                },
+            )
+            system = system_generator.create_system(
+                modeller.topology,
+                nonbondedMethod=_openmm_app.PME,
+                nonbondedCutoff=CONFIG.fep_nonbonded_cutoff_nm * _openmm_unit.nanometer,
+            )
+        except Exception as exc:
+            exc_msg = str(exc).lower()
+            if any(kw in exc_msg for kw in ("memory", "cuda", "oom")):
+                raise FEResourceError(
+                    f"FEP resource error during system creation: {type(exc).__name__}: {exc}"
+                ) from exc
+            raise FETopologyError(
+                f"FEP topology error during system creation: {type(exc).__name__}: {exc}"
+            ) from exc
 
         # Add barostat
         pressure = CONFIG.fep_pressure_atm * _openmm_unit.atmospheres
@@ -830,19 +944,32 @@ class FEPResistanceCalculator:
             Indices of ligand atoms in the OpenMM topology.
         """
         indices: List[int] = []
-        n_lig_heavy = ligand_mol.GetNumHeavyAtoms()
         for atom in topology.atoms():
             if atom.residue.name == "LIG":
                 indices.append(atom.index)
         if not indices:
+            n_lig_heavy = ligand_mol.GetNumHeavyAtoms()
             # Fallback: assume first molecule after protein is the ligand
-            # Count protein atoms and take the rest as ligand
             n_protein = sum(
                 1 for a in topology.atoms()
                 if a.residue.name not in ("LIG", "HOH", "NA", "CL")
             )
             total = topology.getNumAtoms()
-            indices = list(range(n_protein, min(n_protein + n_lig_heavy * 4, total)))
+            fallback_indices = list(range(n_protein, min(n_protein + n_lig_heavy * 4, total)))
+            if fallback_indices:
+                log.warning(
+                    "No LIG residue found in topology — using fallback atom index "
+                    "heuristic (%d atoms). Ligand SMILES: %s",
+                    len(fallback_indices),
+                    Chem.MolToSmiles(ligand_mol) if ligand_mol else "unknown",
+                )
+                return fallback_indices
+            raise FETopologyError(
+                f"No LIG residue found in topology and fallback heuristic failed. "
+                f"The ligand may not have been properly added to the system. "
+                f"Ligand SMILES: "
+                f"{Chem.MolToSmiles(ligand_mol) if ligand_mol else 'unknown'}"
+            )
         return indices
 
     @staticmethod

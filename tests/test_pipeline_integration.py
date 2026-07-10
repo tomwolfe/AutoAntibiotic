@@ -54,7 +54,7 @@ class TestPipelineOrdering:
 
         # Find the run method and extract call order
         import re
-        pattern = r'self\.(apply_\w+|screen_candidates)\('
+        pattern = r'self\._(apply_\w+|screen_candidates)\('
         matches = re.findall(pattern, source)
 
         # Verify order: screen_candidates → explicit → MD → meta_scoring
@@ -80,7 +80,7 @@ class TestPipelineOrdering:
         with open(orchestrator_path, "r") as f:
             source = f.read()
 
-        pattern = r'self\.(apply_\w+|screen_candidates)\('
+        pattern = r'self\._(apply_\w+|screen_candidates)\('
         matches = re.findall(pattern, source)
 
         screen_idx = next((i for i, m in enumerate(matches) if 'screen_candidates' in m), -1)

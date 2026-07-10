@@ -14,6 +14,7 @@ from .io_utils import (
     GninaError,
     OpenBabelError,
 )
+from .pipeline_context import PipelineContext
 
 __all__ = [
     "CONFIG",
@@ -23,4 +24,5 @@ __all__ = [
     "load_json_cache",
     "save_json_cache",
     "make_cache_key",
+    "PipelineContext",
 ]
