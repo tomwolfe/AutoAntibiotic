@@ -133,7 +133,7 @@ class TestRunGninaDocking:
 
     def test_nonzero_returncode_raises_error(self) -> None:
         with patch(
-            "autoantibiotic.docking_legacy.ToolExecutor.run",
+            "autoantibiotic.docking.compound.ToolExecutor.run",
             return_value=_make_tool_result(returncode=1, stderr=_GNINA_FAILURE_STDERR),
         ):
             with pytest.raises(DockingParseError):
@@ -167,7 +167,7 @@ class TestRunGninaDocking:
         saved_path = CONFIG.gnina_binary_path
         CONFIG.gnina_binary_path = "/custom/path/gnina"
         try:
-            with patch("autoantibiotic.docking_legacy.ToolExecutor.run") as mock_run:
+            with patch("autoantibiotic.docking.compound.ToolExecutor.run") as mock_run:
                 mock_run.return_value = _make_tool_result()
                 _run_docking_tool(
                     "gnina",
@@ -234,8 +234,8 @@ class TestDockCompoundWithGnina:
         CONFIG.use_gnina, CONFIG.gnina_binary_path, CONFIG.dry_run, CONFIG.validate_docking_binaries_on_startup = self.saved_config
 
     def test_gnina_success_returns_score(self) -> None:
-        with patch("autoantibiotic.docking_legacy.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking_legacy._run_docking_tool", return_value=0.9123):
+        with patch("autoantibiotic.docking.compound.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking.compound._run_docking_tool", return_value=0.9123):
                 energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
@@ -251,8 +251,8 @@ class TestDockCompoundWithGnina:
         def _mock_dock(tool_name, *args, **kwargs):
             return None if tool_name == "gnina" else -8.5
 
-        with patch("autoantibiotic.docking_legacy.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking_legacy._run_docking_tool", side_effect=_mock_dock):
+        with patch("autoantibiotic.docking.compound.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking.compound._run_docking_tool", side_effect=_mock_dock):
                 energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
@@ -265,8 +265,8 @@ class TestDockCompoundWithGnina:
         assert method == "Vina"
 
     def test_both_fail_return_none(self) -> None:
-        with patch("autoantibiotic.docking_legacy.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking_legacy._run_docking_tool", return_value=None):
+        with patch("autoantibiotic.docking.compound.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking.compound._run_docking_tool", return_value=None):
                 energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
@@ -281,8 +281,8 @@ class TestDockCompoundWithGnina:
     def test_returns_method_string_in_dry_run_gnina(self) -> None:
         CONFIG.dry_run = True
         CONFIG.use_gnina = True
-        with patch("autoantibiotic.docking_legacy.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking_legacy._run_docking_tool") as mock_dock:
+        with patch("autoantibiotic.docking.compound.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking.compound._run_docking_tool") as mock_dock:
                 energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
@@ -297,8 +297,8 @@ class TestDockCompoundWithGnina:
     def test_returns_method_string_in_dry_run_vina(self) -> None:
         CONFIG.dry_run = True
         CONFIG.use_gnina = False
-        with patch("autoantibiotic.docking_legacy.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking_legacy._run_docking_tool") as mock_dock:
+        with patch("autoantibiotic.docking.compound.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking.compound._run_docking_tool") as mock_dock:
                 energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
@@ -312,8 +312,8 @@ class TestDockCompoundWithGnina:
 
     def test_gnina_not_used_when_disabled(self) -> None:
         CONFIG.use_gnina = False
-        with patch("autoantibiotic.docking_legacy.prepare_ligand_pdbqt", return_value=True):
-            with patch("autoantibiotic.docking_legacy._run_docking_tool", return_value=-7.2) as mock_dock:
+        with patch("autoantibiotic.docking.compound.prepare_ligand_pdbqt", return_value=True):
+            with patch("autoantibiotic.docking.compound._run_docking_tool", return_value=-7.2) as mock_dock:
                 energy, method = dock_compound(
                     self.record,
                     receptor_pdbqt="rec.pdbqt",
@@ -359,7 +359,7 @@ class TestDockCompoundEnsemble:
 
     def test_mean_consensus(self) -> None:
         CONFIG.consensus_scoring_method = "mean"
-        with patch("autoantibiotic.docking_legacy.dock_compound", side_effect=self._mock_dock_compound):
+        with patch("autoantibiotic.docking.compound.dock_compound", side_effect=self._mock_dock_compound):
             score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt", "r3.pdbqt"],
@@ -373,7 +373,7 @@ class TestDockCompoundEnsemble:
 
     def test_min_consensus(self) -> None:
         CONFIG.consensus_scoring_method = "min"
-        with patch("autoantibiotic.docking_legacy.dock_compound", side_effect=self._mock_dock_compound):
+        with patch("autoantibiotic.docking.compound.dock_compound", side_effect=self._mock_dock_compound):
             score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt", "r3.pdbqt"],
@@ -387,7 +387,7 @@ class TestDockCompoundEnsemble:
 
     def test_median_consensus(self) -> None:
         CONFIG.consensus_scoring_method = "median"
-        with patch("autoantibiotic.docking_legacy.dock_compound", side_effect=self._mock_dock_compound):
+        with patch("autoantibiotic.docking.compound.dock_compound", side_effect=self._mock_dock_compound):
             score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt", "r3.pdbqt"],
@@ -400,7 +400,7 @@ class TestDockCompoundEnsemble:
         assert method == "Vina"
 
     def test_all_fail_returns_none(self) -> None:
-        with patch("autoantibiotic.docking_legacy.dock_compound", return_value=(None, "None")):
+        with patch("autoantibiotic.docking.compound.dock_compound", return_value=(None, "None")):
             score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt"],
@@ -418,7 +418,7 @@ class TestDockCompoundEnsemble:
             return (-9.0, "Vina") if "ens0" in tag else (None, "None")
 
         CONFIG.consensus_scoring_method = "mean"
-        with patch("autoantibiotic.docking_legacy.dock_compound", side_effect=_partial):
+        with patch("autoantibiotic.docking.compound.dock_compound", side_effect=_partial):
             score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt"],
@@ -438,7 +438,7 @@ class TestDockCompoundEnsemble:
             return -7.0, "Vina"
 
         CONFIG.consensus_scoring_method = "mean"
-        with patch("autoantibiotic.docking_legacy.dock_compound", side_effect=_first_fails):
+        with patch("autoantibiotic.docking.compound.dock_compound", side_effect=_first_fails):
             score, method = dock_compound_ensemble(
                 self.record,
                 receptor_pdbqt_list=["r1.pdbqt", "r2.pdbqt"],
