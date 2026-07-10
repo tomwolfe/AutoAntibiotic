@@ -350,9 +350,9 @@ def test_metascorer_ifp_water_features() -> None:
     assert feat_high[3] != feat_low[3]
     assert feat_high[12] != feat_low[12]
 
-    # Feature vector length must be 13
-    assert feat_high.shape[0] == 13, f"Expected 13 features, got {feat_high.shape[0]}"
-    assert len(scorer._feature_names) == 13
+    # Feature vector length must be 16
+    assert feat_high.shape[0] == 16, f"Expected 16 features, got {feat_high.shape[0]}"
+    assert len(scorer._feature_names) == 16
 
     # Predictions must be valid and based on different feature vectors
     score_high = scorer.predict(_make_record(actives[0]))
@@ -427,8 +427,8 @@ def test_metascorer_with_real_docking_features() -> None:
         gnina_score=0.85,
         shape_score=0.92,
     )
-    # Feature vector must have shape (13,)
-    assert feats.shape == (13,), f"Expected shape (13,), got {feats.shape}"
+    # Feature vector must have shape (16,)
+    assert feats.shape == (16,), f"Expected shape (16,), got {feats.shape}"
 
     # Physics columns must be non-zero
     assert feats[0] == pytest.approx(-9.5, abs=1e-6), "vina_energy must be -9.5"
@@ -523,7 +523,7 @@ def test_shap_explanation_returns_dict() -> None:
     fake_explainer = MagicMock()
     fake_shap.TreeExplainer.return_value = fake_explainer
     fake_explainer.shap_values.return_value = np.array(
-        [[0.1, -0.05, 0.2, 0.0, 0.3, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+        [[0.1, -0.05, 0.2, 0.0, 0.3, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
         dtype=np.float32,
     )
 
@@ -590,7 +590,7 @@ def test_feature_importance_logging(caplog: pytest.LogCaptureFixture) -> None:
     fake_shap = MagicMock()
     fake_explainer = MagicMock()
     fake_shap.TreeExplainer.return_value = fake_explainer
-    n_feats = 13
+    n_feats = 16
     n_samples = 4
     fake_explainer.shap_values.return_value = np.random.randn(n_samples, n_feats).astype(np.float32)
 

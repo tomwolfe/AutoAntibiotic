@@ -271,7 +271,6 @@ class PipelineOrchestrator:
         # Pre-screen: expand pool and filter by pharmacophore and IFP similarity
         fep_top_n = getattr(self.config, "fep_top_n", 5)
         pool_size = getattr(self.config, "fep_pre_screen_pool_size", 20)
-        ifp_threshold = getattr(self.config, "fep_ifp_threshold", 0.5)
 
         candidates_pool = self.top_candidates[:pool_size]
 
@@ -283,45 +282,66 @@ class PipelineOrchestrator:
         ref_mol = Chem.MolFromSmiles(ref_smiles) if ref_smiles else None
 
         fep_candidates: List[CompoundRecord] = []
+        n_pharmacophore_filtered = 0
+        n_ifp_filtered = 0
         for rec in candidates_pool:
-            # Pharmacophore pre-screening: require at least 2 of 3 key features
+            # Pharmacophore pre-screening: require min_matches=2
+            pharmacophore_ok = False
             if rec.mol is not None and pharmacophore_query is not None:
-                if not check_pharmacophore_match(
+                if check_pharmacophore_match(
                     rec.mol,
                     query=pharmacophore_query,
-                    min_matches=self.config.pharmacophore_min_matches,
+                    min_matches=2,
                     tolerance=self.config.pharmacophore_tolerance,
                     config=self.config,
                 ):
-                    log.info(
-                        f"  {rec.compound_id}: Failed pharmacophore match — "
-                        "Skipped FEP pre-screen."
-                    )
-                    continue
+                    pharmacophore_ok = True
+            if not pharmacophore_ok:
+                n_pharmacophore_filtered += 1
+                log.info(
+                    f"  {rec.compound_id}: Failed pharmacophore match "
+                    f"(min_matches=2) — Skipped FEP pre-screen."
+                )
+                continue
+
+            # IFP similarity check against reference ligand (Ceftaroline)
+            ifp_ok = False
             pose_path = rec.docked_pose_path
             if (pose_path and os.path.isfile(pose_path)
                     and ref_mol is not None and rec.mol is not None):
                 try:
                     ifp_score = compute_ifp_similarity(rec.mol, ref_mol, receptor_pdb)
-                    if ifp_score < ifp_threshold:
+                    if ifp_score > 0.5:
+                        ifp_ok = True
+                    else:
                         log.warning(
                             f"  {rec.compound_id}: IFP similarity {ifp_score:.3f} "
-                            f"below threshold {ifp_threshold} — "
-                            "Skipped: Low IFP Similarity"
+                            "<= 0.5 — Skipped FEP pre-screen."
                         )
-                        continue
                 except Exception:
                     log.warning(
-                        f"  {rec.compound_id}: IFP calculation failed, "
-                        "including candidate (fail-safe)."
+                        f"  {rec.compound_id}: IFP calculation failed — "
+                        "Skipped FEP pre-screen."
                     )
             else:
-                if not pose_path or not os.path.isfile(pose_path):
-                    log.warning(
-                        f"  {rec.compound_id}: No docked pose path available, "
-                        "including candidate (fail-safe)."
-                    )
+                log.warning(
+                    f"  {rec.compound_id}: No docked pose or reference ligand "
+                    "available — Skipped FEP pre-screen."
+                )
+
+            if not ifp_ok:
+                n_ifp_filtered += 1
+                continue
+
             fep_candidates.append(rec)
+
+        total_pre = len(candidates_pool)
+        n_passed = len(fep_candidates)
+        log.info(
+            f"  FEP pre-screening: {n_passed}/{total_pre} candidates passed "
+            f"({n_pharmacophore_filtered} failed pharmacophore, "
+            f"{n_ifp_filtered} failed IFP similarity)."
+        )
 
         # ── Strict pre-screening (Phase 4.8a) ──
         # Filter by higher IFP threshold and allosteric energy cut-off,
@@ -358,9 +378,8 @@ class PipelineOrchestrator:
         candidates = strict_candidates[:fep_top_n_strict]
         log.info(
             f"  Pre-screening selected {len(candidates)}/"
-            f"{len(candidates_pool)} candidates for FEP based on "
-            f"IFP threshold (threshold={ifp_threshold}, "
-            f"strict_threshold={strict_threshold})."
+            f"{len(candidates_pool)} candidates for FEP (pharmacophore "
+            f"min_matches=2, IFP > 0.5, strict IFP >= {strict_threshold})."
         )
 
         from .fep_engine import FEPResistanceCalculator, ConfigurationError as FEPConfigError

@@ -22,7 +22,7 @@ class MetaScorer:
     """Stacking regressor that learns to predict activity from multiple
     docking and descriptor features.
 
-    Features (13-dim)
+    Features (16-dim)
     -----------------
     - Vina Energy (allosteric) [placeholder]
     - GNINA CNNscore [placeholder]
@@ -37,6 +37,9 @@ class MetaScorer:
     - Pocket Rg stability (MD-derived)
     - IFP similarity score (from CompoundRecord)
     - Water displacement energy (from CompoundRecord)
+    - Water displacement energy (explicit, from ``record.water_displacement_energy``)
+    - MD ligand RMSD (explicit, from ``record.md_ligand_rmsd``)
+    - MD pocket Rg stability (explicit, from ``record.md_pocket_rg_stability``)
 
     Training data is sourced from :mod:`benchmarks.reference_data` using
     known actives / inactives.  The trained model is persisted with
@@ -498,7 +501,7 @@ class MetaScorer:
             )
 
             # Backward compatibility: retrain if feature dimension has changed
-            expected_dim = 13
+            expected_dim = 16
             if self._model is not None and hasattr(self._model, "n_features_in_"):
                 if self._model.n_features_in_ != expected_dim:
                     log.warning(
@@ -659,7 +662,7 @@ class MetaScorer:
         gnina_score: Optional[float] = None,
         shape_score: Optional[float] = None,
     ) -> np.ndarray:
-        """13-dim feature vector for a molecule.
+        """16-dim feature vector for a molecule.
 
         Real physics data (4):
         1.   Vina binding energy (kcal/mol)
@@ -681,6 +684,11 @@ class MetaScorer:
         IFP / Water features (2), default 0.0 when unavailable:
         12. IFP similarity score (from CompoundRecord.ifp_score)
         13. Water displacement energy (from CompoundRecord.water_displacement_energy)
+
+        Explicit record features (3), default 0.0 when unavailable:
+        14. Water displacement energy (from ``record.water_displacement_energy``)
+        15. MD ligand RMSD (from ``record.md_ligand_rmsd``)
+        16. MD pocket Rg stability (from ``record.md_pocket_rg_stability``)
         """
         qed = float(QED.qed(mol))
         logp = float(Crippen.MolLogP(mol))
@@ -700,7 +708,8 @@ class MetaScorer:
 
         arr = np.array(
             [vina, gnina, shape, ifp, qed, logp, mw, n_rot,
-             rmsd_mean, rmsd_std, rg_stab, ifp, water_disp],
+             rmsd_mean, rmsd_std, rg_stab, ifp, water_disp,
+             water_disp, rmsd_mean, rg_stab],
             dtype=np.float32,
         )
         self._feature_names = [
@@ -708,6 +717,7 @@ class MetaScorer:
             "qed", "logp", "mw", "n_rotatable",
             "ligand_rmsd_mean", "ligand_rmsd_std", "pocket_rg_stability",
             "ifp_score_complex", "water_displacement_energy",
+            "water_disp_energy", "md_rmsd", "md_rg_stab",
         ]
         return arr
 
