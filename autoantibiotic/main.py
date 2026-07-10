@@ -93,6 +93,15 @@ def main(argv: Optional[List[str]] = None) -> None:
         "BRICS recombination (computationally expensive: requires model inference).",
     )
     parser.add_argument(
+        "--fep-top-n", type=int, default=None,
+        help="Override CONFIG.fep_top_n — max number of top candidates for rigorous FEP.",
+    )
+    parser.add_argument(
+        "--fep-ifp-threshold", type=float, default=None,
+        help="Override CONFIG.fep_ifp_threshold — minimum IFP Tanimoto similarity to reference "
+        "ligand for FEP pre-screening.",
+    )
+    parser.add_argument(
         "--validate-inputs", action="store_true",
         help="Validate all pipeline inputs (binaries, SMILES, directories) and exit. "
         "Returns exit code 0 on success, 1 if any issues are found.",
@@ -133,6 +142,12 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.generative_mode:
         cfg.generative_mode = True
+
+    if args.fep_top_n is not None:
+        cfg.fep_top_n = args.fep_top_n
+
+    if args.fep_ifp_threshold is not None:
+        cfg.fep_ifp_threshold = args.fep_ifp_threshold
 
     if args.strict_scoring:
         cfg.use_strict_scoring = True

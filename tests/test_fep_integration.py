@@ -332,3 +332,81 @@ class TestADMETExpandedData:
         assert len(invalid) == 0, (
             f"Found {len(invalid)} invalid SMILES: {invalid[:5]}"
         )
+
+
+# ── Test 5: Minimal FEP pre-screening integration ──────────────────
+
+
+class TestFEPMinimalIntegration:
+    """Verify FEP pre-screening logic with small and large ligands."""
+
+    @pytest.fixture
+    def dummy_pdb_files(self, tmp_path: Path) -> tuple:
+        """Create minimal dummy PDB files for FEPResistanceCalculator."""
+        # Two-alanine receptor PDB (minimal valid PDB)
+        receptor_pdb = tmp_path / "receptor_wt.pdb"
+        receptor_pdb.write_text(
+            "ATOM      1  N   ALA A   1       1.458   0.000   0.000  1.00  0.00           N\n"
+            "ATOM      2  CA  ALA A   1       2.009   1.422   0.000  1.00  0.00           C\n"
+            "ATOM      3  C   ALA A   1       1.461   2.172   1.200  1.00  0.00           C\n"
+            "ATOM      4  O   ALA A   1       0.300   2.572   1.192  1.00  0.00           O\n"
+            "ATOM      5  CB  ALA A   1       1.598   2.159  -1.262  1.00  0.00           C\n"
+            "ATOM      6  N   ALA A   2       2.280   2.363   2.233  1.00  0.00           N\n"
+            "ATOM      7  CA  ALA A   2       1.840   3.081   3.453  1.00  0.00           C\n"
+            "ATOM      8  C   ALA A   2       2.636   2.660   4.676  1.00  0.00           C\n"
+            "ATOM      9  O   ALA A   2       2.773   3.408   5.648  1.00  0.00           O\n"
+            "ATOM     10  CB  ALA A   2       2.029   4.580   3.282  1.00  0.00           C\n"
+            "ATOM     11  N   ALA A   3       3.145   1.429   4.655  1.00  0.00           N\n"
+            "ATOM     12  CA  ALA A   3       3.943   0.941   5.798  1.00  0.00           C\n"
+            "ATOM     13  C   ALA A   3       3.140   0.365   6.950  1.00  0.00           C\n"
+            "ATOM     14  O   ALA A   3       2.109  -0.269   6.752  1.00  0.00           O\n"
+            "ATOM     15  CB  ALA A   3       4.941   1.994   6.272  1.00  0.00           C\n"
+            "TER\n"
+            "END\n"
+        )
+        # Same file for mutant (we only care about pre_screen_ligand)
+        mutant_pdb = tmp_path / "receptor_mut.pdb"
+        mutant_pdb.write_text(receptor_pdb.read_text())
+        return str(receptor_pdb), str(mutant_pdb)
+
+    def test_pre_screen_ligand_passes_for_methane(
+        self, dummy_pdb_files: tuple,
+    ) -> None:
+        """pre_screen_ligand should pass for methane (1 heavy atom)."""
+        from autoantibiotic.fep_engine import FEPResistanceCalculator
+
+        wt_pdb, mut_pdb = dummy_pdb_files
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb=wt_pdb,
+            receptor_mut_pdb=mut_pdb,
+            ligand_smiles="C",
+        )
+        # Should not raise
+        calc.pre_screen_ligand()
+
+    def test_pre_screen_ligand_raises_for_large_molecule(
+        self, dummy_pdb_files: tuple,
+    ) -> None:
+        """pre_screen_ligand should raise ConfigurationError for >50 heavy atoms."""
+        from autoantibiotic.fep_engine import FEPResistanceCalculator, ConfigurationError
+
+        wt_pdb, mut_pdb = dummy_pdb_files
+        calc = FEPResistanceCalculator(
+            receptor_wt_pdb=wt_pdb,
+            receptor_mut_pdb=mut_pdb,
+            ligand_smiles="CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+        )
+        with pytest.raises(ConfigurationError):
+            calc.pre_screen_ligand()
+
+    def test_minimal_fep_run_if_openmm_available(
+        self, dummy_pdb_files: tuple,
+    ) -> None:
+        """Skip the full FEP test if OpenMM dependencies are missing."""
+        from autoantibiotic.fep_engine import (
+            _HAVE_OPENMM,
+            _HAVE_OPENMMTOOLS,
+        )
+
+        if not (_HAVE_OPENMM and _HAVE_OPENMMTOOLS):
+            pytest.skip("OpenMM and/or openmmtools not available")

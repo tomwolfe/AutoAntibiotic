@@ -21,7 +21,13 @@ class ConfigurationError(Exception):
 
 @dataclass
 class PipelineConfig:
-    """Top-level configuration container for the AutoAntibiotic pipeline."""
+    """Top-level configuration container for the AutoAntibiotic pipeline.
+
+    Key FEP pre-screening parameters (see field docstrings for details):
+    ``fep_top_n`` — max number of top candidates for rigorous FEP (default 20).
+    ``fep_ifp_threshold`` — minimum IFP Tanimoto similarity to reference
+    ligand for a candidate to proceed to FEP (default 0.5).
+    """
 
     # ── Pipeline-level fields ──
     random_seed: int = 42
