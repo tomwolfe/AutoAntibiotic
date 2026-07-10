@@ -1165,7 +1165,7 @@ def _rescore_explicit_solvent_loop(
     water_string = "with water displacement" if water_results else "no water correction"
 
     # ── Attempt parallel execution ──────────────────────────────────
-    max_workers = min(4, os.cpu_count() or 1)
+    max_workers = min(CONFIG.mmgbsa_parallel_workers, os.cpu_count() or 1)
     if max_workers > 1 and len(to_rescore) > 1:
         try:
             high_energy_waters = (

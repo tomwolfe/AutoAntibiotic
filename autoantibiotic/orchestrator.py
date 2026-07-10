@@ -449,6 +449,50 @@ class PipelineOrchestrator:
                     "  Active learning: no compounds flagged for review "
                     "(all predictions within uncertainty threshold)."
                 )
+
+            # ── Auto-retrain on uncertainty ─────────────────────────
+            if (
+                CONFIG.auto_retrain_on_uncertainty
+                and CONFIG.retrain_model_path
+                and len(flagged) > 5
+            ):
+                log.info(
+                    f"  Active learning: auto-retraining triggered with "
+                    f"{len(flagged)} uncertain compounds."
+                )
+                import csv
+                import tempfile
+
+                temp_csv = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".csv", delete=False,
+                )
+                try:
+                    writer = csv.writer(temp_csv)
+                    writer.writerow(["smiles", "ic50"])
+                    for rec in flagged:
+                        meta_score = predict_meta_score(rec)
+                        if meta_score is None:
+                            continue
+                        if meta_score > 0.7:
+                            writer.writerow([rec.smiles, "0.001"])
+                        elif meta_score < 0.3:
+                            writer.writerow([rec.smiles, "100"])
+                    temp_csv.close()
+                    from .active_learning import retrain_meta_scorer
+                    retrain_meta_scorer(temp_csv.name)
+                    log.info(
+                        "  Active learning: MetaScorer retrained with "
+                        "synthetic labels from uncertain compounds."
+                    )
+                except Exception as exc:
+                    log.warning(
+                        f"  Active learning auto-retraining failed: {exc}"
+                    )
+                finally:
+                    try:
+                        os.unlink(temp_csv.name)
+                    except OSError:
+                        pass
         return context
 
     def _apply_fep_resistance(self, context: PipelineContext) -> PipelineContext:
@@ -818,6 +862,50 @@ class PipelineOrchestrator:
                     "  Active learning: no compounds flagged for review "
                     "(all predictions within uncertainty threshold)."
                 )
+
+            # ── Auto-retrain on uncertainty ─────────────────────────
+            if (
+                CONFIG.auto_retrain_on_uncertainty
+                and CONFIG.retrain_model_path
+                and len(flagged) > 5
+            ):
+                log.info(
+                    f"  Active learning: auto-retraining triggered with "
+                    f"{len(flagged)} uncertain compounds."
+                )
+                import csv
+                import tempfile
+
+                temp_csv = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".csv", delete=False,
+                )
+                try:
+                    writer = csv.writer(temp_csv)
+                    writer.writerow(["smiles", "ic50"])
+                    for rec in flagged:
+                        meta_score = predict_meta_score(rec)
+                        if meta_score is None:
+                            continue
+                        if meta_score > 0.7:
+                            writer.writerow([rec.smiles, "0.001"])
+                        elif meta_score < 0.3:
+                            writer.writerow([rec.smiles, "100"])
+                    temp_csv.close()
+                    from .active_learning import retrain_meta_scorer
+                    retrain_meta_scorer(temp_csv.name)
+                    log.info(
+                        "  Active learning: MetaScorer retrained with "
+                        "synthetic labels from uncertain compounds."
+                    )
+                except Exception as exc:
+                    log.warning(
+                        f"  Active learning auto-retraining failed: {exc}"
+                    )
+                finally:
+                    try:
+                        os.unlink(temp_csv.name)
+                    except OSError:
+                        pass
 
     def apply_md_validation(self) -> None:
         """Phase 4.7 — Optional MD validation of top candidates with

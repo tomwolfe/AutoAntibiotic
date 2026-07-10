@@ -124,6 +124,11 @@ class PipelineConfig:
     is increased to 20 for higher precision."""
     """Relaxation MD duration (ns) with strong position restraints. Default 1 ns."""
 
+    mmgbsa_parallel_workers: int = 4
+    """Maximum parallel workers for explicit-solvent MM-GB/SA rescoring.
+    Capped by ``os.cpu_count()`` to avoid memory exhaustion during
+    OpenMM system creation (default 4)."""
+
     # Benchmark
     benchmark_mode: bool = False
     reference_actives_path: Optional[Path] = None
@@ -481,6 +486,12 @@ class PipelineConfig:
     retrain_model_path: Optional[str] = None
     """Path to a CSV file ({smiles, ic50}) for active-learning retraining.
     When set, the pipeline will retrain the MetaScorer with the new data."""
+
+    auto_retrain_on_uncertainty: bool = False
+    """When True and ``retrain_model_path`` is set, automatically retrain
+    the MetaScorer with synthetic labels (meta-score > 0.7 active,
+    < 0.3 inactive) for compounds flagged as uncertain during
+    meta-scoring.  Default False."""
 
     # ── Reporting parameters ──
     # ── Audit / observability ──
