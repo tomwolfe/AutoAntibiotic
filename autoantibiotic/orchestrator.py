@@ -18,6 +18,8 @@ from rdkit import Chem
 from .config import CONFIG, PipelineConfig
 from .models import CompoundRecord
 from .docking import run_redocking_validation, screen_library
+from .docking import get_engine
+from .docking import DockingEngine
 from .analysis import analyze_selectivity_and_resistance, predict_meta_score
 from .scoring_metrics import check_key_interactions, compute_ifp_similarity
 from .ml_scoring.meta_scorer import _get_meta_scorer
@@ -217,11 +219,13 @@ class PipelineOrchestrator:
         return context
 
     def _screen_candidates(self, context: PipelineContext) -> PipelineContext:
+        engine_name = "gnina" if self.config.use_gnina else "vina"
+        engine = get_engine(engine_name, config=self.config)
         top_candidates = screen_library(
             context.filtered_library, self.targets, str(self.config.work_dir),
             self.deps, cache=self.cache, use_cache=self.use_cache,
             water_results=self.water_results, dry_run=self.config.dry_run,
-            audit=self.audit, config=self.config,
+            audit=self.audit, config=self.config, engine=engine,
         )
         context.docked_candidates = top_candidates
         if self.audit is not None:
@@ -230,6 +234,60 @@ class PipelineOrchestrator:
             log.warning("  No candidates after screening. Halting pipeline.")
             raise SystemExit(0)
         context = self._filter_by_key_interactions_context(context)
+        context = self._run_benchmark_check(context)
+        return context
+
+    def _run_benchmark_check(self, context: PipelineContext) -> PipelineContext:
+        if not self.config.benchmark_mode:
+            return context
+        candidates = context.docked_candidates
+        if not candidates:
+            return context
+        log.info("─── Benchmark Check ───")
+        try:
+            from benchmarks.reference_data import get_actives_smiles, get_inactives_smiles
+            from benchmarks.run_enrichment_test import compute_enrichment_factor, compute_roc_auc
+            import numpy as np
+
+            active_smiles = set(get_actives_smiles())
+            inactive_smiles = set(get_inactives_smiles())
+
+            scores: list = []
+            labels: list = []
+            for rec in candidates:
+                energy = rec.pb2pa_allosteric_energy
+                if energy is None:
+                    continue
+                scores.append(energy)
+                if rec.smiles in active_smiles:
+                    labels.append(1)
+                elif rec.smiles in inactive_smiles:
+                    labels.append(0)
+                else:
+                    labels.append(0)
+
+            if len(set(labels)) < 2 or len(scores) < 10:
+                log.info("  Benchmark check: insufficient actives/inactives in results.")
+                return context
+
+            scores_arr = np.array(scores, dtype=np.float64)
+            labels_arr = np.array(labels, dtype=np.int64)
+            ef1 = compute_enrichment_factor(scores_arr, labels_arr, fraction=0.01)
+            roc_auc = compute_roc_auc(scores_arr, labels_arr)
+            log.info(f"  EF1% (Enrichment Factor at 1%): {ef1:.3f}")
+            log.info(f"  ROC-AUC:                         {roc_auc:.3f}")
+            if ef1 > 1.0:
+                log.info("  ✓ Pipeline shows enrichment better than random.")
+            else:
+                log.info("  ⚠ Pipeline enrichment at or below random.")
+            if roc_auc > 0.7:
+                log.info("  ✓ Good discriminatory power (ROC-AUC > 0.7).")
+            elif roc_auc > 0.55:
+                log.info("  ✓ Moderate discriminatory power.")
+            else:
+                log.info("  ⚠ Poor discriminatory power (near random).")
+        except Exception as exc:
+            log.warning(f"  Benchmark check failed: {exc}")
         return context
 
     def _analyze_selectivity(self, context: PipelineContext) -> PipelineContext:
