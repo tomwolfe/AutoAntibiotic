@@ -405,10 +405,19 @@ def run_redocking_validation(
         log.warning("  ⚠  Vina unavailable. Redocking validation requires Vina. Skip.")
         return False, None
 
+    # Grid center = centroid of the extracted native ligand PDB (not ALLOSTERIC_RESIDUES)
+    nat_lig_pdb = lig_pdbqt.replace(".pdbqt", ".pdb")
+    center = _centroid_of_pdb_atoms(nat_lig_pdb)
+    if center is None:
+        log.warning(
+            "  ⚠  Could not compute native-ligand centroid; "
+            "falling back to allosteric residues."
+        )
+        center = compute_residue_centroid(holo_pdb_path, ALLOSTERIC_RESIDUES)
+
     # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
     docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
-    center = compute_residue_centroid(holo_pdb_path, ALLOSTERIC_RESIDUES)
     vina_cmd = [
         "vina",
         "--receptor", target_pdbqt_path,
@@ -641,6 +650,22 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
     return centroid
 
 
+def _centroid_of_pdb_atoms(pdb_path: str) -> Optional[np.ndarray]:
+    """
+    Return the geometric centroid (x, y, z) of all atoms in a PDB file,
+    or None if the file cannot be parsed / contains no atoms.
+    """
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("lig", pdb_path)
+        coords = [atom.get_vector().get_array() for atom in struct.get_atoms()]
+        if not coords:
+            return None
+        return np.mean(coords, axis=0)
+    except Exception:
+        return None
+
+
 def prepare_targets(
     pdb_dir: str, work_dir: str, deps: dict
 ) -> Dict[str, Dict]:
@@ -693,7 +718,7 @@ def prepare_targets(
     )
 
     # ── Compute allosteric + active site centres from cleaned apo ──
-    cleaned_pdb = pbp2a_pdbqt.replace(".pdbqt", ".pdb")
+    cleaned_pdb = pbp2a_clean_pdb
     log.info("  Computing allosteric site centroid (ALA237, MET241, TYR159)…")
     allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES)
     log.info(f"    Allosteric site center: {allosteric_center}")
@@ -907,46 +932,18 @@ def generate_candidate_library(
         log.info(f"  Fallback library: {len(candidates)} entries.")
         return candidates
 
-    # Recombine fragments to create novel analogs
-    rng = np.random.default_rng(seed)
+    # Recombine fragments to create novel analogs via BRICSBuild over all fragments
     seen_smiles = set()
     records = []
-    max_attempts = 5000
-    attempts = 0
-    last_checkpoint_count = 0
-    CHECKPOINT_INTERVAL = 500
 
-    for _ in range(max_attempts):
-        attempts += 1
-
-        # Progress logging every CHECKPOINT_INTERVAL attempts
-        if attempts % CHECKPOINT_INTERVAL == 0:
-            log.info(f"  Generation progress: {len(records)} compounds generated after {attempts} attempts.")
-
-        # Pick 1–3 fragments and try to join
-        n_frags = rng.integers(1, 4)
-        chosen = rng.choice(frag_mols, size=min(n_frags, len(frag_mols)), replace=False)
-
+    log.info(f"  Building recombinant library via BRICS.BRICSBuild (target ≤ {target_count})…")
+    builder = BRICS.BRICSBuild(list(frag_mols))
+    for product in builder:
         try:
-            combined = chosen[0]
-            for frag in chosen[1:]:
-                combined = Chem.CombineMols(combined, frag)
-            # Attempt to form new bonds via random BRICS connection
-            # BRICS.BRICSBuild returns a generator of possible products
-            # We sample from the build output
-            builder = BRICS.BRICSBuild([combined])
-            for _ in range(rng.integers(1, 5)):
-                try:
-                    product = next(builder)
-                except StopIteration:
-                    break
-            else:
-                product = next(builder)
             Chem.SanitizeMol(product)
-            smi = Chem.MolToSmiles(product)
-        except (StopIteration, Exception):
+        except Exception:
             continue
-
+        smi = Chem.MolToSmiles(product)
         if smi in seen_smiles:
             continue
         seen_smiles.add(smi)
@@ -967,6 +964,8 @@ def generate_candidate_library(
 
     # Add controls explicitly (ensures at least controls are always returned)
     for name, smi in CONTROL_SMILES.items():
+        if len(records) >= target_count:
+            break
         if smi not in seen_smiles:
             mol = Chem.MolFromSmiles(smi)
             if mol is not None:
@@ -1608,40 +1607,28 @@ def screen_library(
         # ── Fallback: RDKit Shape protrude ──
         log.info("  Vina unavailable. Using RDKit Shape Fallback.")
 
-        # Extract native ligand from 6TKO as reference
+        # Extract native ligand from 6TKO as reference via the canonical parser
         ref_mol = None
         holo_pdb = targets.get("holo_pdb")
         if holo_pdb and os.path.exists(holo_pdb):
-            lig_pdb = os.path.join(work_dir, "native_ref.pdb")
+            lig_smi = os.path.join(work_dir, "native_ref.smi")
+            lig_pdbqt = os.path.join(work_dir, "native_ref.pdbqt")
             try:
-                parser = PDBParser(QUIET=True)
-                struct = parser.get_structure("ref", holo_pdb)
-                for model in struct:
-                    for chain in model:
-                        for residue in chain:
-                            if residue.get_id()[0] != " " and residue.get_resname().strip() not in ("HOH", "WAT"):
-                                # Write first hetero ligand
-                                pdbio = PDBIO()
-                                class _Sel(Select):
-                                    def accept_residue(self, r):
-                                        return r is residue
-                                pdbio.set_struct(struct)
-                                pdbio.save(lig_pdb, _Sel())
-                                break
-                        else:
-                            continue
-                        break
-                    else:
-                        continue
-                    break
-                ref_mol = Chem.MolFromPDBFile(lig_pdb)
+                smi = _extract_native_ligand_from_holo(holo_pdb, lig_smi, lig_pdbqt)
+                if smi is not None:
+                    ref_mol = Chem.MolFromSmiles(smi)
             except Exception:
                 pass
 
         if ref_mol is None:
-            # Use first control as fallback reference
+            # Fallback reference: first positive control, log a warning
             ref_smi = list(CONTROL_SMILES.values())[0]
             ref_mol = Chem.MolFromSmiles(ref_smi)
+            if ref_mol is not None:
+                log.warning(
+                    "  ⚠  Could not extract native ligand for shape reference; "
+                    f"falling back to control SMILES ({ref_smi})."
+                )
 
         if ref_mol is None:
             log.error("  Cannot obtain reference molecule for shape scoring.")
@@ -2075,8 +2062,8 @@ def analyze_selectivity_and_resistance(
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
             pb2pa["pdbqt"],
-            pb2pa["allosteric_center"],
-            ALLOSTERIC_BOX_SIZE,
+            pb2pa["active_center"],
+            ACTIVE_BOX_SIZE,
             interactions=interactions,
         )
 

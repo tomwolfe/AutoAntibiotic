@@ -20,6 +20,7 @@ from discovery_pipeline import (
     apply_filters,
     generate_candidate_library,
     check_dependencies,
+    run_redocking_validation,
     _run_vina_docking,
     compute_selectivity_index,
     analyze_binding_interactions,
@@ -349,6 +350,45 @@ class TestGenerateCandidateLibraryEdgeCases:
         control_ids = [cid for cid in ids if cid.startswith("CTRL_")]
         assert len(control_ids) >= 1, "Expected at least one control compound"
         assert len(library) >= 2, "Expected at least control compounds to be returned"
+
+
+    def test_returns_only_valid_smiles_and_is_capped(self):
+        """generate_candidate_library(target_count=20) returns valid SMILES and ≤ target_count."""
+        library = generate_candidate_library(target_count=20)
+        assert len(library) <= 20, f"Expected ≤ 20 records, got {len(library)}"
+        for record in library:
+            assert record.smiles, f"Record {record.compound_id} has no SMILES"
+            mol = Chem.MolFromSmiles(record.smiles)
+            assert mol is not None, (
+                f"Record {record.compound_id} has invalid SMILES: {record.smiles}"
+            )
+
+
+# ── Test: Redocking Validation ───────────────────────────────────────────────
+
+class TestRedockingValidation:
+    def test_returns_false_none_without_raising(self, tmp_path):
+        """
+        run_redocking_validation must return (False, None) gracefully when Vina
+        is unavailable — without raising — even after mocking the native-ligand
+        extraction and the docking call.
+        """
+        deps = {"vina": False, "USE_VINA": False}
+        with patch(
+            "discovery_pipeline._extract_native_ligand_from_holo",
+            return_value="CCO",
+        ):
+            with patch(
+                "discovery_pipeline._run_vina_docking",
+                return_value=None,
+            ):
+                result = run_redocking_validation(
+                    holo_pdb_path=str(tmp_path / "6TKO.pdb"),
+                    target_pdbqt_path=str(tmp_path / "PBP2a.pdbqt"),
+                    work_dir=str(tmp_path),
+                    deps=deps,
+                )
+        assert result == (False, None), f"Expected (False, None), got {result}"
 
 
 # ── Run ──────────────────────────────────────────────────────────────────────
