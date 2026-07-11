@@ -34,7 +34,7 @@ from rdkit.Chem import (
     AllChem, Descriptors, QED, Draw, rdMolDescriptors,
     rdmolops, rdDistGeom, Crippen, FilterCatalog, BRICS,
 )
-from rdkit.Chem.FilterCatalog import FilterCatalogParams
+from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
 from rdkit.Chem.Draw import rdMolDraw2D
 from rdkit.DataStructs import TanimotoSimilarity
 from rdkit import RDLogger as rdklog
@@ -88,6 +88,10 @@ BETA_LACTAM_SMARTS = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
 ALLOSTERIC_RESIDUES = ["ALA237", "MET241", "TYR159"]
 ACTIVE_SITE_RESIDUES = ["SER403"]
 
+# Off-target catalytic residues for selectivity docking
+TRYPSIN_CATALYTIC_RESIDUES = ["HIS57", "ASP102", "SER195"]
+CES1_CATALYTIC_RESIDUES = ["SER221", "HIS468", "GLU354"]
+
 # Grid box defaults (Angstroms)
 ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
 ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
@@ -133,71 +137,91 @@ def ensure_output_dir() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def install_missing_package(package: str) -> bool:
-    """Attempt to pip-install *package*. Return True on success."""
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", package],
-            timeout=60,
-        )
-        return True
-    except Exception:
-        return False
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
-#  PHASE 0 — DEPENDENCY VERIFICATION
+#  PHASE 0 — DEPENDENCY CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def verify_dependencies() -> dict:
+def check_dependencies() -> dict:
     """
     Check all required libraries and external binaries.
+    Exits with a clear error message listing missing components.
 
     Returns:
         dict with keys:
-            - 'rdkit' / 'biopython': bool
             - 'vina': bool (True if vina binary on PATH)
-            - 'meeko': bool
             - 'USE_VINA': global toggle — set False if vina absent
     """
-    log.info("─── Phase 0: Dependency Verification ───")
-    status = {}
+    log.info("─── Phase 0: Dependency Check ───")
 
-    # ── Python packages (soft-fail: attempt pip install) ──
-    packages = {
-        "rdkit": "rdkit-pypi",
-        "meeko": "meeko",
-        "biopython": "biopython",
-    }
-    for mod_name, pip_name in packages.items():
-        try:
-            __import__(mod_name)
-            status[mod_name] = True
-            log.info(f"  ✓  {mod_name} found.")
-        except ImportError:
-            log.warning(f"  ⚠  {mod_name} missing. Attempting pip install…")
-            if install_missing_package(pip_name):
-                status[mod_name] = True
-                log.info(f"  ✓  {mod_name} installed successfully.")
-            else:
-                status[mod_name] = False
-                log.error(f"  ✗  {mod_name} could not be installed. Aborting.")
-                sys.exit(1)
+    missing_packages = []
+    missing_bins = []
 
-    # ── Vina binary ──
+    # ── Python packages (hard requirements) ──
+    try:
+        import rdkit  # noqa: F401
+    except ImportError:
+        missing_packages.append("RDKit (pip install rdkit-pypi)")
+
+    try:
+        import Bio  # noqa: F401
+    except ImportError:
+        missing_packages.append("Biopython (pip install biopython)")
+
+    try:
+        import pandas  # noqa: F401
+    except ImportError:
+        missing_packages.append("Pandas (pip install pandas)")
+
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        missing_packages.append("NumPy (pip install numpy)")
+
+    # ── External binaries (non-fatal; affect available features) ──
+    vina_available = False
     try:
         subprocess.run(["vina", "--version"], capture_output=True, timeout=10)
-        status["vina"] = True
+        vina_available = True
         log.info("  ✓  AutoDock Vina binary found on PATH.")
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        status["vina"] = False
+        missing_bins.append("AutoDock Vina (vina)")
+
+    obabel_available = False
+    try:
+        subprocess.run(["obabel", "--version"], capture_output=True, timeout=10)
+        obabel_available = True
+        log.info("  ✓  OpenBabel binary found on PATH.")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        missing_bins.append("OpenBabel (obabel)")
+
+    # ── Hard error on missing packages ──
+    if missing_packages:
+        log.error("Missing required Python packages:")
+        for pkg in missing_packages:
+            log.error(f"  ✗  {pkg}")
+        sys.exit(1)
+
+    log.info("  ✓  All required Python packages found.")
+
+    # ── Warn on missing binaries ──
+    if missing_bins:
+        log.warning("Optional external binaries not found:")
+        for bin_name in missing_bins:
+            log.warning(f"  ⚠  {bin_name} — some features will be limited.")
+
+    if not vina_available:
         log.warning(
             "  ⚠  Vina binary not found. Setting USE_VINA = False. "
             "Pipeline will use RDKit Shape/Pharmacophore fallback."
         )
 
-    status["USE_VINA"] = status["vina"]
-    return status
+    if not obabel_available:
+        log.warning(
+            "  ⚠  OpenBabel not found. Some conversions may fail; "
+            "pipeline will attempt RDKit-based alternatives."
+        )
+
+    return {"vina": vina_available, "USE_VINA": vina_available}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -509,13 +533,16 @@ def clean_pdb_structure(
 
         # Add hydrogens via RDKit PDB → MOL → H-Added → PDB
         if add_hydrogens:
-            mol = Chem.MolFromPDBFile(out_path, removeHs=False)
-            if mol is not None:
-                mol = Chem.AddHs(mol, addCoords=True)
-                Chem.MolToPDBFile(mol, out_path)
-                log.info(f"  Polar hydrogens added to {out_path}")
-            else:
-                log.warning("  Could not add hydrogens via RDKit PDB parser.")
+            try:
+                mol = Chem.MolFromPDBFile(out_path, removeHs=False)
+                if mol is not None:
+                    mol = Chem.AddHs(mol, addCoords=True)
+                    Chem.MolToPDBFile(mol, out_path)
+                    log.info(f"  Polar hydrogens added to {out_path}")
+                else:
+                    log.warning("  Could not read PDB via RDKit. Skipping hydrogen addition.")
+            except Exception as exc:
+                log.warning(f"  RDKit PDB parsing failed for hydrogen addition: {exc}. Skipping.")
 
         # Convert to PDBQT for Vina (using meeko for receptor)
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
@@ -590,11 +617,12 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
                     else:
                         log.warning(
                             f"  ⚠  No Cα found for {key[0]}{key[1]}. "
-                            "Using first atom."
+                            "Using geometric center of all residue atoms."
                         )
                         atoms = list(residue.get_atoms())
                         if atoms:
-                            ca_coords.append(atoms[0].get_vector().get_array())
+                            coords = np.array([a.get_vector().get_array() for a in atoms])
+                            ca_coords.append(coords.mean(axis=0))
 
     if not ca_coords:
         log.error(
@@ -618,11 +646,18 @@ def prepare_targets(
         {
             "PBP2a": {
                 "pdbqt": str,
+                "cleaned_pdb": str,
                 "allosteric_center": np.ndarray,
                 "active_center": np.ndarray,
             },
-            "trypsin": { "pdbqt": str },
-            "CES1":    { "pdbqt": str },
+            "trypsin": {
+                "pdbqt": str,
+                "active_center": np.ndarray,
+            },
+            "CES1": {
+                "pdbqt": str,
+                "active_center": np.ndarray,
+            },
             "holo_pdb": str,
             "native_ligand": { "pdb": str, "pdbqt": str, "smiles": str },
         }
@@ -640,9 +675,10 @@ def prepare_targets(
 
     # ── Clean PBP2a (use holo for grid calc, but we need the protein only) ──
     log.info("  Cleaning PBP2a (apo)…")
+    pbp2a_clean_pdb = os.path.join(work_dir, "PBP2a_clean.pdb")
     pbp2a_pdbqt = clean_pdb_structure(
         apo_path,
-        os.path.join(work_dir, "PBP2a_clean.pdb"),
+        pbp2a_clean_pdb,
     )
 
     log.info("  Cleaning PBP2a (holo, protein-only)…")
@@ -663,25 +699,34 @@ def prepare_targets(
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
+        "cleaned_pdb": pbp2a_clean_pdb,
         "allosteric_center": allosteric_center,
         "active_center": active_center,
     }
 
     # ── Clean trypsin ──
     log.info("  Cleaning Human Trypsin (1UTN)…")
+    tryp_clean_pdb = os.path.join(work_dir, "trypsin_clean.pdb")
     tryp_pdbqt = clean_pdb_structure(
         trypsin_path,
-        os.path.join(work_dir, "trypsin_clean.pdb"),
+        tryp_clean_pdb,
     )
-    result["trypsin"] = {"pdbqt": tryp_pdbqt}
+    log.info("  Computing trypsin active site centroid (His57, Asp102, Ser195)…")
+    tryp_center = compute_residue_centroid(tryp_clean_pdb, TRYPSIN_CATALYTIC_RESIDUES)
+    log.info(f"    Trypsin active site center: {tryp_center}")
+    result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
 
     # ── Clean CES1 ──
     log.info("  Cleaning Human Carboxylesterase 1 (3KJZ)…")
+    ces1_clean_pdb = os.path.join(work_dir, "CES1_clean.pdb")
     ces1_pdbqt = clean_pdb_structure(
         ces1_path,
-        os.path.join(work_dir, "CES1_clean.pdb"),
+        ces1_clean_pdb,
     )
-    result["CES1"] = {"pdbqt": ces1_pdbqt}
+    log.info("  Computing CES1 active site centroid (Ser221, His468, Glu354)…")
+    ces1_center = compute_residue_centroid(ces1_clean_pdb, CES1_CATALYTIC_RESIDUES)
+    log.info(f"    CES1 active site center: {ces1_center}")
+    result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
 
     # ── Write grid configuration files ──
     grid_dir = os.path.join(work_dir, "grid_configs")
@@ -1409,6 +1454,81 @@ def screen_library(
 #  PHASE 4 — SELECTIVITY & RESISTANCE ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def check_ser403_contact(
+    docked_pdbqt_path: str,
+    receptor_pdb_path: str,
+    threshold_dist: float = 3.5,
+) -> bool:
+    """
+    Check whether the docked ligand contacts Ser403 Oγ within *threshold_dist*.
+
+    Args:
+        docked_pdbqt_path: Path to the docked-ligand PDBQT file.
+        receptor_pdb_path: Path to the cleaned receptor PDB file (used to
+                           locate Ser403 Oγ coordinates).
+        threshold_dist: Distance threshold in Ångströms (default 3.5).
+
+    Returns:
+        True if any ligand heavy atom lies within *threshold_dist* of
+        Ser403 Oγ.
+    """
+    # ── Locate Ser403 Oγ in the receptor PDB ──
+    ser403_og = None
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("receptor", receptor_pdb_path)
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    if (
+                        residue.get_resname().strip() == "SER"
+                        and residue.get_id()[1] == 403
+                    ):
+                        if "OG" in residue:
+                            ser403_og = residue["OG"].get_vector().get_array()
+                            break
+                if ser403_og is not None:
+                    break
+            if ser403_og is not None:
+                break
+    except Exception as exc:
+        log.warning(f"  Could not parse receptor PDB for Ser403: {exc}")
+        return False
+
+    if ser403_og is None:
+        log.warning("  Ser403 Oγ atom not found in receptor PDB.")
+        return False
+
+    # ── Parse docked-ligand heavy-atom coordinates from PDBQT ──
+    ligand_coords = []
+    try:
+        with open(docked_pdbqt_path) as f:
+            for line in f:
+                if line.startswith(("ATOM", "HETATM")):
+                    try:
+                        x = float(line[30:38].strip())
+                        y = float(line[38:46].strip())
+                        z = float(line[46:54].strip())
+                        elem = line[76:78].strip()
+                        if elem and elem.upper() != "H":
+                            ligand_coords.append(np.array([x, y, z]))
+                    except (ValueError, IndexError):
+                        continue
+    except FileNotFoundError:
+        log.warning(f"  Docked PDBQT not found: {docked_pdbqt_path}")
+        return False
+
+    if not ligand_coords:
+        log.warning("  No ligand heavy atoms found in PDBQT for Ser403 check.")
+        return False
+
+    coords_array = np.array(ligand_coords)
+    distances = np.linalg.norm(coords_array - ser403_og, axis=1)
+    min_dist = distances.min()
+
+    return min_dist <= threshold_dist
+
+
 def compute_selectivity_index(
     pb2pa_energy: float, human_avg_energy: float,
 ) -> float:
@@ -1442,26 +1562,32 @@ def profile_resistance_risk(
     receptor_pdbqt: str,
     center: np.ndarray,
     box_size: Tuple[float, float, float],
+    ser403_contact: Optional[bool] = None,
 ) -> str:
     """
-    Rule-based resistance profiling.
+    Rule-based resistance profiling, optionally informed by pose analysis.
 
     Flags candidates based on predicted interactions:
         - Good: contacts with conserved residues (Ser403, Lys406, Tyr446).
         - Risk: contacts with mutable residues (Gly246, Asn146).
 
-    Returns a human-readable notes string.
+    Args:
+        ser403_contact: Result from check_ser403_contact (True/False) or None
+                        if pose analysis was not performed.
 
-    NOTE: Full interaction fingerprinting requires detailed pose analysis.
-    Here we use a simplified rule-based heuristic based on what we know
-    about the binding pocket.
+    Returns a human-readable notes string.
     """
     notes = []
 
-    # Heuristic: if the compound bound well to the active site (Ser403 proximity),
-    # it likely contacts the catalytic machinery — good
-    if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
-        notes.append("Likely contacts catalytic Ser403 (active site). Good.")
+    # Pose-based Ser403 contact (from check_ser403_contact)
+    if ser403_contact is True:
+        notes.append("Confirmed contact with catalytic Ser403 Oγ (pose-based). Good.")
+    elif ser403_contact is False:
+        notes.append("No contact with Ser403 Oγ in docked pose — may lack active-site engagement.")
+    else:
+        # Pose analysis unavailable — fall back to energy-based heuristic
+        if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
+            notes.append("Likely contacts catalytic Ser403 (active site, energy-based). Good.")
 
     # If it bound well only to allosteric site, it targets the allosteric pocket
     if record.pb2pa_allosteric_energy is not None and record.pb2pa_allosteric_energy < -7.0:
@@ -1511,21 +1637,21 @@ def analyze_selectivity_and_resistance(
             rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
         return top10
 
-    # ── Dock vs Trypsin ──
+    # ── Dock vs Trypsin (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
     trypsin_results = _parallel_dock(
         top10, targets["trypsin"]["pdbqt"],
-        np.array([0.0, 0.0, 0.0]), (20.0, 20.0, 20.0),  # Default centre — trypsin active site
+        targets["trypsin"]["active_center"], (20.0, 20.0, 20.0),
         work_dir, "trypsin", n_jobs=min(4, len(top10)),
     )
     for rec, energy in trypsin_results:
         rec.human_trypsin_energy = energy
 
-    # ── Dock vs CES1 ──
+    # ── Dock vs CES1 (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (3KJZ)…")
     ces1_results = _parallel_dock(
         top10, targets["CES1"]["pdbqt"],
-        np.array([0.0, 0.0, 0.0]), (20.0, 20.0, 20.0),  # Default centre
+        targets["CES1"]["active_center"], (20.0, 20.0, 20.0),
         work_dir, "ces1", n_jobs=min(4, len(top10)),
     )
     for rec, energy in ces1_results:
@@ -1543,7 +1669,6 @@ def analyze_selectivity_and_resistance(
             continue
 
         human_avg = np.mean(energies_human)
-        # Best PBP2a energy (active if available, else allosteric)
         pb2pa_best = (
             rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None
             else rec.pb2pa_allosteric_energy
@@ -1563,14 +1688,41 @@ def analyze_selectivity_and_resistance(
         else:
             log.info(f"  {rec.compound_id}: SI = {si:.2f} (pass).")
 
-    # ── Resistance profiling ──
+    # ── Resistance profiling with pose-based Ser403 contact analysis ──
     pb2pa = targets["PBP2a"]
+    cleaned_pdb = pb2pa.get("cleaned_pdb")
+
     for rec in top10:
+        ser403_contact = None
+
+        if deps["USE_VINA"] and cleaned_pdb and os.path.exists(cleaned_pdb):
+            # Re-dock to active site to obtain the docked pose for analysis
+            safe_id = rec.compound_id.replace("/", "_").replace(" ", "_")
+            lig_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_lig.pdbqt")
+            out_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_out.pdbqt")
+
+            if prepare_ligand_pdbqt(rec.mol, lig_pdbqt):
+                _run_vina_docking(
+                    pb2pa["pdbqt"], lig_pdbqt, out_pdbqt,
+                    pb2pa["active_center"], ACTIVE_BOX_SIZE,
+                )
+                if os.path.exists(out_pdbqt):
+                    ser403_contact = check_ser403_contact(out_pdbqt, cleaned_pdb)
+                    try:
+                        os.remove(out_pdbqt)
+                    except OSError:
+                        pass
+                try:
+                    os.remove(lig_pdbqt)
+                except OSError:
+                    pass
+
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
             pb2pa["pdbqt"],
             pb2pa["allosteric_center"],
             ALLOSTERIC_BOX_SIZE,
+            ser403_contact=ser403_contact,
         )
 
     log.info("─── Phase 4 complete ───")
@@ -1697,7 +1849,7 @@ def main():
     ensure_output_dir()
 
     # ── Dependency check ──
-    deps = verify_dependencies()
+    deps = check_dependencies()
 
     # ── Working directory for intermediate files ──
     work_dir = str(OUTPUT_DIR / "workdir")
