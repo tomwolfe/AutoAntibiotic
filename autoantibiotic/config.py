@@ -42,7 +42,20 @@ PROFILE_DEFAULTS = {
         "use_mm_gbsa": False,
         "use_mm_gbsa_rescoring": False,
     },
-    PipelineProfile.STANDARD: {},
+    PipelineProfile.STANDARD: {
+        "use_fep_resistance": False,
+        "use_explicit_solvent_mmgbsa": False,
+        "use_gnn_rescoring": False,
+        "use_ml_admet": True,
+        "vina_exhaustiveness": 8,
+        "use_water_analysis": False,
+        "use_expensive_ml_features": False,
+        "use_mutation_sampling": False,
+        "use_meta_scoring": False,
+        "use_mm_gbsa": False,
+        "use_mm_gbsa_rescoring": False,
+        "library_target_count": 500,
+    },
     PipelineProfile.PRODUCTION_FEP: {
         "use_fep_resistance": True,
         "vina_exhaustiveness": 16,
@@ -155,7 +168,7 @@ class PipelineConfig:
     """Solvent model for MM-GB/SA rescoring.  Options: ``"implicit"``
     (OBC2, default) or ``"explicit"`` (TIP3P with pose relaxation).
     When set to ``"explicit"``, ``pdbfixer`` must be installed."""
-    use_explicit_solvent_mmgbsa: bool = True
+    use_explicit_solvent_mmgbsa: bool = False
     """When True, use explicit-solvent (TIP3P) MM-GB/SA for rescoring top
     candidates instead of the implicit-solvent (OBC2) heuristic."""
     explicit_solvent_frames: int = 10
@@ -393,7 +406,7 @@ class PipelineConfig:
     API is unavailable."""
 
     # ── FEP / resistance profiling ──
-    use_fep_resistance: bool = True
+    use_fep_resistance: bool = False
     """When True, use OpenMM-based Free Energy Perturbation (FEP) for
     resistance profiling instead of the heuristic standard-deviation
     approach.  Falls back to the heuristic when OpenMM/alchemical tools
@@ -686,32 +699,24 @@ class PipelineConfig:
                 f"dynamic_box_padding must be > 0, got {self.dynamic_box_padding}."
             )
 
-        if self.use_explicit_solvent_mmgbsa and self.mmgbsa_solvent_model != "explicit":
-            logging.getLogger("AutoAntibiotic").warning(
-                "DEPRECATED: use_explicit_solvent_mmgbsa=True is deprecated. "
-                "Set mmgbsa_solvent_model='explicit' to use the explicit-solvent "
-                "path. Currently mmgbsa_solvent_model='%s', so the implicit OBC2 "
-                "path will be used.",
-                self.mmgbsa_solvent_model,
-            )
-
-        if self.mmgbsa_solvent_model == "explicit" or self.use_explicit_solvent_mmgbsa:
+        if self.use_explicit_solvent_mmgbsa:
             try:
                 import openmm  # noqa: F401
             except ImportError:
                 raise ConfigurationError(
-                    "Explicit solvent MM-GB/SA requested (mmgbsa_solvent_model='explicit') "
-                    "but OpenMM is not installed. Please install via conda:\n"
+                    "Explicit-solvent MM-GB/SA requested (use_explicit_solvent_mmgbsa=True) "
+                    "but OpenMM is not installed. OpenMM is required for explicit-solvent "
+                    "MM-GB/SA rescoring. Please install via conda:\n"
                     "  conda install -c conda-forge openmm"
                 )
             try:
                 import pdbfixer  # noqa: F401
             except ImportError:
-                self.use_explicit_solvent_mmgbsa = False
-                logging.getLogger("AutoAntibiotic").warning(
-                    "Explicit-solvent MM-GB/SA disabled: pdbfixer not installed. "
-                    "Falling back to implicit-solvent (OBC2) heuristic. "
-                    "Install via: conda install -c conda-forge pdbfixer"
+                raise ConfigurationError(
+                    "Explicit-solvent MM-GB/SA requested (use_explicit_solvent_mmgbsa=True) "
+                    "but pdbfixer is not installed. pdbfixer is required for structure "
+                    "preparation. Please install via conda:\n"
+                    "  conda install -c conda-forge pdbfixer"
                 )
 
         if self.use_fep_resistance:
@@ -727,21 +732,22 @@ class PipelineConfig:
             try:
                 import openmmtools  # noqa: F401
             except ImportError:
-                self.use_fep_resistance = False
-                logging.getLogger("AutoAntibiotic").warning(
-                    "FEP disabled: openmmtools not found. "
-                    "Falling back to heuristic resistance profiling. "
-                    "Install via: conda install -c conda-forge openmmtools"
+                raise ConfigurationError(
+                    "FEP resistance profiling requested (use_fep_resistance=True) "
+                    "but openmmtools is not installed. Please install via conda:\n"
+                    "  conda install -c conda-forge openmmtools"
                 )
             try:
                 import openmmforcefields  # noqa: F401
                 from openmmforcefields.generators import GAFFTemplateGenerator
                 GAFFTemplateGenerator()
             except Exception:
-                self.use_fep_resistance = False
                 raise ConfigurationError(
-                    "FEP requires openmmforcefields for GAFF2 parameterization. "
-                    "Install via: conda install -c conda-forge openmmforcefields"
+                    "FEP resistance profiling requested (use_fep_resistance=True) "
+                    "but openmmforcefields is not installed or failed to initialise. "
+                    "openmmforcefields is required for GAFF2 parameterization. "
+                    "Please install via conda:\n"
+                    "  conda install -c conda-forge openmmforcefields"
                 )
 
         if self.generative_mode:

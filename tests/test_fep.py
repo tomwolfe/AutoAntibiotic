@@ -288,8 +288,8 @@ class TestFEPConfigValidation:
         for name in restore:
             sys.modules[name] = restore[name]
 
-    def test_validate_config_falls_back_if_openmmforcefields_missing(self):
-        """validate_config falls back gracefully when use_fep_resistance=True
+    def test_validate_config_raises_if_openmmforcefields_missing(self):
+        """validate_config raises ConfigurationError when use_fep_resistance=True
         but openmmforcefields is not installed."""
         original_fep = CONFIG.use_fep_resistance
         original_mmgbsa = CONFIG.use_explicit_solvent_mmgbsa
@@ -300,10 +300,8 @@ class TestFEPConfigValidation:
                 "openmm": MagicMock(),
                 "openmmtools": MagicMock(),
             })
-            CONFIG.validate_config()
-            assert not CONFIG.use_fep_resistance, (
-                "use_fep_resistance should be set to False when openmmforcefields is missing"
-            )
+            with pytest.raises(ConfigurationError, match="openmmforcefields"):
+                CONFIG.validate_config()
         finally:
             self._restore_modules(restore)
             CONFIG.use_fep_resistance = original_fep
@@ -315,11 +313,15 @@ class TestFEPConfigValidation:
         original_mmgbsa = CONFIG.use_explicit_solvent_mmgbsa
         CONFIG.use_fep_resistance = True
         CONFIG.use_explicit_solvent_mmgbsa = False
+        mock_ommf = MagicMock()
+        mock_ommf.generators = MagicMock()
+        mock_ommf.generators.GAFFTemplateGenerator = MagicMock()
         try:
             restore = self._mock_modules({
                 "openmm": MagicMock(),
                 "openmmtools": MagicMock(),
-                "openmmforcefields": MagicMock(),
+                "openmmforcefields": mock_ommf,
+                "openmmforcefields.generators": mock_ommf.generators,
             })
             CONFIG.validate_config()
         finally:

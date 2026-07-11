@@ -27,11 +27,11 @@ from autoantibiotic.models import CompoundRecord
 # ── Test 1: FEP enabled by default ────────────────────────────────
 
 
-class TestFEPEnabledByDefault:
-    """Verify that FEP resistance profiling is enabled in the default config."""
+class TestFEPDisabledByDefault:
+    """Verify that FEP resistance profiling is disabled in the default config."""
 
-    def test_fep_enabled_by_default(self) -> None:
-        assert CONFIG.use_fep_resistance is True
+    def test_fep_disabled_by_default(self) -> None:
+        assert CONFIG.use_fep_resistance is False
 
     def test_fep_top_n_default(self) -> None:
         assert CONFIG.fep_top_n == 20
@@ -58,9 +58,13 @@ class TestFEPOrchestratorDelegation:
 
     @pytest.fixture
     def mock_orchestrator(self, mock_candidate: CompoundRecord) -> Any:
+        import copy
+        from autoantibiotic.config import CONFIG
         from autoantibiotic.orchestrator import PipelineOrchestrator
 
-        orch = PipelineOrchestrator(use_cache=False)
+        local_config = copy.deepcopy(CONFIG)
+        local_config.use_fep_resistance = True
+        orch = PipelineOrchestrator(use_cache=False, config=local_config)
         orch.top_candidates = [mock_candidate]
         orch.targets = {
             "PBP2a": {

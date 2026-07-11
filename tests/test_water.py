@@ -355,7 +355,7 @@ class TestConfigDefaults:
 
     def test_use_explicit_solvent_mmgbsa_default(self):
         from autoantibiotic.config import CONFIG
-        assert CONFIG.use_explicit_solvent_mmgbsa is True
+        assert CONFIG.use_explicit_solvent_mmgbsa is False
 
     def test_explicit_solvent_frames_default(self):
         from autoantibiotic.config import CONFIG

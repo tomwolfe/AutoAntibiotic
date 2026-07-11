@@ -934,7 +934,7 @@ class TestExplicitSolventMMGBSA:
         """Verify the config flags for explicit solvent exist."""
         assert hasattr(CONFIG, "use_explicit_solvent_mmgbsa")
         assert hasattr(CONFIG, "explicit_solvent_frames")
-        assert CONFIG.use_explicit_solvent_mmgbsa is True
+        assert CONFIG.use_explicit_solvent_mmgbsa is False
         assert CONFIG.explicit_solvent_frames == 10
 
     def test_explicit_uses_configured_frames(

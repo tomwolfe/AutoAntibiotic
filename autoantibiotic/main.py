@@ -215,6 +215,15 @@ def main(argv: Optional[List[str]] = None) -> None:
         print(f"Configuration Error: {exc}")
         raise
 
+    # Always validate OpenMM deps when advanced features are explicitly
+    # enabled, even during dry-run, so users get early feedback.
+    if cfg.use_fep_resistance or cfg.use_explicit_solvent_mmgbsa:
+        from .io_utils import check_openmm_availability
+        omm_ok, omm_msg = check_openmm_availability()
+        if not omm_ok:
+            print(f"Dependency Error: {omm_msg}")
+            raise ConfigurationError(omm_msg)
+
     orchestrator = PipelineOrchestrator(use_cache=args.use_cache, config=cfg)
     orchestrator.run()
 

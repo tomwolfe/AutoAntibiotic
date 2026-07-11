@@ -12,7 +12,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from rdkit import RDLogger as rdklog
@@ -919,6 +919,48 @@ def check_fep_compatibility() -> None:
             log.warning("  FEP dependency %s is not installed.", pkg_name)
 
 
+def check_openmm_availability() -> Tuple[bool, str]:
+    """Check whether OpenMM and related packages are available.
+
+    Verifies that ``openmm``, ``openmmtools``, and ``openmmforcefields``
+    are all importable.  These are required for FEP resistance profiling
+    and explicit-solvent MM-GB/SA rescoring.
+
+    Returns:
+        Tuple of ``(available, message)``.  When *available* is ``True``,
+        *message* is an empty string.  When *available* is ``False``,
+        *message* contains a detailed description of what is missing and
+        how to install it.
+    """
+    missing: List[str] = []
+    install_guide = (
+        "Please install the missing packages via conda:\n"
+        "  conda install -c conda-forge openmm openmmtools openmmforcefields"
+    )
+
+    try:
+        import openmm  # noqa: F401
+    except ImportError:
+        missing.append("openmm")
+
+    try:
+        import openmmtools  # noqa: F401
+    except ImportError:
+        missing.append("openmmtools")
+
+    try:
+        import openmmforcefields  # noqa: F401
+    except ImportError:
+        missing.append("openmmforcefields")
+
+    if missing:
+        return False, (
+            f"Missing OpenMM component(s): {', '.join(missing)}.\n"
+            f"{install_guide}"
+        )
+    return True, ""
+
+
 def check_optional_dependencies() -> None:
     """Check for optional external binaries and log prominent warnings
     when they are missing.
@@ -1038,6 +1080,12 @@ def verify_dependencies(
             "  No PDBQT conversion tool found. A minimal RDKit-based PDBQT "
             "fallback will be used for the receptor."
         )
+
+    # Check OpenMM dependencies if advanced features are enabled
+    if cfg.use_fep_resistance or cfg.use_explicit_solvent_mmgbsa:
+        openmm_ok, openmm_msg = check_openmm_availability()
+        if not openmm_ok:
+            raise ConfigurationError(openmm_msg)
 
     # Also check optional dependencies for a prominent startup warning
     check_optional_dependencies()
