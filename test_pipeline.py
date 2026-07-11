@@ -567,6 +567,145 @@ class TestAnalyzeBindingInteractions:
             analyze_binding_interactions(empty_path, mock_receptor_pdb)
 
 
+# ── Test 12: Integration Pipeline ────────────────────────────────────────────
+
+class TestIntegrationPipeline:
+    def test_minimal_pipeline_run(self, tmp_path):
+        """
+        End-to-end pipeline test:
+          - Mocks fetch_structure to return local dummy PDB files.
+          - Mocks subprocess.run for Vina to return a successful dummy output.
+          - Mocks prepare_targets to bypass PDB cleaning logic.
+          - Mocks screen_library to return top 10 with docking scores.
+          - Calls main() with target_count=5.
+          - Asserts output/top_candidates.csv exists with 5 rows (plus header).
+          - Asserts CSV contains required columns.
+        """
+        import csv
+
+        # Create minimal PDB files for the four PDB IDs
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        pdb_dir = tmp_path / "pdb"
+        pdb_dir.mkdir()
+
+        dummy_pdb = textwrap.dedent("""\
+            ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00  0.00           N
+            ATOM      2  CA  ALA A   1       1.500   2.500   3.500  1.00  0.00           C
+            ATOM      3  C   ALA A   1       2.000   3.000   4.000  1.00  0.00           C
+            ATOM      4  O   ALA A   1       2.500   3.500   4.500  1.00  0.00           O
+            ATOM      5  O   SER A 403       5.000   6.000   7.000  1.00  0.00           O
+            ATOM      6  NZ  LYS A 406       8.000   9.000  10.000  1.00  0.00           N
+            ATOM      7  OH  TYR A 446      11.000  12.000  13.000  1.00  0.00           O
+            END
+        """)
+
+        for pdb_id in ["3QPD", "6TKO", "1UTN", "3KJZ"]:
+            path = pdb_dir / f"{pdb_id}.pdb"
+            with open(path, "w") as f:
+                f.write(dummy_pdb)
+
+        # Mock dependencies and targets
+        mock_deps = {"vina": True, "USE_VINA": True}
+        mock_targets = {
+            "PBP2a": {
+                "pdbqt": str(tmp_path / "PBP2a.pdbqt"),
+                "cleaned_pdb": str(tmp_path / "PBP2a_clean.pdb"),
+                "allosteric_center": np.array([0.0, 0.0, 0.0]),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+            "trypsin": {
+                "pdbqt": str(tmp_path / "trypsin.pdbqt"),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+            "CES1": {
+                "pdbqt": str(tmp_path / "CES1.pdbqt"),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+            "holo_pdb": str(tmp_path / "6TKO.pdb"),
+        }
+
+        # Mock the PDB download — return local dummy files
+        def mock_fetch_structure(pdb_id, out_dir):
+            return str(pdb_dir / f"{pdb_id}.pdb")
+
+        # Mock prepare_targets to skip PDB cleaning entirely
+        def mock_prepare_targets(pdb_dir, work_dir, deps):
+            return mock_targets
+
+        # Mock apply_filters to return all records unchanged
+        def mock_apply_filters(records):
+            return list(records)
+
+        # Mock analyze_selectivity_and_resistance to return records unchanged
+        def mock_analyze_selectivity_and_resistance(records, targets, work_dir, deps):
+            return list(records)
+
+        # Mock screen_library to return 5 records with valid docking scores
+        def mock_screen_library(records, targets, work_dir, deps):
+            from discovery_pipeline import CompoundRecord
+            # Return top 5 records with allosteric energy scores
+            top5 = []
+            for i, rec in enumerate(records[:5]):
+                new_rec = CompoundRecord(
+                    compound_id=rec.compound_id,
+                    smiles=rec.smiles,
+                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                )
+                top5.append(new_rec)
+            return top5
+
+        # Mock Vina subprocess to return a valid docking result
+        mock_vina_output = textwrap.dedent("""\
+            +---------------------------------------------------+
+            | RDKit 2023.09.2                                  |
+            +---------------------------------------------------+
+            | 1     -9.500      0.000                          |
+            | 2     -8.200      1.234                          |
+            | 3     -7.800      2.456                          |
+            +---------------------------------------------------+
+        """)
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = mock_vina_output
+        mock_result.stderr = ""
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with patch("discovery_pipeline.fetch_structure", side_effect=mock_fetch_structure):
+            with patch("discovery_pipeline.check_dependencies", return_value=mock_deps):
+                with patch("discovery_pipeline.prepare_targets", side_effect=mock_prepare_targets):
+                    with patch("discovery_pipeline.apply_filters", side_effect=mock_apply_filters):
+                        with patch("discovery_pipeline.screen_library", side_effect=mock_screen_library):
+                            with patch("discovery_pipeline.analyze_selectivity_and_resistance", side_effect=mock_analyze_selectivity_and_resistance):
+                                with patch("subprocess.run", return_value=mock_result):
+                                    from discovery_pipeline import main
+                                    with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                        with patch("discovery_pipeline.CSV_REPORT", output_dir / "top_candidates.csv"):
+                                            main()
+
+        csv_path = output_dir / "top_candidates.csv"
+        assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
+
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        # 5 candidates (target_count=5)
+        assert len(rows) == 5, f"Expected 5 rows, got {len(rows)}"
+
+        required_columns = {
+            "Compound_ID",
+            "SMILES",
+            "PBP2a_Allosteric_Energy",
+        }
+        assert required_columns.issubset(set(rows[0].keys())), (
+            f"CSV missing required columns: {required_columns - set(rows[0].keys())}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

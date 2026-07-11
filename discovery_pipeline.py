@@ -467,7 +467,8 @@ def run_redocking_validation(
     else:
         log.info(f"  ✓  Redocking validated (RMSD = {rmsd:.3f} Å ≤ 2.0 Å).")
 
-    return (rmsd <= 2.0 if rmsd is not None else False), rmsd
+    validation_ok = rmsd <= 2.0 if rmsd is not None else False
+    return validation_ok, rmsd
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -792,6 +793,9 @@ class CompoundRecord:
 
     # Fallback shape score (0–10, lower better)
     shape_score: Optional[float] = None
+
+    # Redocking validation RMSD (0–inf, lower better; None if not validated)
+    validation_rmsd: Optional[float] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1349,8 +1353,15 @@ def _parallel_dock(
     total = len(records)
 
     def _worker(rec):
-        energy = dock_compound(rec, receptor_pdbqt, center, box_size, work_dir, tag)
-        return rec, energy
+        try:
+            energy = dock_compound(rec, receptor_pdbqt, center, box_size, work_dir, tag)
+            return rec, energy
+        except Exception as exc:
+            log.warning(
+                f"    Worker failed for {rec.compound_id}: {exc}. "
+                "Returning (rec, None) and continuing."
+            )
+            return rec, None
 
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
         futures = {pool.submit(_worker, rec): rec for rec in records}
@@ -2099,7 +2110,7 @@ def print_summary(
 #  MAIN — Pipeline Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main():
+def main(target_count: int = 500):
     """Orchestrate the full discovery pipeline end-to-end."""
     ensure_output_dir()
 
@@ -2123,7 +2134,7 @@ def main():
     )
 
     # ── Phase 2: Library generation & filtering ──
-    all_records = generate_candidate_library(target_count=500)
+    all_records = generate_candidate_library(target_count=target_count)
     n_total = len(all_records)
 
     filtered = apply_filters(all_records)
