@@ -38,6 +38,46 @@ CRITICAL_RESIDUE_ATOMS: Dict[str, Set[str]] = {
 }
 
 
+def prepare_ligand_for_physics(
+    mol: Chem.Mol,
+    force_reembed: bool = False,
+    randomSeed: int = 42,
+) -> Optional[Chem.Mol]:
+    """Prepare a ligand for physics-based methods (FEP, MM-GB/SA).
+
+    Steps:
+      1. Add hydrogens appropriate for pH 7.4.
+      2. Generate a 3-D conformer using ETKDGv3 (fallback to ETKDG).
+      3. Optimise the geometry with MMFF.
+
+    Args:
+        mol: RDKit Mol object.
+        force_reembed: If True, re-embed even if a conformer already exists.
+        randomSeed: Random seed for conformer generation.
+
+    Returns:
+        Prepared Mol object, or ``None`` if embedding fails.
+    """
+    try:
+        mol = Chem.AddHs(mol, addCoords=True)
+    except Exception:
+        mol = Chem.AddHs(mol)
+
+    if mol.GetNumConformers() == 0 or force_reembed:
+        if mol.GetNumConformers() > 0:
+            mol.RemoveAllConformers()
+        params = AllChem.ETKDGv3()
+        params.randomSeed = randomSeed
+        status = AllChem.EmbedMolecule(mol, params)
+        if status < 0:
+            status = AllChem.EmbedMolecule(mol, AllChem.ETKDG())
+        if status < 0:
+            return None
+
+    AllChem.MMFFOptimizeMolecule(mol)
+    return mol
+
+
 def get_ligand_max_dimension(mol: Chem.Mol) -> float:
     """Compute the maximum distance between any two heavy atoms in the
     ligand's 3D conformer.

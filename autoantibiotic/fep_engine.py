@@ -847,16 +847,12 @@ class FEPResistanceCalculator:
         # ── Prepare and add ligand ────────────────────────────────
         ligand_mol = self.ligand_rdkit
         if ligand_mol is not None:
-            mol = Chem.AddHs(ligand_mol)
-            # Generate 3D conformer if not already present
-            if mol.GetNumConformers() == 0:
-                params = _AllChem.ETKDGv3()
-                params.randomSeed = CONFIG.random_seed
-                result = _AllChem.EmbedMolecule(mol, params)
-                if result == -1:
-                    result = _AllChem.EmbedMolecule(mol, _AllChem.ETKDG())
-                if result != -1:
-                    _AllChem.MMFFOptimizeMolecule(mol)
+            from .structure_prep import prepare_ligand_for_physics
+            mol = prepare_ligand_for_physics(
+                ligand_mol, randomSeed=CONFIG.random_seed,
+            )
+            if mol is None:
+                raise FETopologyError("Ligand conformer generation failed.")
 
             # Convert RDKit Mol to PDB block for OpenMM
             try:
@@ -1202,15 +1198,12 @@ class FEPResistanceCalculator:
 
         ligand_mol = self.ligand_rdkit
         if ligand_mol is not None:
-            mol = Chem.AddHs(ligand_mol)
-            if mol.GetNumConformers() == 0:
-                params = _AllChem.ETKDGv3()
-                params.randomSeed = CONFIG.random_seed
-                result = _AllChem.EmbedMolecule(mol, params)
-                if result == -1:
-                    result = _AllChem.EmbedMolecule(mol, _AllChem.ETKDG())
-                if result != -1:
-                    _AllChem.MMFFOptimizeMolecule(mol)
+            from .structure_prep import prepare_ligand_for_physics
+            mol = prepare_ligand_for_physics(
+                ligand_mol, randomSeed=CONFIG.random_seed,
+            )
+            if mol is None:
+                return None
 
             pdb_block = Chem.MolToPDBBlock(mol)
             pdb_block = pdb_block.replace("HETATM", "ATOM  ")

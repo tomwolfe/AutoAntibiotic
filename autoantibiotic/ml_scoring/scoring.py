@@ -581,13 +581,11 @@ def _compute_ligand_gb_energy(
 ) -> Optional[float]:
     """Generate a 3D conformer for *mol* and compute its GB energy."""
     try:
-        mol_3d = Chem.RWMol(mol)
-        mol_3d = Chem.AddHs(mol_3d)
-        params = Chem.rdDistGeom.ETKDGv3()
-        params.randomSeed = seed
-        if Chem.rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
+        from ..structure_prep import prepare_ligand_for_physics
+        mol_3d = prepare_ligand_for_physics(mol, randomSeed=seed)
+        if mol_3d is None:
+            log.warning(f"  Ligand preparation failed for {tag}: conformer generation returned None")
             return None
-        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
 
         lig_pdb = os.path.join(work_dir_mm, f"lig_{tag}.pdb")
         Chem.rdmolfiles.MolToPDBFile(mol_3d, lig_pdb)
@@ -1587,13 +1585,10 @@ def _compute_water_displacement_penalty(
     total = 0.0
 
     try:
-        mol_3d = Chem.RWMol(mol)
-        mol_3d = Chem.AddHs(mol_3d)
-        params = Chem.rdDistGeom.ETKDGv3()
-        params.randomSeed = seed
-        if Chem.rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
-            return 0.0
-        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
+        from ..structure_prep import prepare_ligand_for_physics
+        mol_3d = prepare_ligand_for_physics(mol, randomSeed=seed)
+        if mol_3d is None:
+            return total
     except Exception:
         return total
 
@@ -1677,13 +1672,10 @@ def _compute_entropy_estimation(
 
     try:
         # Generate 3D conformer for the ligand
-        mol_3d = Chem.RWMol(mol)
-        mol_3d = Chem.AddHs(mol_3d)
-        params = Chem.rdDistGeom.ETKDGv3()
-        params.randomSeed = seed
-        if Chem.rdDistGeom.EmbedMolecule(mol_3d, params) < 0:
+        from ..structure_prep import prepare_ligand_for_physics
+        mol_3d = prepare_ligand_for_physics(mol, randomSeed=seed)
+        if mol_3d is None:
             return None
-        AllChem.MMFFOptimizeMolecule(mol_3d, maxIters=500)
 
         # Convert RDKit Mol to OpenMM Topology
         from openmm.app import PDBFile
@@ -1710,11 +1702,9 @@ def _compute_entropy_estimation(
 
         for i in range(n_frames):
             conf_seed = seed + i * 100
-            mol_tmp = Chem.RWMol(mol)
-            mol_tmp = Chem.AddHs(mol_tmp)
-            p = Chem.rdDistGeom.ETKDGv3()
-            p.randomSeed = conf_seed
-            if Chem.rdDistGeom.EmbedMolecule(mol_tmp, p) < 0:
+            from ..structure_prep import prepare_ligand_for_physics
+            mol_tmp = prepare_ligand_for_physics(mol, randomSeed=conf_seed)
+            if mol_tmp is None:
                 continue
 
             conf = mol_tmp.GetConformer()
