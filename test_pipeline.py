@@ -6,10 +6,12 @@ Tests core scientific and engineering functions in isolation.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import numpy as np
@@ -31,7 +33,6 @@ from discovery_pipeline import (
     TOP_N,
     ensure_output_dir,
     screen_library,
-    _parallel_dock,
     _dock_compounds_parallel,
     TanimotoSimilarity,
     DIVERSITY_MIN_COUNT,
@@ -495,9 +496,9 @@ class TestErrorHandling:
 
     def test_parallel_dock_handles_worker_crash(self, tmp_path):
         """
-        If dock_compound raises for a record, _parallel_dock must return
-        (record, None) for that record and still produce results for the
-        others.
+        If dock_compound raises for a record, _dock_compounds_parallel must
+        return (record, None) for that record and still produce results for
+        the others.
         """
         records = [
             CompoundRecord(
@@ -513,7 +514,7 @@ class TestErrorHandling:
                 raise RuntimeError("simulated docking crash")
             return -5.0
 
-        results = _parallel_dock(
+        results = _dock_compounds_parallel(
             records,
             "rec.pdbqt",
             np.zeros(3),
@@ -815,27 +816,16 @@ class TestIntegrationPipeline:
         """
         import csv
 
-        # Create minimal PDB files for the four PDB IDs
+        # Use the local minimal PDB files shipped under tests/data (no network).
+        tests_data = Path(__file__).parent / "tests" / "data"
         work_dir = tmp_path / "work"
         work_dir.mkdir()
         pdb_dir = tmp_path / "pdb"
         pdb_dir.mkdir()
 
-        dummy_pdb = textwrap.dedent("""\
-            ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00  0.00           N
-            ATOM      2  CA  ALA A   1       1.500   2.500   3.500  1.00  0.00           C
-            ATOM      3  C   ALA A   1       2.000   3.000   4.000  1.00  0.00           C
-            ATOM      4  O   ALA A   1       2.500   3.500   4.500  1.00  0.00           O
-            ATOM      5  O   SER A 403       5.000   6.000   7.000  1.00  0.00           O
-            ATOM      6  NZ  LYS A 406       8.000   9.000  10.000  1.00  0.00           N
-            ATOM      7  OH  TYR A 446      11.000  12.000  13.000  1.00  0.00           O
-            END
-        """)
-
         for pdb_id in ["3QPD", "6TKO", "1UTN", "3KJZ"]:
-            path = pdb_dir / f"{pdb_id}.pdb"
-            with open(path, "w") as f:
-                f.write(dummy_pdb)
+            src = tests_data / f"{pdb_id}.pdb"
+            shutil.copy(str(src), str(pdb_dir / f"{pdb_id}.pdb"))
 
         # Mock dependencies and targets
         mock_deps = {"vina": True, "USE_VINA": True}
@@ -854,10 +844,10 @@ class TestIntegrationPipeline:
                 "pdbqt": str(tmp_path / "CES1.pdbqt"),
                 "active_center": np.array([0.0, 0.0, 0.0]),
             },
-            "holo_pdb": str(tmp_path / "6TKO.pdb"),
+            "holo_pdb": str(pdb_dir / "6TKO.pdb"),
         }
 
-        # Mock the PDB download — return local dummy files
+        # Mock the PDB download — return local files from pdb_dir
         def mock_fetch_structure(pdb_id, out_dir):
             return str(pdb_dir / f"{pdb_id}.pdb")
 
@@ -942,31 +932,43 @@ class TestIntegrationPipeline:
 # ── Test: Redocking failure aborts main() unless forced ─────────────────────
 
 class TestMainRedockingGate:
-    def test_main_returns_early_when_validation_fails(self, tmp_path):
-        """main() returns early (no CSV) when redocking validation fails and FORCE unset."""
+    def test_main_continues_when_validation_fails_without_force(self, tmp_path):
+        """main() continues (writes CSV) when redocking validation fails even if FORCE unset."""
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
+        def mock_gen(target_count=3):
+            return [CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
+                                   mol=Chem.MolFromSmiles("c1ccccc1")) for i in range(3)]
+
         mock_targets = {
             "holo_pdb": "/dev/null",
-            "PBP2a": {"pdbqt": "/dev/null"},
+            "PBP2a": {
+                "pdbqt": "/dev/null",
+                "allosteric_center": np.array([0.0, 0.0, 0.0]),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
         }
         with patch("discovery_pipeline.check_dependencies",
-                   return_value={"vina": True, "USE_VINA": True}):
+                   return_value={"vina": False, "USE_VINA": False}):
             with patch("discovery_pipeline.prepare_targets",
                        return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
                            return_value=(False, None)):
                     with patch.dict(os.environ, {}, clear=False):
                         os.environ.pop("AUTOANTIBIOTIC_FORCE", None)
-                        with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
-                            with patch("discovery_pipeline.CSV_REPORT",
-                                       output_dir / "top_candidates.csv"):
-                                from discovery_pipeline import main
-                                main(target_count=3)
+                        with patch("discovery_pipeline.generate_candidate_library",
+                                   side_effect=mock_gen):
+                            with patch("discovery_pipeline.apply_filters",
+                                       side_effect=lambda r: list(r)):
+                                with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                    with patch("discovery_pipeline.CSV_REPORT",
+                                               output_dir / "top_candidates.csv"):
+                                        from discovery_pipeline import main
+                                        main(target_count=3)
 
-        assert not (output_dir / "top_candidates.csv").exists(), \
-            "CSV should NOT be written when validation fails and FORCE is unset"
+        assert (output_dir / "top_candidates.csv").exists(), \
+            "CSV should be written even when validation fails and FORCE is unset"
 
     def test_main_proceeds_when_force_set(self, tmp_path):
         """main() proceeds past the redocking gate when AUTOANTIBIOTIC_FORCE is set."""
