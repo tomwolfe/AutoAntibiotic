@@ -31,8 +31,8 @@ import pandas as pd
 # ── RDKit ──────────────────────────────────────────────────────────────────────
 from rdkit import Chem, RDConfig
 from rdkit.Chem import (
-    AllChem, Descriptors, QED, Draw, rdMolDescriptors,
-    rdmolops, rdDistGeom, Crippen, FilterCatalog, BRICS,
+    AllChem, Descriptors, QED, rdMolDescriptors,
+    rdDistGeom, Crippen, FilterCatalog, BRICS,
 )
 from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
 from rdkit.Chem.Draw import rdMolDraw2D
@@ -42,16 +42,8 @@ from rdkit import RDLogger as rdklog
 # ── Bio.PDB ────────────────────────────────────────────────────────────────────
 from Bio.PDB import (
     PDBParser, PDBIO, Select,
-    NeighborSearch, Superimposer,
-    StructureBuilder, PDBList,
+    PDBList,
 )
-from Bio.PDB.DSSP import DSSP
-from Bio.SVDSuperimposer import SVDSuperimposer
-
-# ── Matplotlib ─────────────────────────────────────────────────────────────────
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 # ── Suppress RDKit noise ───────────────────────────────────────────────────────
 rdklog.DisableLog("rdApp.*")
@@ -416,12 +408,15 @@ def run_redocking_validation(
     # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
     docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
+    center = compute_residue_centroid(holo_pdb_path, ALLOSTERIC_RESIDUES)
     vina_cmd = [
         "vina",
         "--receptor", target_pdbqt_path,
         "--ligand", lig_pdbqt,
         "--out", docked_pdbqt,
-        "--center_x", "0", "--center_y", "0", "--center_z", "0",  # placeholder — will be updated
+        "--center_x", f"{center[0]:.3f}",
+        "--center_y", f"{center[1]:.3f}",
+        "--center_z", f"{center[2]:.3f}",
         "--size_x", "25", "--size_y", "25", "--size_z", "25",
         "--exhaustiveness", "8",
     ]
@@ -1145,6 +1140,7 @@ class LigandPreparator:
         Raises:
             RuntimeError: If neither meeko nor obabel can produce PDBQT.
         """
+        meeko_error = None
         # ── Try meeko first ──
         try:
             from meeko import MoleculePreparation, PDBQTWriterLegacy
@@ -1157,10 +1153,11 @@ class LigandPreparator:
                 return pdbqt_str
             raise RuntimeError("Meeko produced an empty PDBQT string for the input molecule")
         except (ImportError, AttributeError, RuntimeError) as exc:
+            meeko_error = str(exc)
             log.warning(f"Meeko failed: {exc}")
-            raise RuntimeError(f"Meeko failed: {exc}") from exc
 
         # ── Fallback: obabel via subprocess ──
+        obabel_error = None
         try:
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".pdbqt", delete=True) as tmp:
@@ -1174,15 +1171,16 @@ class LigandPreparator:
                 if pdbqt_str:
                     return pdbqt_str
                 raise ValueError("obabel returned empty output")
-        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError) as exc:
+            obabel_error = str(exc)
             log.warning(f"obabel fallback failed: {exc}")
-            raise RuntimeError(f"obabel fallback failed: {exc}") from exc
 
         # ── All attempts failed ──
         raise RuntimeError(
             "Cannot convert Mol to PDBQT. Ensure meeko is installed "
             "(pip install meeko) or OpenBabel is available on PATH. "
             "Alternatively, set USE_VINA=False to skip PDBQT-dependent steps."
+            f" meeko error: {meeko_error}; obabel error: {obabel_error}"
         )
 
 
@@ -1838,10 +1836,6 @@ def compute_selectivity_index(
     if abs(human_avg_energy) < 1e-6:
         return 0.0
     return abs(pb2pa_energy) / abs(human_avg_energy)
-
-
-CONSERVED_RESIDUES = {"SER403", "LYS406", "TYR446"}
-MUTABLE_RESIDUES = {"G246", "N146"}
 
 
 def profile_resistance_risk(
