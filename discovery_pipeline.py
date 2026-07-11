@@ -899,9 +899,25 @@ def generate_candidate_library(
     records = []
     max_attempts = target_count * 10
     attempts = 0
+    last_checkpoint_count = 0
+    CHECKPOINT_INTERVAL = 1000
 
     while len(records) < target_count and attempts < max_attempts:
         attempts += 1
+
+        # Safety break: if successful compound count hasn't increased by at least 10%
+        # after the last CHECKPOINT_INTERVAL attempts, log a warning and break.
+        if attempts % CHECKPOINT_INTERVAL == 0:
+            if last_checkpoint_count > 0 and len(records) < last_checkpoint_count * 1.1:
+                log.warning(
+                    f"  Safety break after {attempts} attempts: "
+                    f"only {len(records)} compounds generated "
+                    f"(<10% increase from {last_checkpoint_count} in last {CHECKPOINT_INTERVAL} attempts). "
+                    "Generation loop terminated to prevent hanging."
+                )
+                break
+            last_checkpoint_count = len(records)
+
         # Pick 1–3 fragments and try to join
         n_frags = rng.integers(1, 4)
         chosen = rng.choice(frag_mols, size=min(n_frags, len(frag_mols)), replace=False)
@@ -941,7 +957,7 @@ def generate_candidate_library(
         if len(records) % 100 == 0:
             log.info(f"  Generated {len(records)} / {target_count} candidates…")
 
-    # Add controls explicitly
+    # Add controls explicitly (ensures at least controls are always returned)
     for name, smi in CONTROL_SMILES.items():
         if smi not in seen_smiles:
             mol = Chem.MolFromSmiles(smi)
@@ -1141,7 +1157,11 @@ def _run_vina_docking(
             cmd, capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode != 0:
-            log.warning(f"  Vina error: {result.stderr.strip()}")
+            log.warning(
+                f"  Vina returned exit code {result.returncode}.\n"
+                f"  stderr: {result.stderr.strip()}\n"
+                f"  stdout: {result.stdout.strip()}"
+            )
             return None
 
         # Parse output for best binding energy
@@ -1163,6 +1183,12 @@ def _run_vina_docking(
                     return energy
                 except (ValueError, IndexError):
                     continue
+        # If we reach here, no energy could be parsed — log full output
+        log.warning(
+            "  Failed to parse Vina binding energy from output.\n"
+            f"  stdout: {result.stdout.strip()}\n"
+            f"  stderr: {result.stderr.strip()}"
+        )
         return None
 
     except subprocess.TimeoutExpired:
@@ -1267,7 +1293,10 @@ def _compute_shape_fallback_score(
     vs reference (co-crystallised ligand from 6TKO). Normalise to 0–10 scale
     (lower = better shape match).
 
-    Returns normalised score, or None on failure.
+    If available, also computes electrostatic similarity and combines with
+    the shape score (50/50 weight) for a more robust metric.
+
+    Returns combined normalised score (0–10, lower = better), or None on failure.
     """
     try:
         # Generate 3D conformer
@@ -1300,8 +1329,24 @@ def _compute_shape_fallback_score(
 
         # Normalise to 0–10 scale (heuristic: typical range 0–0.5)
         # Map: protrude=0 → score=0 (perfect), protrude=0.5 → score=10 (worst)
-        normalised = min(protrude / 0.05, 10.0) if protrude > 0 else 0.0
-        return normalised
+        shape_norm = min(protrude / 0.05, 10.0) if protrude > 0 else 0.0
+
+        # Electrostatic similarity (optional enhancement)
+        elec_sim = None
+        try:
+            from rdkit.Chem.rdMolDescriptors import GetElectrostaticSimilarity
+            elec_sim = GetElectrostaticSimilarity(mol_3d, ref_3d)
+        except Exception:
+            pass
+
+        if elec_sim is not None:
+            # Convert electrostatic similarity (0–1, higher = better) to
+            # a penalty (0–10, lower = better) and average with shape score
+            elec_penalty = (1.0 - elec_sim) * 10.0
+            combined = 0.5 * shape_norm + 0.5 * elec_penalty
+            return combined
+
+        return shape_norm
 
     except Exception:
         return None

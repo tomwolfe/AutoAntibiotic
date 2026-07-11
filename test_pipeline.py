@@ -6,9 +6,11 @@ Tests core scientific and engineering functions in isolation.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
+from unittest.mock import patch, MagicMock
 
 import numpy as np
 import pytest
@@ -17,6 +19,10 @@ from discovery_pipeline import (
     compute_residue_centroid,
     apply_filters,
     generate_candidate_library,
+    check_dependencies,
+    _run_vina_docking,
+    compute_selectivity_index,
+    check_ser403_contact,
     CompoundRecord,
     BETA_LACTAM_SMARTS,
     OUTPUT_DIR,
@@ -152,6 +158,252 @@ class TestGenerateCandidateLibrary:
         library = generate_candidate_library(target_count=200)
         ids = [r.compound_id for r in library]
         assert len(ids) == len(set(ids)), "Duplicate compound IDs found"
+
+
+# ── Test 4: check_dependencies with mocked subprocess ─────────────────────────
+
+class TestCheckDependencies:
+    def test_returns_vina_true_when_binary_found(self):
+        """check_dependencies returns vina=True when 'vina --version' succeeds."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            deps = check_dependencies()
+            assert deps["vina"] is True
+            assert deps["USE_VINA"] is True
+
+    def test_returns_vina_false_when_binary_missing(self):
+        """check_dependencies returns vina=False when 'vina --version' raises FileNotFoundError."""
+        with patch("subprocess.run", side_effect=FileNotFoundError) as mock_run:
+            deps = check_dependencies()
+            assert deps["vina"] is False
+            assert deps["USE_VINA"] is False
+
+    def test_handles_timeout_gracefully(self):
+        """check_dependencies returns vina=False when subprocess times out."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="vina", timeout=10)):
+            deps = check_dependencies()
+            assert deps["vina"] is False
+            assert deps["USE_VINA"] is False
+
+    def test_handles_missing_obabel(self):
+        """check_dependencies still succeeds when obabel is missing (optional)."""
+        def side_effect(cmd, **kwargs):
+            if cmd[0] == "vina":
+                mock = MagicMock()
+                mock.returncode = 0
+                return mock
+            raise FileNotFoundError
+        with patch("subprocess.run", side_effect=side_effect):
+            deps = check_dependencies()
+            assert deps["vina"] is True
+
+
+# ── Test 5: _run_vina_docking with mocked subprocess ─────────────────────────
+
+class TestRunVinaDocking:
+    @pytest.fixture
+    def mock_center(self):
+        return np.array([0.0, 0.0, 0.0])
+
+    @pytest.fixture
+    def mock_box(self):
+        return (20.0, 20.0, 20.0)
+
+    def test_returns_energy_on_success(self, mock_center, mock_box):
+        """Returns binding energy when Vina outputs a valid table."""
+        stdout = textwrap.dedent("""\
+            mode |   affinity | dist from best mode
+               1       -8.5       0.000
+               2       -7.2       1.234
+        """)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = stdout
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            energy = _run_vina_docking("rec.pdbqt", "lig.pdbqt", "out.pdbqt", mock_center, mock_box)
+            assert energy == -8.5
+
+    def test_returns_none_on_nonzero_exit(self, mock_center, mock_box):
+        """Returns None when Vina returns a non-zero exit code."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "Error: something went wrong"
+
+        with patch("subprocess.run", return_value=mock_result):
+            energy = _run_vina_docking("rec.pdbqt", "lig.pdbqt", "out.pdbqt", mock_center, mock_box)
+            assert energy is None
+
+    def test_returns_none_on_timeout(self, mock_center, mock_box):
+        """Returns None when Vina subprocess times out."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="vina", timeout=10)):
+            energy = _run_vina_docking("rec.pdbqt", "lig.pdbqt", "out.pdbqt", mock_center, mock_box)
+            assert energy is None
+
+    def test_returns_none_on_file_not_found(self, mock_center, mock_box):
+        """Returns None when Vina binary is not found."""
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            energy = _run_vina_docking("rec.pdbqt", "lig.pdbqt", "out.pdbqt", mock_center, mock_box)
+            assert energy is None
+
+    def test_parses_affinity_from_stderr_fallback(self, mock_center, mock_box):
+        """Falls back to parsing affinity from stderr when stdout table is missing."""
+        stdout = ""
+        stderr = "Affinity: -9.3 (kcal/mol)"
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = stdout
+        mock_result.stderr = stderr
+
+        with patch("subprocess.run", return_value=mock_result):
+            energy = _run_vina_docking("rec.pdbqt", "lig.pdbqt", "out.pdbqt", mock_center, mock_box)
+            assert energy == -9.3
+
+
+# ── Test 6: compute_selectivity_index edge cases ────────────────────────────
+
+class TestComputeSelectivityIndex:
+    def test_normal_case(self):
+        """Normal case: negative PBP2a energy gives SI > 0."""
+        si = compute_selectivity_index(-10.0, -5.0)
+        assert si == pytest.approx(0.5)
+
+    def test_positive_pb2pa_returns_zero(self):
+        """Returns 0.0 when PBP2a energy is positive (non-binder)."""
+        si = compute_selectivity_index(1.0, -5.0)
+        assert si == 0.0
+
+    def test_zero_pb2pa_energy(self):
+        """Returns 0.0 when PBP2a energy is zero to avoid division by zero."""
+        si = compute_selectivity_index(0.0, -5.0)
+        assert si == 0.0
+
+    def test_near_zero_pb2pa_energy(self):
+        """Returns 0.0 when abs(PBP2a energy) is below epsilon."""
+        si = compute_selectivity_index(-1e-7, -5.0)
+        assert si == 0.0
+
+    def test_zero_human_energy(self):
+        """Returns 0.0 when human average energy is zero."""
+        si = compute_selectivity_index(-10.0, 0.0)
+        assert si == 0.0
+
+    def test_both_zero_energy(self):
+        """Returns 0.0 when both energies are zero."""
+        si = compute_selectivity_index(0.0, 0.0)
+        assert si == 0.0
+
+    def test_negative_human_energy(self):
+        """Still computes correctly when human energy is negative."""
+        si = compute_selectivity_index(-8.0, -4.0)
+        assert si == pytest.approx(0.5)
+
+
+# ── Test 7: check_ser403_contact with mock PDBQT ────────────────────────────
+
+class TestCheckSer403Contact:
+    @pytest.fixture
+    def mock_receptor_pdb(self):
+        """Create a minimal receptor PDB with a SER403 residue containing OG."""
+        content = textwrap.dedent("""\
+            ATOM      1  N   SER A 403      10.000  10.000  10.000  1.00  0.00           N
+            ATOM      2  CA  SER A 403      11.000  10.000  10.000  1.00  0.00           C
+            ATOM      3  C   SER A 403      12.000  10.000  10.000  1.00  0.00           C
+            ATOM      4  O   SER A 403      12.500  10.000  10.000  1.00  0.00           O
+            ATOM      5  CB  SER A 403      11.000  11.000  10.000  1.00  0.00           C
+            ATOM      6  OG  SER A 403      11.000  11.500  10.000  1.00  0.00           O
+            END
+        """)
+        tmpdir = tempfile.mkdtemp()
+        pdb_path = os.path.join(tmpdir, "receptor.pdb")
+        with open(pdb_path, "w") as f:
+            f.write(content)
+        yield pdb_path
+        for fname in os.listdir(tmpdir):
+            os.remove(os.path.join(tmpdir, fname))
+        os.rmdir(tmpdir)
+
+    @pytest.fixture
+    def close_ligand_pdbqt(self):
+        """Ligand PDBQT with a heavy atom within 3.5 Å of Ser403 OG (11, 11.5, 10)."""
+        content = textwrap.dedent("""\
+            ATOM      1  C   LIG A   1      11.200  11.500  10.000  1.00  0.00           C
+            ATOM      2  H   LIG A   1      12.000  12.000  10.000  1.00  0.00           H
+            END
+        """)
+        tmpdir = tempfile.mkdtemp()
+        pdbqt_path = os.path.join(tmpdir, "ligand_close.pdbqt")
+        with open(pdbqt_path, "w") as f:
+            f.write(content)
+        yield pdbqt_path
+        for fname in os.listdir(tmpdir):
+            os.remove(os.path.join(tmpdir, fname))
+        os.rmdir(tmpdir)
+
+    @pytest.fixture
+    def far_ligand_pdbqt(self):
+        """Ligand PDBQT with all heavy atoms > 3.5 Å from Ser403 OG."""
+        content = textwrap.dedent("""\
+            ATOM      1  C   LIG A   1      20.000  20.000  20.000  1.00  0.00           C
+            END
+        """)
+        tmpdir = tempfile.mkdtemp()
+        pdbqt_path = os.path.join(tmpdir, "ligand_far.pdbqt")
+        with open(pdbqt_path, "w") as f:
+            f.write(content)
+        yield pdbqt_path
+        for fname in os.listdir(tmpdir):
+            os.remove(os.path.join(tmpdir, fname))
+        os.rmdir(tmpdir)
+
+    def test_detects_contact(self, mock_receptor_pdb, close_ligand_pdbqt):
+        """Returns True when a ligand heavy atom is within 3.5 Å of Ser403 OG."""
+        result = check_ser403_contact(close_ligand_pdbqt, mock_receptor_pdb)
+        assert result
+
+    def test_detects_no_contact(self, mock_receptor_pdb, far_ligand_pdbqt):
+        """Returns False when all ligand heavy atoms are > 3.5 Å from Ser403 OG."""
+        result = check_ser403_contact(far_ligand_pdbqt, mock_receptor_pdb)
+        assert not result
+
+    def test_missing_receptor_file(self, far_ligand_pdbqt):
+        """Returns False when receptor PDB does not exist."""
+        result = check_ser403_contact(far_ligand_pdbqt, "/nonexistent/receptor.pdb")
+        assert not result
+
+    def test_missing_docked_file(self, mock_receptor_pdb):
+        """Returns False when docked PDBQT does not exist."""
+        result = check_ser403_contact("/nonexistent/ligand.pdbqt", mock_receptor_pdb)
+        assert not result
+
+
+# ── Test 8: Library generation edge cases ────────────────────────────────────
+
+class TestGenerateCandidateLibraryEdgeCases:
+    def test_returns_unique_ids(self):
+        """All compound IDs in the library must be unique."""
+        library = generate_candidate_library(target_count=100)
+        ids = [r.compound_id for r in library]
+        assert len(ids) == len(set(ids)), "Duplicate compound IDs found"
+
+    def test_all_records_have_valid_smiles(self):
+        """Every returned record has valid SMILES that RDKit can parse."""
+        library = generate_candidate_library(target_count=50)
+        for record in library:
+            assert record.smiles, f"Record {record.compound_id} has no SMILES"
+            mol = Chem.MolFromSmiles(record.smiles)
+            assert mol is not None, f"Record {record.compound_id} has invalid SMILES: {record.smiles}"
+
+    def test_returns_at_least_controls_when_generation_fails(self):
+        """Even with an unreachable target_count, control compounds are returned."""
+        library = generate_candidate_library(target_count=10000)
+        ids = [r.compound_id for r in library]
+        control_ids = [cid for cid in ids if cid.startswith("CTRL_")]
+        assert len(control_ids) >= 1, "Expected at least one control compound"
+        assert len(library) >= 2, "Expected at least control compounds to be returned"
 
 
 # ── Run ──────────────────────────────────────────────────────────────────────
