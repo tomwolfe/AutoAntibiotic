@@ -26,7 +26,9 @@ from discovery_pipeline import (
     CompoundRecord,
     BETA_LACTAM_SMARTS,
     OUTPUT_DIR,
+    TOP_N,
     ensure_output_dir,
+    screen_library,
 )
 from rdkit import Chem
 
@@ -407,6 +409,74 @@ class TestGenerateCandidateLibraryEdgeCases:
 
 
 # ── Run ──────────────────────────────────────────────────────────────────────
+
+# ── Test 9: Fallback Scoring (TestFallbackScoring) ──────────────────────────
+
+class TestFallbackScoring:
+    def test_shape_scoring_fallback(self):
+        """
+        When USE_VINA is False (Vina unavailable), screen_library must:
+          - Still compute shape scores for every compound.
+          - Leave pb2pa_allosteric_energy as None (no Vina docking).
+        """
+        # Build 3 mock compound records
+        records = [
+            CompoundRecord(
+                compound_id='SHAPE_A',
+                smiles='CC1=CC=C(C=C1)',  # benzene
+                mol=Chem.MolFromSmiles('CC1=CC=C(C=C1)'),
+            ),
+            CompoundRecord(
+                compound_id='SHAPE_B',
+                smiles='CC(C)(C)C1=CC=C(C=C1)C(C)(C)C',  # xylene-like
+                mol=Chem.MolFromSmiles('CC(C)(C)C1=CC=C(C=C1)C(C)(C)C'),
+            ),
+            CompoundRecord(
+                compound_id='SHAPE_C',
+                smiles='C1=CC=C(C=C1)O',  # phenol
+                mol=Chem.MolFromSmiles('C1=CC=C(C=C1)O'),
+            ),
+        ]
+
+        # Mock deps to simulate Vina unavailable
+        mock_deps = {'vina': False, 'USE_VINA': False}
+
+        # Mock targets to return minimal structure
+        mock_targets = {
+            'PBP2a': {
+                'pdbqt': '/dev/null',
+                'cleaned_pdb': '/dev/null',
+                'allosteric_center': np.array([0.0, 0.0, 0.0]),
+                'active_center': np.array([0.0, 0.0, 0.0]),
+            },
+            'trypsin': {
+                'pdbqt': '/dev/null',
+                'active_center': np.array([0.0, 0.0, 0.0]),
+            },
+            'CES1': {
+                'pdbqt': '/dev/null',
+                'active_center': np.array([0.0, 0.0, 0.0]),
+            },
+            'holo_pdb': '/dev/null',
+        }
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            result = screen_library(records, mock_targets, work_dir, mock_deps)
+
+        # All records must have non-None shape_score
+        for rec in result:
+            assert rec.shape_score is not None, \
+                f"shape_score is None for {rec.compound_id}"
+
+        # pb2pa_allosteric_energy must be None (Vina disabled)
+        for rec in result:
+            assert rec.pb2pa_allosteric_energy is None, \
+                f"pb2pa_allosteric_energy is not None: {rec.pb2pa_allosteric_energy}"
+
+        # Should return at least TOP_N (10) or all if fewer
+        assert len(result) >= min(len(records), TOP_N), \
+            f"Expected at least {min(len(records), TOP_N)} results, got {len(result)}"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

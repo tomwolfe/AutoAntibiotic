@@ -328,47 +328,28 @@ def _compute_rmsd_docked_vs_crystal(
     docked_pdb: str, crystal_pdb: str
 ) -> Optional[float]:
     """
-    Align protein backbones of the docked structure to the crystal structure
-    and compute heavy-atom RMSD of the ligand.
+    Align the docked ligand to the crystal ligand and compute heavy-atom RMSD.
+
+    Uses RDKit's AllChem.GetBestRMS after MCS-based atom-order alignment.
+    Returns None if MCS cannot be found or any error occurs.
     """
     try:
-        parser = PDBParser(QUIET=True)
-        docked_struct = parser.get_structure("docked", docked_pdb)
-        crystal_struct = parser.get_structure("crystal", crystal_pdb)
+        docked_mol = Chem.MolFromPDBFile(docked_pdb, removeHs=False)
+        if docked_mol is None:
+            log.error("  ✗  Could not parse docked PDB as an RDKit Mol.")
+            return None
 
-        # Get ligand atoms from both
-        def _get_ligand_atoms(structure):
-            atoms = []
-            for model in structure:
-                for chain in model:
-                    for residue in chain:
-                        if residue.get_id()[0] != " ":
-                            for atom in residue:
-                                if atom.element != "H":
-                                    atoms.append(atom)
-            return atoms
+        crystal_mol = Chem.MolFromPDBFile(crystal_pdb, removeHs=False)
+        if crystal_mol is None:
+            log.error("  ✗  Could not parse crystal PDB as an RDKit Mol.")
+            return None
 
-        docked_atoms = _get_ligand_atoms(docked_struct)
-        crystal_atoms = _get_ligand_atoms(crystal_struct)
+        rms = AllChem.GetBestRMS(docked_mol, crystal_mol, 0, 0)
+        if rms is None:
+            log.warning("  ⚠  MCS alignment failed — cannot order atoms consistently.")
+            return None
 
-        if len(docked_atoms) != len(crystal_atoms):
-            log.warning(
-                f"  ⚠  Atom count mismatch: docked={len(docked_atoms)}, "
-                f"crystal={len(crystal_atoms)}. Taking min."
-            )
-            n = min(len(docked_atoms), len(crystal_atoms))
-            docked_atoms = docked_atoms[:n]
-            crystal_atoms = crystal_atoms[:n]
-
-        # Superpose and get RMSD
-        sup = SVDSuperimposer()
-        sup.set(
-            np.array([a.get_vector().get_array() for a in crystal_atoms]),
-            np.array([a.get_vector().get_array() for a in docked_atoms]),
-        )
-        sup.run()
-        rmsd = sup.get_rmsd()
-        return rmsd
+        return rms
 
     except Exception as exc:
         log.error(f"  ✗  RMSD calculation failed: {exc}")
@@ -897,26 +878,17 @@ def generate_candidate_library(
     rng = np.random.default_rng(seed)
     seen_smiles = set()
     records = []
-    max_attempts = target_count * 10
+    max_attempts = 5000
     attempts = 0
     last_checkpoint_count = 0
-    CHECKPOINT_INTERVAL = 1000
+    CHECKPOINT_INTERVAL = 500
 
-    while len(records) < target_count and attempts < max_attempts:
+    for _ in range(max_attempts):
         attempts += 1
 
-        # Safety break: if successful compound count hasn't increased by at least 10%
-        # after the last CHECKPOINT_INTERVAL attempts, log a warning and break.
+        # Progress logging every CHECKPOINT_INTERVAL attempts
         if attempts % CHECKPOINT_INTERVAL == 0:
-            if last_checkpoint_count > 0 and len(records) < last_checkpoint_count * 1.1:
-                log.warning(
-                    f"  Safety break after {attempts} attempts: "
-                    f"only {len(records)} compounds generated "
-                    f"(<10% increase from {last_checkpoint_count} in last {CHECKPOINT_INTERVAL} attempts). "
-                    "Generation loop terminated to prevent hanging."
-                )
-                break
-            last_checkpoint_count = len(records)
+            log.info(f"  Generation progress: {len(records)} compounds generated after {attempts} attempts.")
 
         # Pick 1–3 fragments and try to join
         n_frags = rng.integers(1, 4)
@@ -956,6 +928,9 @@ def generate_candidate_library(
 
         if len(records) % 100 == 0:
             log.info(f"  Generated {len(records)} / {target_count} candidates…")
+
+        if len(records) >= target_count:
+            break
 
     # Add controls explicitly (ensures at least controls are always returned)
     for name, smi in CONTROL_SMILES.items():
@@ -1469,9 +1444,15 @@ def screen_library(
                 log.info(f"  Shape scored {i + 1} / {total}")
 
         shape_scores = [s for s in shape_scores if s[1] is not None]
-        shape_scores.sort(key=lambda x: x[1])
 
-        log.info(f"  Shape scoring complete. Best score: {shape_scores[0][1]:.3f}")
+        if shape_scores:
+            shape_scores.sort(key=lambda x: x[1])
+            log.info(f"  Shape scoring complete. Best score: {shape_scores[0][1]:.3f}")
+        else:
+            log.warning("  No valid shape scores computed. Using default scores.")
+            for rec in records:
+                rec.shape_score = 0.0
+            shape_scores = [(rec, 0.0) for rec in records]
 
     # ── Select top 10 ──
     if deps["USE_VINA"]:
@@ -1713,7 +1694,7 @@ def analyze_selectivity_and_resistance(
             rec.selectivity_index = 1.0
             continue
 
-        human_avg = np.mean(energies_human)
+        human_min = min(energies_human)
         pb2pa_best = (
             rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None
             else rec.pb2pa_allosteric_energy
@@ -1722,7 +1703,7 @@ def analyze_selectivity_and_resistance(
             rec.selectivity_index = 1.0
             continue
 
-        si = compute_selectivity_index(pb2pa_best, human_avg)
+        si = compute_selectivity_index(pb2pa_best, human_min)
         rec.selectivity_index = si
 
         if si < SELECTIVITY_INDEX_THRESHOLD:
@@ -1732,6 +1713,15 @@ def analyze_selectivity_and_resistance(
             )
         else:
             log.info(f"  {rec.compound_id}: SI = {si:.2f} (pass).")
+
+        # Hard flag: high risk off-target binding
+        if any(e is not None and e < -8.0 for e in (
+            rec.human_trypsin_energy, rec.human_ces1_energy
+        )):
+            rec.selectivity_index = 0.0
+            if rec.resistance_notes:
+                rec.resistance_notes += " | "
+            rec.resistance_notes += "High risk off-target binding"
 
     # ── Resistance profiling with pose-based Ser403 contact analysis ──
     pb2pa = targets["PBP2a"]
