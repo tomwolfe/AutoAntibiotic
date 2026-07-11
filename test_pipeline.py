@@ -30,6 +30,11 @@ from discovery_pipeline import (
     TOP_N,
     ensure_output_dir,
     screen_library,
+    _parallel_dock,
+    _dock_compounds_parallel,
+    TanimotoSimilarity,
+    DIVERSITY_MIN_COUNT,
+    log,
 )
 from rdkit import Chem
 
@@ -414,6 +419,192 @@ class TestFallbackScoring:
         # Should return at least TOP_N (10) or all if fewer
         assert len(result) >= min(len(records), TOP_N), \
             f"Expected at least {min(len(records), TOP_N)} results, got {len(result)}"
+
+
+# ── Test: Error Handling ───────────────────────────────────────────────────
+
+class TestErrorHandling:
+    """Tests for robust error tracking during docking / ligand prep."""
+
+    def _benzene_mol(self):
+        from rdkit.Chem import AllChem
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol)
+        return mol
+
+    def test_ligand_preparator_logs_meeko_failure(self):
+        """
+        When meeko is unavailable/fails, LigandPreparator.prepare must raise a
+        RuntimeError whose message includes 'Meeko failed', and must log a
+        warning carrying that specific message.
+        """
+        import sys
+        preparator = LigandPreparator()
+        mol = self._benzene_mol()
+
+        # Force the meeko import inside prepare() to fail.
+        with patch.dict(sys.modules, {"meeko": None}):
+            with patch.object(log, "warning") as mock_warn:
+                with pytest.raises(RuntimeError):
+                    preparator.prepare(mol)
+                assert any(
+                    "Meeko failed" in str(call.args[0])
+                    for call in mock_warn.call_args_list
+                ), "Expected log.warning to report the specific 'Meeko failed' message"
+
+    def test_parallel_dock_handles_worker_crash(self, tmp_path):
+        """
+        If dock_compound raises for a record, _parallel_dock must return
+        (record, None) for that record and still produce results for the
+        others.
+        """
+        records = [
+            CompoundRecord(
+                compound_id=f"R{i}",
+                smiles="c1ccccc1",
+                mol=Chem.MolFromSmiles("c1ccccc1"),
+            )
+            for i in range(3)
+        ]
+
+        def fake_dock(rec, *args, **kwargs):
+            if rec.compound_id == "R1":
+                raise RuntimeError("simulated docking crash")
+            return -5.0
+
+        results = _parallel_dock(
+            records,
+            "rec.pdbqt",
+            np.zeros(3),
+            (20.0, 20.0, 20.0),
+            str(tmp_path),
+            "tag",
+            n_jobs=1,
+            dock_func=fake_dock,
+        )
+
+        by_id = {rec.compound_id: energy for rec, energy in results}
+        assert by_id["R1"] is None, "Crashed worker should yield (record, None)"
+        assert by_id["R0"] == -5.0, "Healthy workers should still return their energy"
+        assert by_id["R2"] == -5.0, "Healthy workers should still return their energy"
+        assert len(results) == 3
+
+
+# ── Test: Relaxed similarity fallback ─────────────────────────────────────
+
+class TestApplyFiltersRelaxed:
+    def test_apply_filters_relaxed_similarity(self):
+        """
+        When fewer than DIVERSITY_MIN_COUNT compounds pass the strict
+        similarity threshold, apply_filters should relax the threshold and
+        return the relaxed set.  Records whose similarity sits in [0.4, 0.5)
+        fail the strict filter but pass the relaxed one.
+        """
+        smiles = "CC(C)Cc1ccc(CC(=O)O)cc1"  # ibuprofen — passes all other filters
+        mol = Chem.MolFromSmiles(smiles)
+        records = [
+            CompoundRecord(compound_id=f"C{i}", smiles=smiles, mol=mol)
+            for i in range(20)
+        ]
+
+        # Pin similarity so every compound sits in [0.4, 0.5):
+        #   strict (>=0.4) removes it, relaxed (<0.5) keeps it.
+        with patch("discovery_pipeline.TanimotoSimilarity", return_value=0.45):
+            # Disable relaxation to confirm the strict pass set is empty.
+            with patch("discovery_pipeline.DIVERSITY_MIN_COUNT", 0):
+                strict = apply_filters(records)
+            assert len(strict) == 0, "Strict filter should remove all (sim=0.45 >= 0.4)"
+
+            # Default behaviour: relaxed set is returned when strict < 100.
+            relaxed = apply_filters(records)
+
+        assert len(relaxed) == 20, "Relaxed filter should keep all 20 (sim=0.45 < 0.5)"
+
+
+# ── Test: Mini pipeline with shape fallback ───────────────────────────────
+
+class TestMiniPipelineShapeFallback:
+    def test_mini_pipeline_shape_fallback(self, tmp_path):
+        """
+        With USE_VINA=False, main() must run the RDKit Shape fallback,
+        write top_candidates.csv with 3 rows, mark PBP2a_Allosteric_Energy as
+        'N/A', and include the new Shape_Score / Selectivity_Confidence
+        columns.
+        """
+        import csv
+
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        pdb_dir = tmp_path / "pdb"
+        pdb_dir.mkdir()
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        mock_targets = {
+            "PBP2a": {
+                "pdbqt": str(tmp_path / "PBP2a.pdbqt"),
+                "cleaned_pdb": str(tmp_path / "PBP2a_clean.pdb"),
+                "allosteric_center": np.array([0.0, 0.0, 0.0]),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+            "trypsin": {
+                "pdbqt": str(tmp_path / "trypsin.pdbqt"),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+            "CES1": {
+                "pdbqt": str(tmp_path / "CES1.pdbqt"),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+            "holo_pdb": str(tmp_path / "6TKO.pdb"),  # missing → control reference used
+        }
+
+        def mock_generate(target_count=3):
+            smis = ["c1ccccc1", "Cc1ccccc1", "c1ccc(O)cc1"]
+            recs = []
+            for i, s in enumerate(smis):
+                recs.append(CompoundRecord(
+                    compound_id=f"AA-{i:04d}",
+                    smiles=s,
+                    mol=Chem.MolFromSmiles(s),
+                ))
+            return recs
+
+        def mock_filters(records):
+            return list(records)
+
+        with patch("discovery_pipeline.check_dependencies",
+                   return_value={"vina": False, "USE_VINA": False}):
+            with patch("discovery_pipeline.prepare_targets", return_value=mock_targets):
+                with patch("discovery_pipeline.generate_candidate_library",
+                           side_effect=mock_generate):
+                    with patch("discovery_pipeline.apply_filters", side_effect=mock_filters):
+                        with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                            with patch("discovery_pipeline.CSV_REPORT",
+                                       output_dir / "top_candidates.csv"):
+                                from discovery_pipeline import main
+                                main(target_count=3)
+
+        csv_path = output_dir / "top_candidates.csv"
+        assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
+
+        with open(csv_path) as f:
+            rows = list(csv.DictReader(f))
+
+        assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
+
+        required_columns = {
+            "PBP2a_Allosteric_Energy",
+            "Shape_Score",
+            "Selectivity_Confidence",
+        }
+        assert required_columns.issubset(set(rows[0].keys())), (
+            f"CSV missing required columns: {required_columns - set(rows[0].keys())}"
+        )
+
+        for row in rows:
+            assert row["PBP2a_Allosteric_Energy"] == "N/A", row
+            assert row["Selectivity_Confidence"] in {"High", "Low", "None"}, row
 
 
 # ── Test 10: LigandPreparator ──────────────────────────────────────────────

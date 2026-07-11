@@ -21,7 +21,7 @@ import warnings
 import tempfile
 import shutil
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Union
+from typing import List, Tuple, Optional, Dict, Union, Callable
 from dataclasses import dataclass
 import multiprocessing as mp
 
@@ -797,6 +797,12 @@ class CompoundRecord:
     # Redocking validation RMSD (0–inf, lower better; None if not validated)
     validation_rmsd: Optional[float] = None
 
+    # Selectivity confidence based on how many human off-targets were docked:
+    #   "High" if 2 human targets provided valid energies,
+    #   "Low"  if 1 human target provided a valid energy,
+    #   "None" if 0 human targets provided a valid energy.
+    selectivity_confidence: str = "None"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 2 — LIBRARY GENERATION & FILTERING
@@ -1145,14 +1151,14 @@ class LigandPreparator:
             preparator = MoleculePreparation()
             mol_setups = preparator.prepare(mol)
             if not mol_setups:
-                raise RuntimeError("Meeko returned empty setup")
+                raise RuntimeError("Meeko returned an empty setup for the input molecule")
             pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
             if pdbqt_str:
                 return pdbqt_str
-            raise RuntimeError("Meeko returned empty PDBQT string")
+            raise RuntimeError("Meeko produced an empty PDBQT string for the input molecule")
         except (ImportError, AttributeError, RuntimeError) as exc:
-            log.warning(f"  Meeko prep failed: {exc}")
-            pass
+            log.warning(f"Meeko failed: {exc}")
+            raise RuntimeError(f"Meeko failed: {exc}") from exc
 
         # ── Fallback: obabel via subprocess ──
         try:
@@ -1169,8 +1175,8 @@ class LigandPreparator:
                     return pdbqt_str
                 raise ValueError("obabel returned empty output")
         except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
-            log.warning(f"  obabel fallback failed: {exc}")
-            pass
+            log.warning(f"obabel fallback failed: {exc}")
+            raise RuntimeError(f"obabel fallback failed: {exc}") from exc
 
         # ── All attempts failed ──
         raise RuntimeError(
@@ -1316,7 +1322,10 @@ def dock_compound(
     out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
 
     if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
-        return None
+        raise RuntimeError(
+            f"PDBQT preparation failed for {record.compound_id}; "
+            f"this compound will be skipped during screening."
+        )
 
     energy = _run_vina_docking(
         receptor_pdbqt, lig_pdbqt, out_pdbqt,
@@ -1333,7 +1342,7 @@ def dock_compound(
     return energy
 
 
-def _parallel_dock(
+def _dock_compounds_parallel(
     records: List[CompoundRecord],
     receptor_pdbqt: str,
     center: np.ndarray,
@@ -1341,45 +1350,86 @@ def _parallel_dock(
     work_dir: str,
     tag: str,
     n_jobs: int = N_JOBS,
+    dock_func: Optional[Callable] = None,
 ) -> List[Tuple[CompoundRecord, Optional[float]]]:
-    """Dock a list of compounds in parallel, returning (record, energy) pairs.
+    """
+    Dock a list of compounds in parallel, returning ``(record, energy)`` pairs.
 
-    If a worker process crashes, the compound is logged and returned with
-    energy=None so the pipeline continues rather than failing entirely.
+    Each compound is docked by *dock_func* (defaults to :func:`dock_compound`).
+    If a worker raises, the specific error is logged together with the
+    ``CompoundRecord.compound_id`` and the record is returned with
+    ``energy=None`` so the pipeline continues instead of aborting.
+
+    When ``n_jobs <= 1`` (or for small batches) the docking is performed
+    in-process, which keeps behaviour deterministic and avoids the overhead
+    of spawning worker processes.
+
+    Note (memory): for very large libraries the :class:`CompoundRecord.mol`
+    objects are pickled for each worker. If profiling shows a bottleneck,
+    callers may pass lightweight ``(compound_id, smiles)`` payloads and
+    reconstruct the :class:`~rdkit.Chem.Mol` inside *dock_func*.
+
+    Args:
+        records: Compounds to dock (must expose ``.mol`` / ``.smiles``).
+        receptor_pdbqt: Path to receptor PDBQT.
+        center: Grid-box centre as a length-3 array.
+        box_size: Grid-box dimensions ``(x, y, z)``.
+        work_dir: Scratch directory for intermediate files.
+        tag: Label for temporary files (e.g. ``"allosteric"``).
+        n_jobs: Number of worker processes.
+        dock_func: Docking callable; mainly useful for testing.
+
+    Returns:
+        List of ``(CompoundRecord, energy_or_None)`` tuples.
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
-    results = []
+    if dock_func is None:
+        dock_func = dock_compound
+
+    results: List[Tuple[CompoundRecord, Optional[float]]] = []
     total = len(records)
 
-    def _worker(rec):
+    def _worker(rec: CompoundRecord) -> Tuple[CompoundRecord, Optional[float]]:
         try:
-            energy = dock_compound(rec, receptor_pdbqt, center, box_size, work_dir, tag)
+            energy = dock_func(rec, receptor_pdbqt, center, box_size, work_dir, tag)
             return rec, energy
         except Exception as exc:
             log.warning(
-                f"    Worker failed for {rec.compound_id}: {exc}. "
-                "Returning (rec, None) and continuing."
+                f"    Docking failed for {rec.compound_id} ({tag}): {exc}. "
+                "Returning (record, None) and continuing."
             )
             return rec, None
+
+    # In-process execution keeps small batches deterministic and testable.
+    if n_jobs <= 1:
+        for i, rec in enumerate(records):
+            results.append(_worker(rec))
+            if (i + 1) % 25 == 0:
+                log.info(f"    Docked {i + 1} / {total} ({tag})")
+        return results
 
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
         futures = {pool.submit(_worker, rec): rec for rec in records}
         for i, future in enumerate(as_completed(futures)):
             rec = futures[future]  # original record
             try:
-                energy = future.result(timeout=60)
-                results.append((rec, energy))
+                result = future.result(timeout=60)
+                results.append(result)
             except Exception as exc:
                 log.warning(
-                    f"    Worker failed for {rec.compound_id}: {exc}. "
-                    "Returning (rec, None) and continuing."
+                    f"    Docking failed for {rec.compound_id} ({tag}): {exc}. "
+                    "Returning (record, None) and continuing."
                 )
                 results.append((rec, None))
             if (i + 1) % 25 == 0:
                 log.info(f"    Docked {i + 1} / {total} ({tag})")
 
     return results
+
+
+# Backward-compatible alias (prefer _dock_compounds_parallel in new code).
+_parallel_dock = _dock_compounds_parallel
 
 
 def _compute_shape_fallback_score(
@@ -1457,6 +1507,46 @@ def _compute_shape_fallback_score(
         return None
 
 
+def _compute_shape_scores(
+    records: List[CompoundRecord],
+    ref_mol: Chem.Mol,
+) -> List[Tuple[CompoundRecord, Optional[float]]]:
+    """
+    Compute RDKit Shape-Protrude fallback scores for a list of records.
+
+    For every record the molecule is embedded in 3D and compared against
+    *ref_mol* (the co-crystallised 6TKO ligand).  The normalised score
+    (0–10, lower = better shape match) is stored on ``rec.shape_score``.
+
+    Args:
+        records: Compounds to score (must expose ``.mol`` / ``.smiles``).
+        ref_mol: Reference molecule used for the shape comparison.
+
+    Returns:
+        List of ``(CompoundRecord, score_or_None)`` tuples.
+    """
+    total = len(records)
+    scored: List[Tuple[CompoundRecord, Optional[float]]] = []
+
+    for i, rec in enumerate(records):
+        if rec.mol is None:
+            mol = Chem.MolFromSmiles(rec.smiles)
+            if mol is None:
+                rec.shape_score = None
+                scored.append((rec, None))
+                continue
+            rec.mol = mol
+
+        score = _compute_shape_fallback_score(rec.mol, ref_mol)
+        rec.shape_score = score
+        scored.append((rec, score))
+
+        if (i + 1) % 100 == 0:
+            log.info(f"  Shape scored {i + 1} / {total}")
+
+    return scored
+
+
 def screen_library(
     records: List[CompoundRecord],
     targets: dict,
@@ -1486,7 +1576,7 @@ def screen_library(
     if deps["USE_VINA"]:
         # ── Allosteric docking ──
         log.info("  Docking all compounds against allosteric site…")
-        allosteric_results = _parallel_dock(
+        allosteric_results = _dock_compounds_parallel(
             records, pb2pa["pdbqt"],
             allosteric_center, ALLOSTERIC_BOX_SIZE,
             work_dir, "allosteric",
@@ -1507,7 +1597,7 @@ def screen_library(
         top50 = scored[:50]
         log.info(f"  Docking top {len(top50)} compounds against active site…")
 
-        active_results = _parallel_dock(
+        active_results = _dock_compounds_parallel(
             top50, pb2pa["pdbqt"],
             active_center, ACTIVE_BOX_SIZE,
             work_dir, "active",
@@ -1559,20 +1649,7 @@ def screen_library(
             log.error("  Cannot obtain reference molecule for shape scoring.")
             return records[:TOP_N]
 
-        total = len(records)
-        shape_scores = []
-        for i, rec in enumerate(records):
-            if rec.mol is None:
-                mol = Chem.MolFromSmiles(rec.smiles)
-                if mol is None:
-                    continue
-                rec.mol = mol
-            score = _compute_shape_fallback_score(rec.mol, ref_mol)
-            rec.shape_score = score
-            shape_scores.append((rec, score))
-            if (i + 1) % 100 == 0:
-                log.info(f"  Shape scored {i + 1} / {total}")
-
+        shape_scores = _compute_shape_scores(records, ref_mol)
         shape_scores = [s for s in shape_scores if s[1] is not None]
 
         if shape_scores:
@@ -1891,6 +1968,7 @@ def analyze_selectivity_and_resistance(
         log.warning("  Vina unavailable — skipping selectivity docking. Flagging all as uncertain.")
         for rec in top10:
             rec.selectivity_index = 1.0
+            rec.selectivity_confidence = "None"
             rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
         return top10
 
@@ -1920,6 +1998,17 @@ def analyze_selectivity_and_resistance(
             e for e in (rec.human_trypsin_energy, rec.human_ces1_energy)
             if e is not None
         ]
+        n_human_targets = len(energies_human)
+
+        # Track how many human off-targets provided valid energies and
+        # record the resulting selectivity confidence.
+        if n_human_targets >= 2:
+            rec.selectivity_confidence = "High"
+        elif n_human_targets == 1:
+            rec.selectivity_confidence = "Low"
+        else:
+            rec.selectivity_confidence = "None"
+
         if not energies_human:
             log.warning(f"  {rec.compound_id}: No human docking data. SI = N/A.")
             rec.selectivity_index = 1.0
@@ -1936,6 +2025,12 @@ def analyze_selectivity_and_resistance(
 
         si = compute_selectivity_index(pb2pa_best, human_min)
         rec.selectivity_index = si
+
+        # SI based on a single human target is less reliable — flag it.
+        if n_human_targets == 1:
+            if rec.resistance_notes:
+                rec.resistance_notes += " | "
+            rec.resistance_notes += "SI based on single human target."
 
         if si < SELECTIVITY_INDEX_THRESHOLD:
             log.warning(
@@ -2006,7 +2101,8 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
     Columns:
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
-        Max_Similarity, Passes_Lipinski, QED_Score, Binding_Mode_Notes.
+        Selectivity_Confidence, Shape_Score, Max_Similarity, Passes_Lipinski,
+        QED_Score, Binding_Mode_Notes.
 
     Returns path to CSV.
     """
@@ -2036,6 +2132,11 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
             ),
             "Selectivity_Index": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
+                else "N/A"
+            ),
+            "Selectivity_Confidence": rec.selectivity_confidence,
+            "Shape_Score": (
+                f"{rec.shape_score:.2f}" if rec.shape_score is not None
                 else "N/A"
             ),
             "Max_Similarity": f"{rec.max_similarity:.3f}",
