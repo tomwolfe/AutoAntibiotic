@@ -41,7 +41,12 @@ from .library_gen import (
 )
 from .fep_manager import FEPManager
 from .ml_scoring.scoring import rescore_with_explicit_mmgbsa
-from .pipeline_context import PipelineContext
+from .phases import (
+    AnalysisHandler,
+    DockingHandler,
+    LibraryGenerationHandler,
+    ReportingHandler,
+)
 from .reporting import generate_csv_report, generate_html_report, generate_images, print_summary
 from .structure_prep import prepare_targets
 
@@ -89,519 +94,77 @@ class PipelineOrchestrator:
         self.audit: Optional[PipelineAudit] = (
             PipelineAudit() if self.config.audit_enabled else None
         )
-        self._context: Optional[PipelineContext] = None
+        self.state: Dict[str, Any] = {}
 
     def run(self) -> None:
         """Execute the full pipeline from preparation through reporting.
 
-        Initialises a :class:`PipelineContext` and passes it through each
-        pipeline phase as a private method, ensuring no implicit state
-        mutation on ``self`` other than logging.
+        Uses :class:`PhaseHandler` subclasses for the main pipeline
+        phases and manages state via a ``dict``.
         """
         ensure_output_dir()
         self._setup_logging()
 
-        log.info("─── AutoAntibiotic Pipeline v4.0 ───")
+        log.info("─" * 3 + " AutoAntibiotic Pipeline v4.0 " + "─" * 3)
 
-        ctx = PipelineContext(audit_log=self.audit)
+        # Pre-handler phases (set up self attributes directly)
+        self.prepare_environment()
+        self.run_water_analysis()
+        self.prepare_targets()
+        self.run_redocking_validation()
 
-        ctx = self._prepare_environment(ctx)
-        ctx = self._run_water_analysis(ctx)
-        ctx = self._prepare_targets(ctx)
-        ctx = self._run_redocking_validation(ctx)
-        ctx = self._generate_and_filter_library(ctx)
-        ctx = self._screen_candidates(ctx)
-        ctx = self._analyze_selectivity(ctx)
-        # Explicit-solvent MM-GB/SA rescoring (if enabled) — uses the
-        # solvated complex from MD preparation for rigorous ΔG prediction.
-        ctx = self._apply_explicit_solvent_rescoring(ctx)
-        # MD validation runs BEFORE meta-scoring so that dynamic features
-        # (ligand RMSD, pocket Rg stability) are available to the MetaScorer.
-        ctx = self._apply_md_validation(ctx)
-        ctx = self._apply_meta_scoring(ctx)
-        # FEP resistance profiling — top-hit only, runs after rescoring
-        # so that only the most promising candidates are evaluated.
-        ctx = self._apply_fep_resistance(ctx)
-        ctx = self._generate_reports(ctx)
+        # Build initial state for handlers
+        state: Dict[str, Any] = {
+            "library": [],
+            "filtered_library": [],
+            "docked_candidates": [],
+            "md_results": [],
+            "fep_results": [],
+            "n_total": 0,
+            "n_filtered": 0,
+            "validation_ok": self.validation_ok,
+            "redock_rmsd": self.redock_rmsd,
+            "targets": self.targets,
+            "deps": self.deps,
+            "cache": self.cache,
+            "use_cache": self.use_cache,
+            "water_results": self.water_results,
+            "audit": self.audit,
+        }
 
-        self._sync_from_context(ctx)
+        # Phase handlers
+        handlers = [
+            LibraryGenerationHandler(),
+            DockingHandler(),
+            AnalysisHandler(),
+            ReportingHandler(),
+        ]
 
+        for handler in handlers:
+            try:
+                state = handler.execute(state, self.config)
+            except SystemExit:
+                raise
+            except Exception:
+                log.exception(
+                    f"Pipeline failed in {handler.__class__.__name__}"
+                )
+                raise
+
+        self.state = state
+        self._sync_from_state(state)
         self._finalize()
 
-    # ── Private phase methods (context-based, no side-effects on self) ──
+    # ── State synchronisation ──────────────────────────────────────
 
-    def _prepare_environment(self, context: PipelineContext) -> PipelineContext:
-        set_global_seed(self.config.random_seed)
-        if self.use_cache:
-            cache_path = self.config.output_dir / self.config.cache_name
-            self.cache = load_json_cache(cache_path)
-            log.info(f"  Cache loaded ({len(self.cache)} entries).")
-        else:
-            log.info("  Cache disabled. Use --use-cache to enable.")
-        self.deps = verify_dependencies()
-        os.makedirs(self.config.work_dir, exist_ok=True)
-        if self.config.retrain_model_path:
-            self._retrain_from_csv(self.config.retrain_model_path)
-        return context
-
-    def _run_water_analysis(self, context: PipelineContext) -> PipelineContext:
-        if not (self.config.use_water_analysis and _HAVE_WATER):
-            if self.config.use_water_analysis:
-                log.info("  Water analysis module not available (install Bio.PDB).")
-            return context
-        pdb_dir = self.config.pdb_dir
-        holo_pdb_id = self.config.pdb_ids.get("PBP2a_holo", "3ZG0")
-        holo_pdb_path = os.path.join(str(pdb_dir), f"{holo_pdb_id}.pdb")
-        if os.path.exists(holo_pdb_path):
-            log.info("─── Phase 0.5: Crystallographic Water Analysis ───")
-            self._analyze_waters(holo_pdb_path)
-        else:
-            log.info("  Holo PDB not yet downloaded (will analyse after Phase 1).")
-        return context
-
-    def _prepare_targets(self, context: PipelineContext) -> PipelineContext:
-        pdb_dir = str(self.config.pdb_dir)
-        work_dir = str(self.config.work_dir)
-        self.targets = prepare_targets(pdb_dir, work_dir, self.deps, water_results=self.water_results)
-        pb2pa = self.targets.get("PBP2a", {})
-        validated_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
-        if validated_pdb and os.path.isfile(validated_pdb):
-            log.info(f"  Receptor integrity validated for PBP2a: {validated_pdb}")
-        else:
-            log.warning("  PBP2a receptor PDB not found after target preparation.")
-        if (self.config.use_water_analysis and _HAVE_WATER and self.water_results is None):
-            holo_pdb_path = self.targets.get("holo_pdb", "")
-            if holo_pdb_path and os.path.exists(holo_pdb_path):
-                log.info("─── Phase 0.5 (retry): Crystallographic Water Analysis ───")
-                self._analyze_waters(holo_pdb_path)
-        return context
-
-    def _run_redocking_validation(self, context: PipelineContext) -> PipelineContext:
-        self.validation_ok, self.redock_rmsd = run_redocking_validation(
-            holo_pdb_path=self.targets["holo_pdb"],
-            target_pdbqt_path=self.targets["PBP2a"]["pdbqt"],
-            work_dir=str(self.config.work_dir),
-            deps=self.deps,
-            center=self.targets["PBP2a"]["active_center"],
-            config=self.config,
-        )
-        return context
-
-    def _generate_and_filter_library(self, context: PipelineContext) -> PipelineContext:
-        log.info("─── Phase 2: Library Generation & Filtering ───")
-        if self.config.use_pharmacophore_filter:
-            log.info("  Pharmacophore-constrained library generation enabled.")
-            all_records = list(
-                generate_pharmacophore_aware_library(
-                    target_count=self.config.library_target_count,
-                    seed=self.config.random_seed,
-                    config=self.config,
-                )
-            )
-        else:
-            all_records = list(
-                generate_candidate_library(
-                    target_count=self.config.library_target_count,
-                    config=self.config,
-                )
-            )
-        context.library = all_records
-        context.n_total = len(all_records)
-        filtered = apply_filters(all_records, audit=self.audit, config=self.config)
-        context.filtered_library = filtered
-        context.n_filtered = len(filtered)
-        if self.audit is not None:
-            self.audit.check_health(context.n_total, "Library Filtering")
-        if len(filtered) == 0:
-            log.warning("  No compounds passed filters. Halting pipeline.")
-            raise SystemExit(0)
-        return context
-
-    def _screen_candidates(self, context: PipelineContext) -> PipelineContext:
-        engine_name = "gnina" if self.config.use_gnina else "vina"
-        engine = get_engine(engine_name, config=self.config)
-        top_candidates = screen_library(
-            context.filtered_library, self.targets, str(self.config.work_dir),
-            self.deps, cache=self.cache, use_cache=self.use_cache,
-            water_results=self.water_results, dry_run=self.config.dry_run,
-            audit=self.audit, config=self.config, engine=engine,
-        )
-        context.docked_candidates = top_candidates
-        if self.audit is not None:
-            self.audit.check_health(len(context.filtered_library), "Docking")
-        if not top_candidates:
-            log.warning("  No candidates after screening. Halting pipeline.")
-            raise SystemExit(0)
-        context = self._filter_by_key_interactions_context(context)
-        context = self._run_benchmark_check(context)
-        return context
-
-    def _run_benchmark_check(self, context: PipelineContext) -> PipelineContext:
-        if not self.config.benchmark_mode:
-            return context
-        candidates = context.docked_candidates
-        if not candidates:
-            return context
-        log.info("─── Benchmark Check ───")
-        try:
-            from benchmarks.reference_data import get_actives_smiles, get_inactives_smiles
-            from benchmarks.run_enrichment_test import compute_enrichment_factor, compute_roc_auc
-            import numpy as np
-
-            active_smiles = set(get_actives_smiles())
-            inactive_smiles = set(get_inactives_smiles())
-
-            scores: list = []
-            labels: list = []
-            for rec in candidates:
-                energy = rec.pb2pa_allosteric_energy
-                if energy is None:
-                    continue
-                scores.append(energy)
-                if rec.smiles in active_smiles:
-                    labels.append(1)
-                elif rec.smiles in inactive_smiles:
-                    labels.append(0)
-                else:
-                    labels.append(0)
-
-            if len(set(labels)) < 2 or len(scores) < 10:
-                log.info("  Benchmark check: insufficient actives/inactives in results.")
-                return context
-
-            scores_arr = np.array(scores, dtype=np.float64)
-            labels_arr = np.array(labels, dtype=np.int64)
-            ef1 = compute_enrichment_factor(scores_arr, labels_arr, fraction=0.01)
-            roc_auc = compute_roc_auc(scores_arr, labels_arr)
-            log.info(f"  EF1% (Enrichment Factor at 1%): {ef1:.3f}")
-            log.info(f"  ROC-AUC:                         {roc_auc:.3f}")
-            if ef1 > 1.0:
-                log.info("  ✓ Pipeline shows enrichment better than random.")
-            else:
-                log.info("  ⚠ Pipeline enrichment at or below random.")
-            if roc_auc > 0.7:
-                log.info("  ✓ Good discriminatory power (ROC-AUC > 0.7).")
-            elif roc_auc > 0.55:
-                log.info("  ✓ Moderate discriminatory power.")
-            else:
-                log.info("  ⚠ Poor discriminatory power (near random).")
-        except Exception as exc:
-            log.warning(f"  Benchmark check failed: {exc}")
-        return context
-
-    def _analyze_selectivity(self, context: PipelineContext) -> PipelineContext:
-        context.docked_candidates = analyze_selectivity_and_resistance(
-            context.docked_candidates, self.targets, str(self.config.work_dir),
-            self.deps, cache=self.cache, use_cache=self.use_cache,
-            water_results=self.water_results,
-        )
-        return context
-
-    def _apply_explicit_solvent_rescoring(self, context: PipelineContext) -> PipelineContext:
-        if not self.config.use_explicit_solvent_mmgbsa:
-            return context
-        if not context.docked_candidates:
-            return context
-        log.info("─── Phase 4.6: Explicit-Solvent MM-GB/SA Rescoring ───")
-        pb2pa = self.targets.get("PBP2a", {})
-        receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
-        if not os.path.isfile(receptor_pdb):
-            log.warning("  Receptor PDB not found; skipping explicit-solvent rescoring.")
-            return context
-        try:
-            rescore_with_explicit_mmgbsa(
-                context.docked_candidates,
-                receptor_pdb,
-                str(self.config.work_dir),
-                water_results=self.water_results,
-            )
-        except Exception as exc:
-            log.warning(f"  Explicit-solvent rescoring failed: {exc}")
-        return context
-
-    def _apply_md_validation(self, context: PipelineContext) -> PipelineContext:
-        from .config import ConfigurationError
-        md_duration = self.config.md_validation_duration_ns
-        if not (md_duration > 0 and _HAVE_MD and context.docked_candidates):
-            if self.config.force_md_for_meta_scoring and context.docked_candidates:
-                raise ConfigurationError(
-                    "MD validation is required by force_md_for_meta_scoring=True, "
-                    f"but md_duration={md_duration} ns or MD module unavailable."
-                )
-            return context
-        log.info("─── Phase 4.7: MD Validation (Adaptive Sampling) ───")
-        pb2pa = self.targets.get("PBP2a", {})
-        receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
-        if not os.path.isfile(receptor_pdb):
-            if self.config.force_md_for_meta_scoring:
-                raise ConfigurationError(
-                    "MD validation is required by force_md_for_meta_scoring=True, "
-                    "but receptor PDB file is missing."
-                )
-            log.warning("  Receptor PDB not found; skipping MD validation.")
-            return context
-        failed_any = False
-        md_results: List[CompoundRecord] = []
-        for rec in context.docked_candidates[:3]:
-            if rec.mol is None:
-                mol = Chem.MolFromSmiles(rec.smiles)
-                if mol is None:
-                    continue
-                rec.mol = mol
-            try:
-                result = run_short_md(
-                    rec.mol,
-                    receptor_pdb,
-                    duration_ns=float(md_duration),
-                    max_duration_ns=float(self.config.md_max_duration_ns),
-                    convergence_window_chunks=int(self.config.md_convergence_window_chunks),
-                    rmsd_convergence_threshold=float(self.config.md_rmsd_convergence_threshold),
-                )
-                if result is not None:
-                    rec.md_ligand_rmsd = result.get("ligand_rmsd_angstrom")
-                    rec.md_pocket_rg_stability = result.get("pocket_rg_stability")
-                    rec.md_converged = result.get("converged", False)
-                    md_results.append(rec)
-                    log.info(
-                        f"  {rec.compound_id}: MD ligand RMSD = "
-                        f"{rec.md_ligand_rmsd:.2f} A, "
-                        f"pocket Rg stability = {rec.md_pocket_rg_stability:.3f}, "
-                        f"converged = {rec.md_converged}"
-                    )
-                else:
-                    if self.config.force_md_for_meta_scoring:
-                        raise ConfigurationError(
-                            f"  {rec.compound_id}: MD validation returned None — "
-                            "meta-scoring requires MD-derived dynamic features."
-                        )
-                    log.info(f"  {rec.compound_id}: MD not available.")
-                    failed_any = True
-            except ConfigurationError:
-                raise
-            except Exception as exc:
-                if self.config.force_md_for_meta_scoring:
-                    raise ConfigurationError(
-                        f"  MD validation failed for {rec.compound_id}: {exc}"
-                    ) from exc
-                log.warning(f"  MD validation failed for {rec.compound_id}: {exc}")
-                failed_any = True
-        if failed_any and self.config.force_md_for_meta_scoring:
-            raise ConfigurationError(
-                "MD validation failed for one or more top candidates. "
-                "Set force_md_for_meta_scoring=False to allow meta-scoring "
-                "without MD data."
-            )
-        context.md_results = md_results
-        return context
-
-    def _apply_meta_scoring(self, context: PipelineContext) -> PipelineContext:
-        if not self.config.use_meta_scoring:
-            log.info("  Meta-scoring disabled (use_meta_scoring=False).")
-            return context
-        if not context.docked_candidates:
-            return context
-        water_disp_energy: Optional[float] = None
-        if self.water_results is not None and self.water_results.all_waters:
-            energies = [w.displacement_energy for w in self.water_results.all_waters]
-            if energies:
-                water_disp_energy = float(np.mean(energies))
-        for rec in context.docked_candidates:
-            if water_disp_energy is not None:
-                rec.water_displacement_energy = water_disp_energy
-        if self.config.use_gnn_rescoring:
-            log.info("─── Phase 4.5: GNN Rescoring ───")
-            gnn_scorer = GNNScorer()
-            if gnn_scorer.available:
-                for rec in context.docked_candidates:
-                    gnn_score = gnn_scorer.predict(rec)
-                    if gnn_score is not None:
-                        rec.ml_score = gnn_score
-                        log.debug(
-                            "  %s: GNN score = %.4f kcal/mol",
-                            rec.compound_id, gnn_score,
-                        )
-                    else:
-                        log.debug("  %s: GNN score not computed.", rec.compound_id)
-                return context
-            log.info("  GNN rescoring unavailable; falling back to MetaScorer.")
-        log.info("─── Phase 4.5: Meta-Learner Consensus Scoring ───")
-        for rec in context.docked_candidates:
-            meta_score = predict_meta_score(rec)
-            if meta_score is not None:
-                log.debug(f"  {rec.compound_id}: meta-score = {meta_score:.4f}")
-            else:
-                log.debug(f"  {rec.compound_id}: meta-score not computed.")
-        scorer = _get_meta_scorer()
-        if scorer is not None:
-            scorer.flag_uncertain_predictions(
-                context.docked_candidates, threshold=0.1,
-            )
-            flagged = [r for r in context.docked_candidates if r.needs_manual_review]
-            if flagged:
-                log.info(
-                    f"  Active learning: {len(flagged)}/{len(context.docked_candidates)} "
-                    "compounds flagged for manual review "
-                    "(prediction std > 0.1)."
-                )
-                self._save_review_queue(flagged)
-            else:
-                log.info(
-                    "  Active learning: no compounds flagged for review "
-                    "(all predictions within uncertainty threshold)."
-                )
-
-            # ── Auto-retrain on uncertainty ─────────────────────────
-            if (
-                CONFIG.auto_retrain_on_uncertainty
-                and CONFIG.retrain_model_path
-                and len(flagged) > 5
-            ):
-                log.info(
-                    f"  Active learning: auto-retraining triggered with "
-                    f"{len(flagged)} uncertain compounds."
-                )
-                import csv
-                import tempfile
-
-                temp_csv = tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".csv", delete=False,
-                )
-                try:
-                    writer = csv.writer(temp_csv)
-                    writer.writerow(["smiles", "ic50"])
-                    for rec in flagged:
-                        meta_score = predict_meta_score(rec)
-                        if meta_score is None:
-                            continue
-                        if meta_score > 0.7:
-                            writer.writerow([rec.smiles, "0.001"])
-                        elif meta_score < 0.3:
-                            writer.writerow([rec.smiles, "100"])
-                    temp_csv.close()
-                    from .active_learning import retrain_meta_scorer
-                    retrain_meta_scorer(temp_csv.name)
-                    log.info(
-                        "  Active learning: MetaScorer retrained with "
-                        "synthetic labels from uncertain compounds."
-                    )
-                except Exception as exc:
-                    log.warning(
-                        f"  Active learning auto-retraining failed: {exc}"
-                    )
-                finally:
-                    try:
-                        os.unlink(temp_csv.name)
-                    except OSError:
-                        pass
-        return context
-
-    def _apply_fep_resistance(self, context: PipelineContext) -> PipelineContext:
-        if not self.config.use_fep_resistance:
-            return context
-        if not context.docked_candidates:
-            return context
-        log.info("─── Phase 4.8: Top-Hit FEP Resistance Profiling ───")
-        pb2pa = self.targets.get("PBP2a", {})
-        receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
-        if not os.path.isfile(receptor_pdb):
-            log.warning("  Receptor PDB not found; skipping FEP.")
-            return context
-
-        manager = FEPManager(config=self.config, targets=self.targets)
-        selected_candidates = manager.select_candidates_for_fep(
-            context.docked_candidates,
-        )
-        fep_results = manager.run_fep_profiling(
-            selected_candidates, str(self.config.work_dir),
-        )
-        context.fep_results = fep_results
-        return context
-
-    def _generate_reports(self, context: PipelineContext) -> PipelineContext:
-        generate_csv_report(context.docked_candidates)
-        top3 = context.docked_candidates[:self.config.top_n_for_images]
-        generate_images(top3)
-        scored_for_top50 = [
-            r for r in context.filtered_library
-            if r.pb2pa_allosteric_energy is not None
-        ]
-        scored_for_top50.sort(key=lambda r: r.pb2pa_allosteric_energy)
-        top_n = self.config.top_n_for_html_report
-        top50 = (
-            scored_for_top50[:top_n]
-            if len(scored_for_top50) >= top_n
-            else scored_for_top50
-        )
-        generate_html_report(context.docked_candidates, top50, self.config.output_dir)
-        return context
-
-    def _sync_from_context(self, context: PipelineContext) -> None:
-        """Sync PipelineContext state back to ``self`` attributes for
+    def _sync_from_state(self, state: Dict[str, Any]) -> None:
+        """Sync state dict back to ``self`` attributes for
         backward compatibility with public API methods and ``_finalize``."""
-        self.all_records = context.library
-        self.filtered = context.filtered_library
-        self.top_candidates = context.docked_candidates
-        self.n_total = context.n_total
-        self.n_filtered = context.n_filtered
-
-    def _filter_by_key_interactions_context(self, context: PipelineContext) -> PipelineContext:
-        candidates = context.docked_candidates
-        flag = self.config.require_key_interactions_for_rescoring
-        if not flag:
-            log.info("  Key-interaction filter disabled.")
-            return context
-        pb2pa = self.targets.get("PBP2a", {})
-        receptor_pdbqt = pb2pa.get("pdbqt", "")
-        if not receptor_pdbqt:
-            log.warning("  No PBP2a receptor PDBQT; skipping IFP filter.")
-            return context
-        receptor_pdb = receptor_pdbqt.replace(".pdbqt", ".pdb")
-        if not os.path.isfile(receptor_pdb):
-            log.warning("  Receptor PDB not found; skipping IFP filter.")
-            return context
-        allosteric_residues = self.config.key_interaction_residues_allosteric
-        active_residues = self.config.key_interaction_residues_active
-        n_before = len(candidates)
-        filtered: List[CompoundRecord] = []
-        for rec in candidates:
-            pose_path = rec.docked_pose_path
-            if not pose_path or not os.path.isfile(pose_path):
-                filtered.append(rec)
-                continue
-            try:
-                alloc_hit = check_key_interactions(
-                    pose_path, receptor_pdb, allosteric_residues,
-                )
-                act_hit = check_key_interactions(
-                    pose_path, receptor_pdb, active_residues,
-                )
-                if alloc_hit or act_hit:
-                    filtered.append(rec)
-                else:
-                    log.info(
-                        f"  Filtering out {rec.compound_id}: "
-                        "no key interactions detected."
-                    )
-            except Exception:
-                log.warning(
-                    f"  IFP check failed for {rec.compound_id}; "
-                    "keeping compound (fail-safe).",
-                    exc_info=True,
-                )
-                filtered.append(rec)
-        context.docked_candidates = filtered
-        n_removed = n_before - len(filtered)
-        if n_removed:
-            log.info(
-                f"  Pose filtering removed {n_removed}/{n_before} "
-                f"candidates. {len(filtered)} remaining."
-            )
-        else:
-            log.info(
-                f"  Pose filtering: all {n_before} candidates "
-                "retained (all had key interactions)."
-            )
-        return context
+        self.all_records = state.get("library", [])
+        self.filtered = state.get("filtered_library", [])
+        self.top_candidates = state.get("docked_candidates", [])
+        self.n_total = state.get("n_total", 0)
+        self.n_filtered = state.get("n_filtered", 0)
 
     # ── Phase methods (public, backward-compatible) ────────────────
 
@@ -744,18 +307,25 @@ class PipelineOrchestrator:
 
         Configured via ``CONFIG.use_fep_resistance`` and
         ``CONFIG.fep_top_n``.
-
-        This public method delegates to the private context-based
-        implementation for consistency.
         """
-        ctx = PipelineContext(
-            library=self.all_records,
-            filtered_library=self.filtered,
-            docked_candidates=self.top_candidates,
-            audit_log=self.audit,
+        if not self.config.use_fep_resistance:
+            return
+        if not self.top_candidates:
+            return
+        log.info("─" * 3 + " Phase 4.8: Top-Hit FEP Resistance Profiling " + "─" * 3)
+        pb2pa = self.targets.get("PBP2a", {})
+        receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
+        if not os.path.isfile(receptor_pdb):
+            log.warning("  Receptor PDB not found; skipping FEP.")
+            return
+
+        manager = FEPManager(config=self.config, targets=self.targets)
+        selected_candidates = manager.select_candidates_for_fep(
+            self.top_candidates,
         )
-        ctx = self._apply_fep_resistance(ctx)
-        self.top_candidates = ctx.docked_candidates
+        manager.run_fep_profiling(
+            selected_candidates, str(self.config.work_dir),
+        )
 
     def apply_explicit_solvent_rescoring(self) -> None:
         """Phase 4.6 — Explicit-solvent MM-GB/SA rescoring (if enabled).

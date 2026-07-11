@@ -30,49 +30,44 @@ CONFIG.min_training_samples = 4
 
 
 class TestPipelineOrdering:
-    """Verify the execution order: MD validation → explicit solvent → meta-scoring."""
+    """Verify the execution order within AnalysisHandler."""
 
     def test_explicit_solvent_before_md_validation(self) -> None:
         """Explicit-solvent rescoring must run before MD validation.
 
-        The orchestrator's run() method calls:
-            screen_candidates → apply_explicit_solvent_rescoring →
-            apply_md_validation → apply_meta_scoring
-        We verify this by reading the orchestrator source file directly.
+        AnalysisHandler.execute() calls:
+            _analyze_selectivity → _apply_explicit_solvent_rescoring →
+            _apply_md_validation → _apply_meta_scoring → _apply_fep_resistance
         """
-        # Read the orchestrator source file directly to avoid import issues
         import os
-        import importlib.util
+        import re
 
-        # Get the path to the orchestrator module
         pkg_dir = os.path.dirname(__file__)
         repo_root = os.path.dirname(pkg_dir)
-        orchestrator_path = os.path.join(repo_root, "autoantibiotic", "orchestrator.py")
+        analysis_path = os.path.join(repo_root, "autoantibiotic", "phases", "analysis.py")
 
-        with open(orchestrator_path, "r") as f:
+        with open(analysis_path, "r") as f:
             source = f.read()
 
-        # Find the run method and extract call order
-        import re
-        pattern = r'self\._(apply_\w+|screen_candidates)\('
+        pattern = r'self\._(apply_\w+|analyze_selectivity)\('
         matches = re.findall(pattern, source)
 
-        # Verify order: screen_candidates → explicit → MD → meta_scoring
         explicit_idx = next((i for i, m in enumerate(matches) if 'explicit_solvent_rescoring' in m), -1)
         md_idx = next((i for i, m in enumerate(matches) if 'md_validation' in m), -1)
         meta_idx = next((i for i, m in enumerate(matches) if 'meta_scoring' in m), -1)
-        screen_idx = next((i for i, m in enumerate(matches) if 'screen_candidates' in m), -1)
 
-        # Explicit solvent must come before MD validation, which must come before meta_scoring
         assert explicit_idx < md_idx, f"Explicit solvent (idx={explicit_idx}) must come before MD (idx={md_idx})"
         assert md_idx < meta_idx, f"MD validation (idx={md_idx}) must come before meta_scoring (idx={meta_idx})"
 
-    def test_screen_candidates_before_explicit_solvent(self) -> None:
-        """Screening must run before explicit solvent rescoring."""
+    def test_docking_handler_before_analysis_handler(self) -> None:
+        """DockingHandler must run before AnalysisHandler.
+
+        PipelineOrchestrator.run() chains handlers in order:
+            LibraryGenerationHandler → DockingHandler → AnalysisHandler → ReportingHandler
+        """
         import os
         import re
 
-        # Read the orchestrator source file directly
         pkg_dir = os.path.dirname(__file__)
         repo_root = os.path.dirname(pkg_dir)
         orchestrator_path = os.path.join(repo_root, "autoantibiotic", "orchestrator.py")
@@ -80,13 +75,13 @@ class TestPipelineOrdering:
         with open(orchestrator_path, "r") as f:
             source = f.read()
 
-        pattern = r'self\._(apply_\w+|screen_candidates)\('
+        pattern = r'(\w+Handler)\(\)'
         matches = re.findall(pattern, source)
 
-        screen_idx = next((i for i, m in enumerate(matches) if 'screen_candidates' in m), -1)
-        explicit_idx = next((i for i, m in enumerate(matches) if 'explicit_solvent_rescoring' in m), -1)
+        docking_idx = next((i for i, m in enumerate(matches) if 'Docking' in m), -1)
+        analysis_idx = next((i for i, m in enumerate(matches) if 'Analysis' in m), -1)
 
-        assert screen_idx < explicit_idx, f"Screen (idx={screen_idx}) must come before explicit (idx={explicit_idx})"
+        assert docking_idx < analysis_idx, f"DockingHandler (idx={docking_idx}) must come before AnalysisHandler (idx={analysis_idx})"
 
 
 # ── Dynamic features tracking tests ──────────────────────────────

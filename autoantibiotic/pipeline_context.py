@@ -1,10 +1,32 @@
+"""
+PipelineContext — DEPRECATED
+=============================
+
+``PipelineContext`` has been replaced by a plain ``dict`` managed
+directly within :class:`~autoantibiotic.orchestrator.PipelineOrchestrator`.
+
+This module is kept for backward compatibility but will be removed in a
+future release. Importing ``PipelineContext`` now emits a deprecation
+warning.
+"""
+
 from __future__ import annotations
+
+import warnings as _warnings
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .io_utils import PipelineAudit
 from .models import CompoundRecord
+
+
+_warnings.warn(
+    "PipelineContext is deprecated. "
+    "Use the state dict managed by PipelineOrchestrator instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 @dataclass
