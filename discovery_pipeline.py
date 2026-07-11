@@ -80,6 +80,9 @@ BETA_LACTAM_SMARTS = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
 ALLOSTERIC_RESIDUES = ["ALA237", "MET241", "TYR159"]
 ACTIVE_SITE_RESIDUES = ["SER403"]
 
+# Conserved catalytic residues for scientific coherence cross-check
+CONSERVED_RESIDUES = ["SER403", "LYS406", "TYR446"]
+
 # Off-target catalytic residues for selectivity docking
 TRYPSIN_CATALYTIC_RESIDUES = ["HIS57", "ASP102", "SER195"]
 CES1_CATALYTIC_RESIDUES = ["SER221", "HIS468", "GLU354"]
@@ -726,6 +729,12 @@ def prepare_targets(
     log.info("  Computing active site centroid (SER403)…")
     active_center = compute_residue_centroid(cleaned_pdb, ACTIVE_SITE_RESIDUES)
     log.info(f"    Active site center: {active_center}")
+
+    # Cross-check conserved catalytic residues are present in the structure
+    try:
+        compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
+    except (ValueError, Exception) as exc:
+        log.warning(f"  ⚠  Conserved residues {CONSERVED_RESIDUES} missing: {exc}")
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
@@ -2114,7 +2123,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
             "Selectivity_Index": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
                 else "N/A"
-            ),
+            ) + ("" if rec.selectivity_confidence == "High" else " (low-conf)"),
             "Selectivity_Confidence": rec.selectivity_confidence,
             "Shape_Score": (
                 f"{rec.shape_score:.2f}" if rec.shape_score is not None
@@ -2215,6 +2224,13 @@ def main(target_count: int = 500):
         deps=deps,
     )
 
+    if not validation_ok and not os.environ.get("AUTOANTIBIOTIC_FORCE"):
+        log.error(
+            "  ✗  Redocking validation failed. Aborting pipeline. "
+            "Set AUTOANTIBIOTIC_FORCE to override."
+        )
+        return
+
     # ── Phase 2: Library generation & filtering ──
     all_records = generate_candidate_library(target_count=target_count)
     n_total = len(all_records)
@@ -2251,4 +2267,9 @@ def main(target_count: int = 500):
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="AutoAntibiotic Discovery Pipeline")
+    parser.add_argument("--count", type=int, default=500, help="Target compound count")
+    args = parser.parse_args()
+    main(target_count=args.count)

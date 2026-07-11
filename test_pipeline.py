@@ -622,8 +622,9 @@ class TestMiniPipelineShapeFallback:
                         with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                             with patch("discovery_pipeline.CSV_REPORT",
                                        output_dir / "top_candidates.csv"):
-                                from discovery_pipeline import main
-                                main(target_count=3)
+                                with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
+                                    from discovery_pipeline import main
+                                    main(target_count=3)
 
         csv_path = output_dir / "top_candidates.csv"
         assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
@@ -915,7 +916,8 @@ class TestIntegrationPipeline:
                                     from discovery_pipeline import main
                                     with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                                         with patch("discovery_pipeline.CSV_REPORT", output_dir / "top_candidates.csv"):
-                                            main()
+                                            with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
+                                                main()
 
         csv_path = output_dir / "top_candidates.csv"
         assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
@@ -935,6 +937,148 @@ class TestIntegrationPipeline:
         assert required_columns.issubset(set(rows[0].keys())), (
             f"CSV missing required columns: {required_columns - set(rows[0].keys())}"
         )
+
+
+# ── Test: Redocking failure aborts main() unless forced ─────────────────────
+
+class TestMainRedockingGate:
+    def test_main_returns_early_when_validation_fails(self, tmp_path):
+        """main() returns early (no CSV) when redocking validation fails and FORCE unset."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        mock_targets = {
+            "holo_pdb": "/dev/null",
+            "PBP2a": {"pdbqt": "/dev/null"},
+        }
+        with patch("discovery_pipeline.check_dependencies",
+                   return_value={"vina": True, "USE_VINA": True}):
+            with patch("discovery_pipeline.prepare_targets",
+                       return_value=mock_targets):
+                with patch("discovery_pipeline.run_redocking_validation",
+                           return_value=(False, None)):
+                    with patch.dict(os.environ, {}, clear=False):
+                        os.environ.pop("AUTOANTIBIOTIC_FORCE", None)
+                        with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                            with patch("discovery_pipeline.CSV_REPORT",
+                                       output_dir / "top_candidates.csv"):
+                                from discovery_pipeline import main
+                                main(target_count=3)
+
+        assert not (output_dir / "top_candidates.csv").exists(), \
+            "CSV should NOT be written when validation fails and FORCE is unset"
+
+    def test_main_proceeds_when_force_set(self, tmp_path):
+        """main() proceeds past the redocking gate when AUTOANTIBIOTIC_FORCE is set."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        def mock_gen(target_count=3):
+            return [CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
+                                   mol=Chem.MolFromSmiles("c1ccccc1")) for i in range(3)]
+
+        mock_targets = {
+            "holo_pdb": "/dev/null",
+            "PBP2a": {
+                "pdbqt": "/dev/null",
+                "allosteric_center": np.array([0.0, 0.0, 0.0]),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+        }
+        with patch("discovery_pipeline.check_dependencies",
+                   return_value={"vina": False, "USE_VINA": False}):
+            with patch("discovery_pipeline.prepare_targets",
+                       return_value=mock_targets):
+                with patch("discovery_pipeline.run_redocking_validation",
+                           return_value=(False, None)):
+                    with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
+                        with patch("discovery_pipeline.generate_candidate_library",
+                                   side_effect=mock_gen):
+                                with patch("discovery_pipeline.apply_filters",
+                                        side_effect=lambda r: list(r)):
+                                    with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                        with patch("discovery_pipeline.CSV_REPORT",
+                                               output_dir / "top_candidates.csv"):
+                                            from discovery_pipeline import main
+                                            main(target_count=3)
+
+        assert (output_dir / "top_candidates.csv").exists(), \
+            "CSV should be written when AUTOANTIBIOTIC_FORCE is set"
+
+
+# ── Test: CONSERVED_RESIDUES warning ──────────────────────────────────────
+
+class TestConservedResiduesCentroid:
+    def test_prepare_targets_warns_on_missing_conserved(self, tmp_path):
+        """prepare_targets logs a warning when conserved residues are absent."""
+        from discovery_pipeline import prepare_targets, CONSERVED_RESIDUES
+        import discovery_pipeline as dp
+
+        # PDB with active-site SER403 present but missing LYS406 / TYR446
+        pdb = tmp_path / "p.pdb"
+        pdb.write_text(textwrap.dedent("""\
+            ATOM      1  N   ALA A 237      41.234  12.345  78.901  1.00  0.00           N
+            ATOM      2  CA  ALA A 237      42.345  13.456  79.012  1.00  0.00           C
+            ATOM      3  C   ALA A 237      43.456  14.567  80.123  1.00  0.00           C
+            ATOM      4  O   ALA A 237      44.567  15.678  81.234  1.00  0.00           O
+            ATOM      5  OG  SER A 403       5.000   6.000   7.000  1.00  0.00           O
+            END
+        """))
+
+        real_centroid = dp.compute_residue_centroid
+
+        def side_centroid(p, r):
+            if r == list(CONSERVED_RESIDUES):
+                raise ValueError("No matching residues found")
+            return real_centroid(p, r)
+
+        def side_clean(in_path, out_path, **kwargs):
+            import shutil
+            shutil.copy(str(pdb), out_path)
+            return out_path
+
+        with patch.object(dp, "fetch_structure", return_value=str(pdb)):
+            with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
+                with patch.object(dp, "compute_residue_centroid", side_effect=side_centroid):
+                    with patch.object(dp.log, "warning") as mock_warn:
+                        try:
+                            prepare_targets(str(tmp_path), str(tmp_path),
+                                            {"vina": False, "USE_VINA": False})
+                        except Exception:
+                            pass
+                        assert any(
+                            "Conserved residues" in str(c.args[0])
+                            for c in mock_warn.call_args_list
+                        ), "Expected warning about missing conserved residues"
+
+
+# ── Test: CSV low-conf suffix ──────────────────────────────────────────────
+
+class TestCsvLowConfSuffix:
+    def test_low_conf_appends_suffix(self, tmp_path):
+        """Selectivity_Index gets ' (low-conf)' suffix when confidence != High."""
+        import discovery_pipeline as dp
+        from discovery_pipeline import generate_csv_report
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        recs = [
+            CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                           selectivity_index=3.5, selectivity_confidence="High"),
+            CompoundRecord(compound_id="AA-0002", smiles="c1ccccc1",
+                           selectivity_index=1.2, selectivity_confidence="Low"),
+        ]
+        with patch.object(dp, "OUTPUT_DIR", output_dir):
+            with patch.object(dp, "CSV_REPORT", output_dir / "top_candidates.csv"):
+                generate_csv_report(recs)
+
+        import csv
+        with open(output_dir / "top_candidates.csv") as f:
+            rows = list(csv.DictReader(f))
+        by_id = {r["Compound_ID"]: r for r in rows}
+        assert by_id["AA-0001"]["Selectivity_Index"] == "3.50", by_id["AA-0001"]
+        assert by_id["AA-0002"]["Selectivity_Index"] == "1.20 (low-conf)", by_id["AA-0002"]
 
 
 if __name__ == "__main__":
