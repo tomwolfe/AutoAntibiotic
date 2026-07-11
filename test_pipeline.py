@@ -114,6 +114,21 @@ class TestApplyFilters:
         filtered = apply_filters([record])
         assert len(filtered) == 0, "Beta-lactam compound should be filtered out"
 
+    def test_rejects_brenk_alert(self):
+        """A compound containing a Brenk alert structural pattern is rejected."""
+        # A known Brenk-alert structure (an aromatic amine with nitro group)
+        brenk_smi = "O=[N+]([O-])c1ccccc1N"
+        mol = Chem.MolFromSmiles(brenk_smi)
+        assert mol is not None, "Test SMILES should be valid"
+
+        record = CompoundRecord(
+            compound_id="TEST_BRENK_ALERT",
+            smiles=brenk_smi,
+            mol=mol,
+        )
+        filtered = apply_filters([record])
+        assert len(filtered) == 0, "Brenk-alert compound should be filtered out"
+
     def test_passes_valid_compound(self):
         """A known non-beta-lactam compound with reasonable properties should pass."""
         # Quercetin (a flavonoid, no beta-lactam)
@@ -269,9 +284,9 @@ class TestRunVinaDocking:
 
 class TestComputeSelectivityIndex:
     def test_normal_case(self):
-        """Normal case: negative PBP2a energy gives SI > 0."""
+        """Normal case: SI = |PBP2a| / |Human| — a compound with PBP2a=-10, human=-5 gives SI=2.0."""
         si = compute_selectivity_index(-10.0, -5.0)
-        assert si == pytest.approx(0.5)
+        assert si == pytest.approx(2.0)
 
     def test_positive_pb2pa_returns_zero(self):
         """Returns 0.0 when PBP2a energy is positive (non-binder)."""
@@ -301,7 +316,7 @@ class TestComputeSelectivityIndex:
     def test_negative_human_energy(self):
         """Still computes correctly when human energy is negative."""
         si = compute_selectivity_index(-8.0, -4.0)
-        assert si == pytest.approx(0.5)
+        assert si == pytest.approx(2.0)
 
 
 # ── Test 7: check_ser403_contact with mock PDBQT ────────────────────────────

@@ -988,11 +988,17 @@ def apply_filters(
     pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
     pains_catalog = FilterCatalog(pains_params)
 
+    # Brenk alerts filter catalog
+    brenk_params = FilterCatalogParams()
+    brenk_params.AddCatalog(FilterCatalogParams.FilterCatalogs.BRENK)
+    brenk_catalog = FilterCatalog(brenk_params)
+
     passed = []
     skipped_structural = 0
     skipped_similarity = 0
     skipped_admet = 0
     skipped_pains = 0
+    skipped_brenk = 0
 
     for record in records:
         if record.mol is None:
@@ -1047,12 +1053,19 @@ def apply_filters(
             skipped_pains += 1
             continue
 
+        # 5. Brenk alerts
+        brenk_match = brenk_catalog.HasMatch(mol)
+        if brenk_match:
+            skipped_brenk += 1
+            continue
+
         passed.append(record)
 
     log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
     log.info(f"  Similarity filter (Tc < {similarity_threshold}): {skipped_similarity} removed.")
     log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped_admet} removed.")
     log.info(f"  PAINS filter: {skipped_pains} removed.")
+    log.info(f"  Brenk alerts: {skipped_brenk} removed.")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
     # 5. Diversity check — relax if < 100
@@ -1237,7 +1250,11 @@ def _parallel_dock(
     tag: str,
     n_jobs: int = N_JOBS,
 ) -> List[Tuple[CompoundRecord, Optional[float]]]:
-    """Dock a list of compounds in parallel, returning (record, energy) pairs."""
+    """Dock a list of compounds in parallel, returning (record, energy) pairs.
+
+    If a worker process crashes, the compound is logged and returned with
+    energy=None so the pipeline continues rather than failing entirely.
+    """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     results = []
@@ -1250,8 +1267,16 @@ def _parallel_dock(
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
         futures = {pool.submit(_worker, rec): rec for rec in records}
         for i, future in enumerate(as_completed(futures)):
-            rec, energy = future.result()
-            results.append((rec, energy))
+            rec = futures[future]  # original record
+            try:
+                energy = future.result(timeout=60)
+                results.append((rec, energy))
+            except Exception as exc:
+                log.warning(
+                    f"    Worker failed for {rec.compound_id}: {exc}. "
+                    "Returning (rec, None) and continuing."
+                )
+                results.append((rec, None))
             if (i + 1) % 25 == 0:
                 log.info(f"    Docked {i + 1} / {total} ({tag})")
 
@@ -1274,10 +1299,13 @@ def _compute_shape_fallback_score(
     Returns combined normalised score (0–10, lower = better), or None on failure.
     """
     try:
-        # Generate 3D conformer
+        # Generate 3D conformer with ETKDGv3 for better stereochemistry
         mol_3d = Chem.RWMol(mol)
         mol_3d = Chem.AddHs(mol_3d)
         params = rdDistGeom.ETKDGv3()
+        params.useExpTorsionAnglePrefs = True
+        params.useBasicKnowledge = True
+        params.enforceChirality = True
         params.randomSeed = seed
         status = rdDistGeom.EmbedMolecule(mol_3d, params)
         if status < 0:
@@ -1287,6 +1315,9 @@ def _compute_shape_fallback_score(
         ref_3d = Chem.RWMol(ref_mol)
         ref_3d = Chem.AddHs(ref_3d)
         params_ref = rdDistGeom.ETKDGv3()
+        params_ref.useExpTorsionAnglePrefs = True
+        params_ref.useBasicKnowledge = True
+        params_ref.enforceChirality = True
         params_ref.randomSeed = seed
         status_ref = rdDistGeom.EmbedMolecule(ref_3d, params_ref)
         if status_ref < 0:
@@ -1561,7 +1592,7 @@ def compute_selectivity_index(
     """
     Selectivity Index (SI).
 
-        SI = |Energy_Human_Avg| / |Energy_PBP2a_Best|
+        SI = |Energy_PBP2a_Best| / |Energy_Human_Avg|
 
     Vina energies are negative. A higher SI means stronger binding to PBP2a
     than to the human off-target panel.
@@ -1575,7 +1606,11 @@ def compute_selectivity_index(
     """
     if pb2pa_energy >= 0:
         return 0.0
-    return abs(human_avg_energy) / abs(pb2pa_energy) if abs(pb2pa_energy) > 1e-6 else 0.0
+    if abs(pb2pa_energy) < 1e-6:
+        return 0.0
+    if abs(human_avg_energy) < 1e-6:
+        return 0.0
+    return abs(pb2pa_energy) / abs(human_avg_energy)
 
 
 CONSERVED_RESIDUES = {"SER403", "LYS406", "TYR446"}
