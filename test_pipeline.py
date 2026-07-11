@@ -572,11 +572,13 @@ class TestMiniPipelineShapeFallback:
     def test_mini_pipeline_shape_fallback(self, tmp_path):
         """
         With USE_VINA=False, main() must run the RDKit Shape fallback,
+        load the real PDB files from tests/data (no mocks for PDB loading),
         write top_candidates.csv with 3 rows, mark PBP2a_Allosteric_Energy as
         'N/A', and include the new Shape_Score / Selectivity_Confidence
-        columns.
+        columns. The real prepare_targets must produce (3,) centroid arrays.
         """
         import csv
+        import discovery_pipeline as dp
 
         work_dir = tmp_path / "work"
         work_dir.mkdir()
@@ -585,23 +587,17 @@ class TestMiniPipelineShapeFallback:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        mock_targets = {
-            "PBP2a": {
-                "pdbqt": str(tmp_path / "PBP2a.pdbqt"),
-                "cleaned_pdb": str(tmp_path / "PBP2a_clean.pdb"),
-                "allosteric_center": np.array([0.0, 0.0, 0.0]),
-                "active_center": np.array([0.0, 0.0, 0.0]),
-            },
-            "trypsin": {
-                "pdbqt": str(tmp_path / "trypsin.pdbqt"),
-                "active_center": np.array([0.0, 0.0, 0.0]),
-            },
-            "CES1": {
-                "pdbqt": str(tmp_path / "CES1.pdbqt"),
-                "active_center": np.array([0.0, 0.0, 0.0]),
-            },
-            "holo_pdb": str(tmp_path / "6TKO.pdb"),  # missing → control reference used
-        }
+        captured = {}
+
+        # Capture the real function before patching so the spy does not
+        # recurse into the mock.
+        real_prepare_targets = dp.prepare_targets
+
+        def spy_prepare(pdb_dir_arg, work_dir_arg, deps):
+            """Call the real prepare_targets (real PDB loading) and record it."""
+            result = real_prepare_targets(pdb_dir_arg, work_dir_arg, deps)
+            captured["targets"] = result
+            return result
 
         def mock_generate(target_count=3):
             smis = ["c1ccccc1", "Cc1ccccc1", "c1ccc(O)cc1"]
@@ -619,16 +615,28 @@ class TestMiniPipelineShapeFallback:
 
         with patch("discovery_pipeline.check_dependencies",
                    return_value={"vina": False, "USE_VINA": False}):
-            with patch("discovery_pipeline.prepare_targets", return_value=mock_targets):
+            with patch("discovery_pipeline.prepare_targets", side_effect=spy_prepare):
                 with patch("discovery_pipeline.generate_candidate_library",
-                           side_effect=mock_generate):
+                            side_effect=mock_generate):
                     with patch("discovery_pipeline.apply_filters", side_effect=mock_filters):
                         with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                             with patch("discovery_pipeline.CSV_REPORT",
-                                       output_dir / "top_candidates.csv"):
+                                        output_dir / "top_candidates.csv"):
                                 with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
                                     from discovery_pipeline import main
                                     main(target_count=3)
+
+        # ── Assert centroids produced from the real tests/data PDBs ──
+        targets = captured["targets"]
+        assert isinstance(targets["PBP2a"]["allosteric_center"], np.ndarray)
+        assert targets["PBP2a"]["allosteric_center"].shape == (3,), (
+            f"Expected allosteric centroid shape (3,), "
+            f"got {targets['PBP2a']['allosteric_center'].shape}"
+        )
+        assert targets["PBP2a"]["active_center"].shape == (3,)
+        assert targets["PBP2a"]["conserved_center"].shape == (3,)
+        assert targets["trypsin"]["active_center"].shape == (3,)
+        assert targets["CES1"]["active_center"].shape == (3,)
 
         csv_path = output_dir / "top_candidates.csv"
         assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"

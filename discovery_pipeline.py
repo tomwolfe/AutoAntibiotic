@@ -2327,8 +2327,16 @@ def print_summary(
 #  MAIN — Pipeline Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main(target_count: int = 500):
-    """Orchestrate the full discovery pipeline end-to-end."""
+def main(target_count: int = 500, force: bool = False):
+    """Orchestrate the full discovery pipeline end-to-end.
+
+    Args:
+        target_count: Number of candidate compounds to generate.
+        force: When True (and env AUTOANTIBIOTIC_FORCE=1 is set), reuse a
+            previously cached redocking validation instead of re-running it.
+            Otherwise the redocking validation is always executed when
+            USE_VINA=True.
+    """
     ensure_output_dir()
 
     # ── Dependency check ──
@@ -2343,12 +2351,19 @@ def main(target_count: int = 500):
     targets = prepare_targets(pdb_dir, work_dir, deps)
 
     # ── Phase 0: Redocking validation ──
-    # Skip the (expensive) redocking gate if a prior successful run already
-    # wrote the validation flag, unless AUTOANTIBIOTIC_FORCE is set.
+    # The (expensive) redocking gate is always executed when USE_VINA=True.
+    # The only way to skip it and reuse a prior cached validation is when the
+    # user explicitly passes --force AND env AUTOANTIBIOTIC_FORCE=1 is set.
     validation_flag = os.path.join(work_dir, ".validation_done")
     validation_json = os.path.join(work_dir, "validation_results.json")
 
-    if os.path.exists(validation_flag) and not os.environ.get("AUTOANTIBIOTIC_FORCE"):
+    reuse_cache = (
+        os.environ.get("AUTOANTIBIOTIC_FORCE") == "1"
+        and force
+        and os.path.exists(validation_flag)
+    )
+
+    if reuse_cache:
         try:
             with open(validation_json) as fh:
                 vdata = json.load(fh)
@@ -2370,16 +2385,15 @@ def main(target_count: int = 500):
             work_dir=work_dir,
             deps=deps,
         )
-        # Persist a successful validation so subsequent runs can skip it.
-        if validation_ok and not os.environ.get("AUTOANTIBIOTIC_FORCE"):
+        # Persist a successful validation so subsequent runs can reuse it
+        # only when force + AUTOANTIBIOTIC_FORCE=1 are both given.
+        if validation_ok and reuse_cache:
             try:
                 with open(validation_json, "w") as fh:
                     json.dump(
                         {"validation_ok": validation_ok, "redock_rmsd": redock_rmsd},
                         fh,
                     )
-                with open(validation_flag, "w") as fh:
-                    fh.write("done")
             except Exception as exc:
                 log.warning(f"  Could not cache validation result ({exc}).")
 
@@ -2440,5 +2454,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="AutoAntibiotic Discovery Pipeline")
     parser.add_argument("--count", type=int, default=500, help="Target compound count")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Reuse cached redocking validation (requires AUTOANTIBIOTIC_FORCE=1)",
+    )
     args = parser.parse_args()
-    main(target_count=args.count)
+    main(target_count=args.count, force=args.force)
