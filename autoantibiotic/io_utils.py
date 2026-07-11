@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Set
 import numpy as np
 from rdkit import RDLogger as rdklog
 
-from .config import CONFIG
+from .config import CONFIG, ConfigurationError, PipelineConfig
 from .models import ToolResult
 
 rdklog.DisableLog("rdApp.*")
@@ -920,20 +920,42 @@ def check_optional_dependencies() -> None:
         )
 
 
-def verify_dependencies() -> Dict[str, Any]:
+def verify_dependencies(
+    config: Optional[PipelineConfig] = None,
+    strict: bool = False,
+) -> Dict[str, Any]:
     """Phase 0 — Dependency Verification.
 
     Checks all required Python libraries and external binaries using
     :class:`BinaryManager`.
 
-    Returns a dictionary with keys:
-        - 'rdkit' / 'meeko' / 'biopython': bool
-        - 'vina': bool (True if ``vina`` binary is on PATH)
-        - 'obabel': bool (True if ``obabel`` binary is on PATH)
-        - 'prepare_receptor': bool (True if ``prepare_receptor`` binary on PATH)
-        - 'USE_VINA': global toggle — set False if Vina is absent
-        - 'USE_OBABEL': global toggle — set False if obabel is absent
+    When *strict* is True, raises :class:`ConfigurationError` if the
+    primary docking binary (Vina or GNINA, as determined by *config*)
+    is missing, rather than logging a warning.
+
+    Args:
+        config: Optional pipeline config used to determine which
+            docking binary is required (Vina vs GNINA).  Falls back
+            to the global :data:`CONFIG` singleton when ``None``.
+        strict: When True, missing Vina/GNINA triggers a
+            :class:`ConfigurationError` instead of a warning.
+
+    Returns:
+        Dict with keys:
+            - 'rdkit' / 'meeko' / 'biopython': bool
+            - 'vina': bool (True if ``vina`` binary is on PATH)
+            - 'gnina': bool (True if ``gnina`` binary is on PATH)
+            - 'obabel': bool (True if ``obabel`` binary is on PATH)
+            - 'prepare_receptor': bool (True if ``prepare_receptor`` binary on PATH)
+            - 'USE_VINA': global toggle — set False if Vina is absent
+            - 'USE_OBABEL': global toggle — set False if obabel is absent
+
+    Raises:
+        ImportError: If a required Python package is not installed.
+        ConfigurationError: If *strict* is True and the required
+            docking binary is missing.
     """
+    cfg = config or CONFIG
     log.info("─── Phase 0: Dependency Verification ───")
     status: Dict[str, Any] = {}
 
@@ -964,6 +986,17 @@ def verify_dependencies() -> Dict[str, Any]:
         if available:
             log.info(f"  ✓  {bin_name} binary found on PATH.")
         else:
+            # In strict mode, fail fast for the primary docking binary
+            if strict and bin_name in ("vina", "gnina"):
+                is_primary = (
+                    (bin_name == "gnina" and cfg.use_gnina)
+                    or (bin_name == "vina" and not cfg.use_gnina)
+                )
+                if is_primary:
+                    raise ConfigurationError(
+                        f"Required binary '{bin_name}' not found or not executable.\n"
+                        f"{_INSTALL_GUIDE.get(bin_name, '')}"
+                    )
             log.warning(f"  ⚠  '{bin_name}' not found.")
             log.warning(_INSTALL_GUIDE.get(bin_name, ""))
 

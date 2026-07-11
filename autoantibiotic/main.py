@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 from typing import Optional, List
 
-from .config import CONFIG, PipelineConfig, ConfigurationError
-from .io_utils import validate_pipeline_inputs
+from .config import CONFIG, PipelineConfig, ConfigurationError, PipelineProfile
+from .io_utils import validate_pipeline_inputs, verify_dependencies
 from .orchestrator import PipelineOrchestrator
 
 
@@ -112,10 +112,22 @@ def main(argv: Optional[List[str]] = None) -> None:
         "--show-config", action="store_true",
         help="Print the final resolved configuration as JSON and exit.",
     )
+    parser.add_argument(
+        "--profile", type=str, default="standard",
+        choices=[p.value for p in PipelineProfile],
+        help="Pipeline profile: quick (lightweight test), standard (default), "
+        "or production_fep (rigorous FEP-based resistance profiling).",
+    )
+    parser.add_argument(
+        "--strict-deps", action="store_true",
+        help="Enforce strict dependency checking: fail immediately if required "
+        "binaries (Vina/GNINA) are missing.",
+    )
     args = parser.parse_args(argv)
 
     # ── Create a local copy of CONFIG and apply CLI overrides ──
     cfg = copy.deepcopy(CONFIG)
+    cfg.apply_profile(PipelineProfile(args.profile))
 
     if args.dry_run:
         cfg.dry_run = True
@@ -169,6 +181,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     # ── Validate inputs (if requested) ──
     if args.validate_inputs:
+        strict_deps = (
+            args.strict_deps
+            or PipelineProfile(args.profile) == PipelineProfile.PRODUCTION_FEP
+        )
+        if strict_deps:
+            verify_dependencies(cfg, strict=True)
+
         print("─── Input Validation Report ───")
         issues = validate_pipeline_inputs(cfg)
         has_errors = len(issues["errors"]) > 0

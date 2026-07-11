@@ -4,6 +4,7 @@ import logging
 import multiprocessing as mp
 import random
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,6 +18,50 @@ class ConfigurationError(Exception):
     The error message is always actionable, telling the user what
     is missing and how to resolve it.
     """
+
+
+class PipelineProfile(Enum):
+    QUICK = "quick"
+    STANDARD = "standard"
+    PRODUCTION_FEP = "production_fep"
+
+
+PROFILE_DEFAULTS = {
+    PipelineProfile.QUICK: {
+        "use_fep_resistance": False,
+        "vina_exhaustiveness": 4,
+        "use_explicit_solvent_mmgbsa": False,
+        "library_target_count": 50,
+        "use_water_analysis": False,
+        "use_expensive_ml_features": False,
+        "use_mutation_sampling": False,
+        "validate_docking_binaries_on_startup": False,
+        "use_gnn_rescoring": False,
+        "use_ml_admet": False,
+        "use_meta_scoring": False,
+        "use_mm_gbsa": False,
+        "use_mm_gbsa_rescoring": False,
+    },
+    PipelineProfile.STANDARD: {},
+    PipelineProfile.PRODUCTION_FEP: {
+        "use_fep_resistance": True,
+        "vina_exhaustiveness": 16,
+        "use_explicit_solvent_mmgbsa": True,
+        "use_mutation_sampling": True,
+        "use_water_analysis": True,
+        "use_expensive_ml_features": True,
+        "use_meta_scoring": True,
+        "use_gnn_rescoring": True,
+        "use_ml_admet": True,
+        "use_strict_scoring": True,
+        "fep_top_n": 30,
+        "md_validation_duration_ns": 20,
+        "md_production_duration_ns": 100,
+        "ensemble_mode": True,
+        "use_mm_gbsa": True,
+        "use_mm_gbsa_rescoring": True,
+    },
+}
 
 
 @dataclass
@@ -717,6 +762,19 @@ class PipelineConfig:
                     "Please upgrade RDKit:\n"
                     "  conda install -c conda-forge rdkit"
                 )
+
+
+    def apply_profile(self, profile: PipelineProfile) -> None:
+        """Apply profile defaults to the config instance.
+
+        Only overrides attributes explicitly listed in the profile
+        defaults dictionary; all other fields retain their current
+        values.
+        """
+        overrides = PROFILE_DEFAULTS.get(profile, {})
+        for key, value in overrides.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
 
 CONFIG = PipelineConfig()
