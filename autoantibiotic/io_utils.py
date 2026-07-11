@@ -93,6 +93,9 @@ class PipelineAudit:
         Keys include ``total_processed``, ``total_dropped``,
         ``dropout_rate``, ``n_unique_compounds_dropped``, and
         ``top_reasons`` (list of ``(reason, count)`` sorted descending).
+
+        Long error reason strings (>120 characters) are truncated in the
+        summary to keep the JSON output readable.
         """
         from collections import Counter
         reason_counts: Counter = Counter()
@@ -107,7 +110,9 @@ class PipelineAudit:
             "total_dropped": self.total_dropped,
             "dropout_rate": round(rate, 4),
             "n_unique_compounds_dropped": len(self.dropouts),
-            "top_reasons": [{"reason": r, "count": c} for r, c in top],
+            "top_reasons": [
+                {"reason": r[:120], "count": c} for r, c in top
+            ],
         }
 
     def check_health(self, total_input: int, phase_name: str) -> None:
@@ -891,6 +896,27 @@ def validate_pipeline_inputs(config: PipelineConfig) -> Dict[str, List[str]]:
             )
 
     return issues
+
+
+def check_fep_compatibility() -> None:
+    """Log the versions of FEP-related packages at startup if FEP is enabled.
+
+    Logs the installed versions of ``openmm``, ``openmmtools``, and
+    ``openmmforcefields`` at INFO level.  Missing packages are logged
+    as warnings.
+    """
+    packages = {
+        "openmm": "openmm",
+        "openmmtools": "openmmtools",
+        "openmmforcefields": "openmmforcefields",
+    }
+    for import_name, pkg_name in packages.items():
+        try:
+            mod = __import__(import_name)
+            version = getattr(mod, "__version__", "unknown")
+            log.info("  FEP dependency %s version: %s", pkg_name, version)
+        except ImportError:
+            log.warning("  FEP dependency %s is not installed.", pkg_name)
 
 
 def check_optional_dependencies() -> None:

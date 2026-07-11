@@ -253,3 +253,34 @@ class TestReferenceDataIntegrity:
             assert "reference" in entry and entry["reference"]
         for entry in PBP2A_INACTIVES:
             assert "reference" in entry and entry["reference"]
+
+    def test_csv_files_load_correctly(self) -> None:
+        """Verify the CSV files load correctly and contain valid SMILES."""
+        from pathlib import Path
+        import pandas as pd
+        from rdkit import Chem
+
+        data_dir = Path(__file__).parent.parent / "data"
+        actives_csv = data_dir / "pbp2a_actives.csv"
+        inactives_csv = data_dir / "pbp2a_inactives.csv"
+
+        assert actives_csv.exists(), f"Missing {actives_csv}"
+        assert inactives_csv.exists(), f"Missing {inactives_csv}"
+
+        df_act = pd.read_csv(actives_csv)
+        assert list(df_act.columns) == ["id", "smiles", "reference"], \
+            f"Unexpected columns in actives CSV: {list(df_act.columns)}"
+        assert len(df_act) > 0, "Actives CSV is empty"
+
+        df_inact = pd.read_csv(inactives_csv)
+        assert list(df_inact.columns) == ["id", "smiles", "reference"], \
+            f"Unexpected columns in inactives CSV: {list(df_inact.columns)}"
+        assert len(df_inact) > 0, "Inactives CSV is empty"
+
+        for _, row in df_act.iterrows():
+            mol = Chem.MolFromSmiles(row["smiles"])
+            assert mol is not None, f"Invalid SMILES in actives CSV: {row['id']}: {row['smiles']}"
+
+        for _, row in df_inact.iterrows():
+            mol = Chem.MolFromSmiles(row["smiles"])
+            assert mol is not None, f"Invalid SMILES in inactives CSV: {row['id']}: {row['smiles']}"

@@ -735,11 +735,12 @@ class PipelineConfig:
                 )
             try:
                 import openmmforcefields  # noqa: F401
-            except ImportError:
+                from openmmforcefields.generators import GAFFTemplateGenerator
+                GAFFTemplateGenerator()
+            except Exception:
                 self.use_fep_resistance = False
-                logging.getLogger("AutoAntibiotic").warning(
-                    "FEP disabled: openmmforcefields not found. "
-                    "Falling back to heuristic resistance profiling. "
+                raise ConfigurationError(
+                    "FEP requires openmmforcefields for GAFF2 parameterization. "
                     "Install via: conda install -c conda-forge openmmforcefields"
                 )
 

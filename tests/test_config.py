@@ -2,6 +2,7 @@
 
 import copy
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -139,3 +140,76 @@ class TestConfigSanitization:
     def test_admet_reference_csv_in_config(self) -> None:
         assert hasattr(CONFIG, "admet_reference_csv")
         assert CONFIG.admet_reference_csv == "data/admet_reference_curated.csv"
+
+
+class TestFEPDependencyValidation:
+    """Tests for FEP dependency validation with mocked imports."""
+
+    def _config_with_fep(self) -> PipelineConfig:
+        import copy
+        cfg = copy.deepcopy(CONFIG)
+        cfg.dry_run = False
+        cfg.use_fep_resistance = True
+        return cfg
+
+    def test_fep_raises_config_error_when_openmmforcefields_missing(self) -> None:
+        """When openmmforcefields is missing, validate_config raises ConfigurationError."""
+        cfg = self._config_with_fep()
+        with patch.dict("sys.modules", {
+            "openmmforcefields": None,
+            "openmmforcefields.generators": None,
+        }):
+            with pytest.raises(ConfigurationError, match="openmmforcefields"):
+                cfg.validate_config()
+
+    def test_fep_raises_config_error_when_gaff_generator_fails(self) -> None:
+        """When GAFFTemplateGenerator instantiation fails, validate_config raises ConfigurationError."""
+        cfg = self._config_with_fep()
+        mock_ommf = MagicMock()
+        mock_ommf.generators = MagicMock()
+        mock_ommf.generators.GAFFTemplateGenerator = MagicMock(side_effect=ImportError("no gaff"))
+        with patch.dict("sys.modules", {
+            "openmm": MagicMock(),
+            "openmmtools": MagicMock(),
+            "openmmforcefields": mock_ommf,
+            "openmmforcefields.generators": mock_ommf.generators,
+        }):
+            with pytest.raises(ConfigurationError, match="openmmforcefields"):
+                cfg.validate_config()
+
+    def test_fep_dry_run_skips_validation(self) -> None:
+        """When dry_run=True, FEP dependency checks are skipped."""
+        import copy
+        cfg = copy.deepcopy(CONFIG)
+        cfg.use_fep_resistance = True
+        cfg.dry_run = True
+        cfg.validate_config()  # should not raise
+
+
+class TestCheckFEPCompatibility:
+    """Tests for check_fep_compatibility in io_utils."""
+
+    def test_check_fep_compatibility_logs_versions(self, caplog) -> None:
+        """check_fep_compatibility logs versions of FEP packages."""
+        from autoantibiotic.io_utils import check_fep_compatibility
+        import logging
+        caplog.set_level(logging.INFO)
+        with patch.dict("sys.modules", {
+            "openmm": MagicMock(__version__="7.6.0"),
+            "openmmtools": MagicMock(__version__="1.0.0"),
+            "openmmforcefields": MagicMock(__version__="1.0.0"),
+        }):
+            check_fep_compatibility()
+        assert "openmm version: 7.6.0" in caplog.text
+        assert "openmmtools version: 1.0.0" in caplog.text
+        assert "openmmforcefields version: 1.0.0" in caplog.text
+
+    def test_check_fep_compatibility_runs_without_error(self) -> None:
+        """check_fep_compatibility runs without raising when packages are available."""
+        from autoantibiotic.io_utils import check_fep_compatibility
+        with patch.dict("sys.modules", {
+            "openmm": MagicMock(__version__="8.1.0"),
+            "openmmtools": MagicMock(__version__="1.1.0"),
+            "openmmforcefields": MagicMock(__version__="0.12.0"),
+        }):
+            check_fep_compatibility()

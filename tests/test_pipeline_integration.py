@@ -300,7 +300,37 @@ class TestPipelineAudit:
         finally:
             CONFIG.max_dropout_rate = original
 
-    def test_apply_filters_with_audit(self) -> None:
+    def test_audit_truncates_long_error_reasons(self) -> None:
+        """Long error reason strings are truncated in the summary."""
+        from autoantibiotic.io_utils import PipelineAudit
+
+        audit = PipelineAudit()
+        audit.set_total_processed(1)
+        long_reason = "DockingFailure: Meeko sanitization failed: valence error on atom C12 with explicit hydrogen count mismatch" + "x" * 200
+        audit.record_dropout("AA-001", long_reason)
+
+        summary = audit.get_summary()
+        top_reason = summary["top_reasons"][0]["reason"]
+        assert len(top_reason) <= 120
+        assert top_reason.endswith("...") or len(top_reason) <= 120
+
+    def test_audit_handles_specific_docking_errors(self) -> None:
+        """Docking failure reasons with specific error messages are recorded."""
+        from autoantibiotic.io_utils import PipelineAudit
+
+        audit = PipelineAudit()
+        audit.set_total_processed(3)
+
+        audit.record_dropout("AA-001", "DockingFailure: Meeko sanitization failed: valence error")
+        audit.record_dropout("AA-002", "DockingFailure: RDKit MolFromSmiles returned None")
+        audit.record_dropout("AA-003", "PrepFailure")
+
+        summary = audit.get_summary()
+        assert summary["total_dropped"] == 3
+        reasons = {r["reason"] for r in summary["top_reasons"]}
+        assert "DockingFailure: Meeko sanitization failed: valence error" in reasons
+        assert "DockingFailure: RDKit MolFromSmiles returned None" in reasons
+        assert "PrepFailure" in reasons
         """Filters record dropouts in the audit when one is provided."""
         from autoantibiotic.io_utils import PipelineAudit
         from autoantibiotic.library_gen import apply_filters

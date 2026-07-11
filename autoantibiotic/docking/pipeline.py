@@ -653,14 +653,20 @@ def _worker_dock_wrapper(
         return cid, float(rng.uniform(-10.0, -5.0)), None, method
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        return cid, None, "DockingFailure", "None"
+        return cid, None, "DockingFailure: RDKit MolFromSmiles returned None", "None"
     rec = CompoundRecord(compound_id=cid, smiles=smiles, mol=mol)
-    energy, method = dock_compound(
-        rec, receptor_pdbqt, center, box_size,
-        work_dir, tag, cache=None, use_cache=False,
-    )
+    try:
+        energy, method = dock_compound(
+            rec, receptor_pdbqt, center, box_size,
+            work_dir, tag, cache=None, use_cache=False,
+        )
+    except Exception as exc:
+        return cid, None, f"DockingFailure: {exc}", "None"
     if energy is None:
-        error_reason = "PrepFailure" if method == "PrepFailure" else "DockingFailure"
+        if method == "PrepFailure":
+            error_reason = "PrepFailure"
+        else:
+            error_reason = "DockingFailure"
     else:
         error_reason = None
     return cid, energy, error_reason, method
