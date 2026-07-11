@@ -84,8 +84,6 @@ class PipelineOrchestrator:
         self.deps: Dict[str, Any] = {}
         self.targets: Dict[str, Any] = {}
         self.water_results: Any = None
-        self.all_records: List[CompoundRecord] = []
-        self.filtered: List[CompoundRecord] = []
         self.top_candidates: List[CompoundRecord] = []
         self.validation_ok: bool = False
         self.redock_rmsd: Optional[float] = None
@@ -113,24 +111,23 @@ class PipelineOrchestrator:
         self.prepare_targets()
         self.run_redocking_validation()
 
-        # Build initial state for handlers
-        state: Dict[str, Any] = {
-            "library": [],
-            "filtered_library": [],
-            "docked_candidates": [],
-            "md_results": [],
-            "fep_results": [],
-            "n_total": 0,
-            "n_filtered": 0,
-            "validation_ok": self.validation_ok,
-            "redock_rmsd": self.redock_rmsd,
-            "targets": self.targets,
-            "deps": self.deps,
-            "cache": self.cache,
-            "use_cache": self.use_cache,
-            "water_results": self.water_results,
-            "audit": self.audit,
-        }
+        # Build initial state from self.state (populated by pre-handler phases)
+        state: Dict[str, Any] = dict(self.state)
+        state.setdefault("library", [])
+        state.setdefault("filtered_library", [])
+        state.setdefault("docked_candidates", [])
+        state.setdefault("md_results", [])
+        state.setdefault("fep_results", [])
+        state.setdefault("n_total", 0)
+        state.setdefault("n_filtered", 0)
+        state.setdefault("validation_ok", self.validation_ok)
+        state.setdefault("redock_rmsd", self.redock_rmsd)
+        state.setdefault("targets", self.targets)
+        state.setdefault("deps", self.deps)
+        state.setdefault("cache", self.cache)
+        state.setdefault("use_cache", self.use_cache)
+        state.setdefault("water_results", self.water_results)
+        state.setdefault("audit", self.audit)
 
         # Phase handlers
         handlers = [
@@ -160,11 +157,15 @@ class PipelineOrchestrator:
     def _sync_from_state(self, state: Dict[str, Any]) -> None:
         """Sync state dict back to ``self`` attributes for
         backward compatibility with public API methods and ``_finalize``."""
-        self.all_records = state.get("library", [])
-        self.filtered = state.get("filtered_library", [])
         self.top_candidates = state.get("docked_candidates", [])
         self.n_total = state.get("n_total", 0)
         self.n_filtered = state.get("n_filtered", 0)
+        self.cache = state.get("cache", {})
+        self.deps = state.get("deps", {})
+        self.targets = state.get("targets", {})
+        self.water_results = state.get("water_results")
+        self.validation_ok = state.get("validation_ok", False)
+        self.redock_rmsd = state.get("redock_rmsd")
 
     # ── Phase methods (public, backward-compatible) ────────────────
 
@@ -175,11 +176,14 @@ class PipelineOrchestrator:
         if self.use_cache:
             cache_path = self.config.output_dir / self.config.cache_name
             self.cache = load_json_cache(cache_path)
+            self.state["cache"] = self.cache
             log.info(f"  Cache loaded ({len(self.cache)} entries).")
         else:
+            self.state["cache"] = {}
             log.info("  Cache disabled. Use --use-cache to enable.")
 
         self.deps = verify_dependencies()
+        self.state["deps"] = self.deps
         os.makedirs(self.config.work_dir, exist_ok=True)
 
         # Active-learning retraining
@@ -189,6 +193,7 @@ class PipelineOrchestrator:
     def run_water_analysis(self) -> None:
         """Phase 0.5: Crystallographic water analysis (if available)."""
         self.water_results = None
+        self.state["water_results"] = None
         if not (self.config.use_water_analysis and _HAVE_WATER):
             if self.config.use_water_analysis:
                 log.info("  Water analysis module not available (install Bio.PDB).")
@@ -209,6 +214,7 @@ class PipelineOrchestrator:
         pdb_dir = str(self.config.pdb_dir)
         work_dir = str(self.config.work_dir)
         self.targets = prepare_targets(pdb_dir, work_dir, self.deps, water_results=self.water_results)
+        self.state["targets"] = self.targets
 
         pb2pa = self.targets.get("PBP2a", {})
         validated_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
@@ -237,49 +243,65 @@ class PipelineOrchestrator:
             center=self.targets["PBP2a"]["active_center"],
             config=self.config,
         )
+        self.state["validation_ok"] = self.validation_ok
+        self.state["redock_rmsd"] = self.redock_rmsd
 
     def generate_and_filter_library(self) -> None:
         """Phase 2: Compound library generation and filtering."""
         log.info("─── Phase 2: Library Generation & Filtering ───")
         if self.config.use_pharmacophore_filter:
             log.info("  Pharmacophore-constrained library generation enabled.")
-            self.all_records = generate_pharmacophore_aware_library(
-                target_count=self.config.library_target_count,
-                seed=self.config.random_seed,
-                config=self.config,
+            all_records = list(
+                generate_pharmacophore_aware_library(
+                    target_count=self.config.library_target_count,
+                    seed=self.config.random_seed,
+                    config=self.config,
+                )
             )
         else:
-            self.all_records = list(
+            all_records = list(
                 generate_candidate_library(
                     target_count=self.config.library_target_count,
                     config=self.config,
                 )
             )
-        self.n_total = len(self.all_records)
+        self.state["library"] = all_records
+        self.state["n_total"] = len(all_records)
 
-        self.filtered = apply_filters(self.all_records, audit=self.audit, config=self.config)
-        self.n_filtered = len(self.filtered)
+        filtered = apply_filters(all_records, audit=self.audit, config=self.config)
+        self.state["filtered_library"] = filtered
+        self.state["n_filtered"] = len(filtered)
 
         if self.audit is not None:
-            self.audit.check_health(self.n_total, "Library Filtering")
+            self.audit.check_health(self.state["n_total"], "Library Filtering")
 
-        if self.n_filtered == 0:
+        if self.state["n_filtered"] == 0:
             log.warning("  No compounds passed filters. Halting pipeline.")
             raise SystemExit(0)
 
     def screen_candidates(self) -> None:
         """Phase 3: Virtual screening (docking + ML rescoring)."""
-        self.top_candidates = screen_library(
-            self.filtered, self.targets, str(self.config.work_dir),
-            self.deps, cache=self.cache, use_cache=self.use_cache,
-            water_results=self.water_results, dry_run=self.config.dry_run,
-            audit=self.audit, config=self.config,
+        filtered = self.state.get("filtered_library", [])
+        targets = self.state.get("targets", self.targets)
+        deps = self.state.get("deps", self.deps)
+        cache = self.state.get("cache", self.cache)
+        water_results = self.state.get("water_results", self.water_results)
+        audit = self.state.get("audit", self.audit)
+
+        top_candidates = screen_library(
+            filtered, targets, str(self.config.work_dir),
+            deps, cache=cache, use_cache=self.use_cache,
+            water_results=water_results, dry_run=self.config.dry_run,
+            audit=audit, config=self.config,
         )
 
-        if self.audit is not None:
-            self.audit.check_health(len(self.filtered), "Docking")
+        self.state["docked_candidates"] = top_candidates
+        self.top_candidates = top_candidates
 
-        if not self.top_candidates:
+        if audit is not None:
+            audit.check_health(len(filtered), "Docking")
+
+        if not top_candidates:
             log.warning("  No candidates after screening. Halting pipeline.")
             raise SystemExit(0)
 
@@ -287,11 +309,19 @@ class PipelineOrchestrator:
 
     def analyze_selectivity(self) -> None:
         """Phase 4: Selectivity filtering and resistance analysis."""
-        self.top_candidates = analyze_selectivity_and_resistance(
-            self.top_candidates, self.targets, str(self.config.work_dir),
-            self.deps, cache=self.cache, use_cache=self.use_cache,
-            water_results=self.water_results,
+        candidates = self.state.get("docked_candidates", self.top_candidates)
+        targets = self.state.get("targets", self.targets)
+        deps = self.state.get("deps", self.deps)
+        cache = self.state.get("cache", self.cache)
+        water_results = self.state.get("water_results", self.water_results)
+
+        analyzed = analyze_selectivity_and_resistance(
+            candidates, targets, str(self.config.work_dir),
+            deps, cache=cache, use_cache=self.use_cache,
+            water_results=water_results,
         )
+        self.state["docked_candidates"] = analyzed
+        self.top_candidates = analyzed
 
     def apply_fep_resistance(self) -> None:
         """Phase 4.8 — Top-hit only FEP resistance profiling.
@@ -310,19 +340,24 @@ class PipelineOrchestrator:
         """
         if not self.config.use_fep_resistance:
             return
-        if not self.top_candidates:
+        # Sync backward-compat attributes into state
+        if "docked_candidates" not in self.state and self.top_candidates:
+            self.state["docked_candidates"] = self.top_candidates
+        if "targets" not in self.state and self.targets:
+            self.state["targets"] = self.targets
+        candidates: List[CompoundRecord] = self.state.get("docked_candidates", self.top_candidates)
+        if not candidates:
             return
         log.info("─" * 3 + " Phase 4.8: Top-Hit FEP Resistance Profiling " + "─" * 3)
-        pb2pa = self.targets.get("PBP2a", {})
+        targets = self.state.get("targets", self.targets)
+        pb2pa = targets.get("PBP2a", {})
         receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
         if not os.path.isfile(receptor_pdb):
             log.warning("  Receptor PDB not found; skipping FEP.")
             return
 
-        manager = FEPManager(config=self.config, targets=self.targets)
-        selected_candidates = manager.select_candidates_for_fep(
-            self.top_candidates,
-        )
+        manager = FEPManager(config=self.config, targets=targets)
+        selected_candidates = manager.select_candidates_for_fep(candidates)
         manager.run_fep_profiling(
             selected_candidates, str(self.config.work_dir),
         )
@@ -336,20 +371,23 @@ class PipelineOrchestrator:
         """
         if not self.config.use_explicit_solvent_mmgbsa:
             return
-        if not self.top_candidates:
+        candidates = self.state.get("docked_candidates", self.top_candidates)
+        if not candidates:
             return
         log.info("─── Phase 4.6: Explicit-Solvent MM-GB/SA Rescoring ───")
-        pb2pa = self.targets.get("PBP2a", {})
+        targets = self.state.get("targets", self.targets)
+        water_results = self.state.get("water_results", self.water_results)
+        pb2pa = targets.get("PBP2a", {})
         receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
         if not os.path.isfile(receptor_pdb):
             log.warning("  Receptor PDB not found; skipping explicit-solvent rescoring.")
             return
         try:
             rescore_with_explicit_mmgbsa(
-                self.top_candidates,
+                candidates,
                 receptor_pdb,
                 str(self.config.work_dir),
-                water_results=self.water_results,
+                water_results=water_results,
             )
         except Exception as exc:
             log.warning(f"  Explicit-solvent rescoring failed: {exc}")
@@ -370,17 +408,19 @@ class PipelineOrchestrator:
         if not self.config.use_meta_scoring:
             log.info("  Meta-scoring disabled (use_meta_scoring=False).")
             return
-        if not self.top_candidates:
+        candidates = self.state.get("docked_candidates", self.top_candidates)
+        if not candidates:
             return
 
         # Populate water displacement energy once
+        water_results = self.state.get("water_results", self.water_results)
         water_disp_energy: Optional[float] = None
-        if self.water_results is not None and self.water_results.all_waters:
-            energies = [w.displacement_energy for w in self.water_results.all_waters]
+        if water_results is not None and water_results.all_waters:
+            energies = [w.displacement_energy for w in water_results.all_waters]
             if energies:
                 water_disp_energy = float(np.mean(energies))
 
-        for rec in self.top_candidates:
+        for rec in candidates:
             if water_disp_energy is not None:
                 rec.water_displacement_energy = water_disp_energy
 
@@ -389,7 +429,7 @@ class PipelineOrchestrator:
             log.info("─── Phase 4.5: GNN Rescoring ───")
             gnn_scorer = GNNScorer()
             if gnn_scorer.available:
-                for rec in self.top_candidates:
+                for rec in candidates:
                     gnn_score = gnn_scorer.predict(rec)
                     if gnn_score is not None:
                         rec.ml_score = gnn_score
@@ -406,7 +446,7 @@ class PipelineOrchestrator:
         # ── MetaScorer path (default / fallback) ──
         log.info("─── Phase 4.5: Meta-Learner Consensus Scoring ───")
 
-        for rec in self.top_candidates:
+        for rec in candidates:
             meta_score = predict_meta_score(rec)
             if meta_score is not None:
                 log.debug(f"  {rec.compound_id}: meta-score = {meta_score:.4f}")
@@ -417,9 +457,9 @@ class PipelineOrchestrator:
         scorer = _get_meta_scorer()
         if scorer is not None:
             scorer.flag_uncertain_predictions(
-                self.top_candidates, threshold=0.1,
+                candidates, threshold=0.1,
             )
-            flagged = [r for r in self.top_candidates if r.needs_manual_review]
+            flagged = [r for r in candidates if r.needs_manual_review]
             if flagged:
                 log.info(
                     f"  Active learning: {len(flagged)}/{len(self.top_candidates)} "
@@ -493,16 +533,18 @@ class PipelineOrchestrator:
         from .config import ConfigurationError
 
         md_duration = self.config.md_validation_duration_ns
-        if not (md_duration > 0 and _HAVE_MD and self.top_candidates):
+        candidates = self.state.get("docked_candidates", self.top_candidates)
+        if not (md_duration > 0 and _HAVE_MD and candidates):
             # When force_md_for_meta_scoring is True, MD validation is mandatory
-            if self.config.force_md_for_meta_scoring and self.top_candidates:
+            if self.config.force_md_for_meta_scoring and candidates:
                 raise ConfigurationError(
                     "MD validation is required by force_md_for_meta_scoring=True, "
                     f"but md_duration={md_duration} ns or MD module unavailable."
                 )
             return
         log.info("─── Phase 4.7: MD Validation (Adaptive Sampling) ───")
-        pb2pa = self.targets.get("PBP2a", {})
+        targets = self.state.get("targets", self.targets)
+        pb2pa = targets.get("PBP2a", {})
         receptor_pdb = pb2pa.get("pdbqt", "").replace(".pdbqt", ".pdb")
         if not os.path.isfile(receptor_pdb):
             if self.config.force_md_for_meta_scoring:
@@ -514,7 +556,7 @@ class PipelineOrchestrator:
             return
 
         failed_any = False
-        for rec in self.top_candidates[:3]:
+        for rec in candidates[:3]:
             if rec.mol is None:
                 mol = Chem.MolFromSmiles(rec.smiles)
                 if mol is None:
@@ -566,13 +608,16 @@ class PipelineOrchestrator:
 
     def generate_reports(self) -> None:
         """Phase 5: CSV, images, and HTML report generation."""
-        generate_csv_report(self.top_candidates)
+        candidates = self.state.get("docked_candidates", self.top_candidates)
+        filtered_library = self.state.get("filtered_library", [])
 
-        top3 = self.top_candidates[:self.config.top_n_for_images]
+        generate_csv_report(candidates)
+
+        top3 = candidates[:self.config.top_n_for_images]
         generate_images(top3)
 
         scored_for_top50 = [
-            r for r in self.filtered
+            r for r in filtered_library
             if r.pb2pa_allosteric_energy is not None
         ]
         scored_for_top50.sort(key=lambda r: r.pb2pa_allosteric_energy)
@@ -583,7 +628,7 @@ class PipelineOrchestrator:
             else scored_for_top50
         )
 
-        generate_html_report(self.top_candidates, top50, self.config.output_dir)
+        generate_html_report(candidates, top50, self.config.output_dir)
 
     # ── Internal helpers ───────────────────────────────────────────
 
@@ -599,12 +644,18 @@ class PipelineOrchestrator:
         The filter is bypassed entirely when
         ``CONFIG.require_key_interactions_for_rescoring`` is ``False``.
         """
+        # Sync backward-compat attributes into state
+        if "docked_candidates" not in self.state and self.top_candidates:
+            self.state["docked_candidates"] = self.top_candidates
+        candidates: List[CompoundRecord] = self.state.get("docked_candidates", self.top_candidates)
+
         flag = self.config.require_key_interactions_for_rescoring
         if not flag:
             log.info("  Key-interaction filter disabled.")
             return
 
-        pb2pa = self.targets.get("PBP2a", {})
+        targets = self.state.get("targets", self.targets)
+        pb2pa = targets.get("PBP2a", {})
         receptor_pdbqt = pb2pa.get("pdbqt", "")
         if not receptor_pdbqt:
             log.warning("  No PBP2a receptor PDBQT; skipping IFP filter.")
@@ -617,10 +668,10 @@ class PipelineOrchestrator:
 
         allosteric_residues = self.config.key_interaction_residues_allosteric
         active_residues = self.config.key_interaction_residues_active
-        n_before = len(self.top_candidates)
+        n_before = len(candidates)
         filtered: List[CompoundRecord] = []
 
-        for rec in self.top_candidates:
+        for rec in candidates:
             pose_path = rec.docked_pose_path
             if not pose_path or not os.path.isfile(pose_path):
                 # Fail-safe: keep if pose file is missing
@@ -650,6 +701,7 @@ class PipelineOrchestrator:
                 )
                 filtered.append(rec)
 
+        self.state["docked_candidates"] = filtered
         self.top_candidates = filtered
         n_removed = n_before - len(filtered)
         if n_removed:
@@ -683,6 +735,7 @@ class PipelineOrchestrator:
                 distance_cutoff=self.config.water_distance_cutoff,
                 displacement_energy_threshold=self.config.water_displacement_energy_threshold,
             )
+            self.state["water_results"] = self.water_results
             if self.water_results and self.water_results.high_energy_waters:
                 log.info(
                     f"  -> {len(self.water_results.high_energy_waters)} high-energy "
