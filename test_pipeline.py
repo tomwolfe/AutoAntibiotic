@@ -532,15 +532,17 @@ class TestErrorHandling:
         assert len(results) == 3
 
 
-# ── Test: Relaxed similarity fallback ─────────────────────────────────────
+# ── Test: No recursive similarity relaxation ─────────────────────────────
 
 class TestApplyFiltersRelaxed:
-    def test_apply_filters_relaxed_similarity(self):
+    def test_apply_filters_no_recursive_relaxation(self):
         """
         When fewer than DIVERSITY_MIN_COUNT compounds pass the strict
-        similarity threshold, apply_filters should relax the threshold and
-        return the relaxed set.  Records whose similarity sits in [0.4, 0.5)
-        fail the strict filter but pass the relaxed one.
+        similarity threshold, apply_filters must NOT recursively relax; it
+        logs a warning and returns the current passed list unchanged.
+
+        Records pinned to similarity 0.45 sit in [0.4, 0.5): the strict
+        filter (>=0.4) removes them, so the returned list is empty.
         """
         smiles = "CC(C)Cc1ccc(CC(=O)O)cc1"  # ibuprofen — passes all other filters
         mol = Chem.MolFromSmiles(smiles)
@@ -549,18 +551,19 @@ class TestApplyFiltersRelaxed:
             for i in range(20)
         ]
 
-        # Pin similarity so every compound sits in [0.4, 0.5):
-        #   strict (>=0.4) removes it, relaxed (<0.5) keeps it.
         with patch("discovery_pipeline.TanimotoSimilarity", return_value=0.45):
-            # Disable relaxation to confirm the strict pass set is empty.
-            with patch("discovery_pipeline.DIVERSITY_MIN_COUNT", 0):
-                strict = apply_filters(records)
-            assert len(strict) == 0, "Strict filter should remove all (sim=0.45 >= 0.4)"
+            with patch("discovery_pipeline.DIVERSITY_MIN_COUNT", 100):
+                with patch.object(log, "warning") as mock_warn:
+                    result = apply_filters(records)
 
-            # Default behaviour: relaxed set is returned when strict < 100.
-            relaxed = apply_filters(records)
+        # Strict filter removes all (sim=0.45 >= 0.4) and no relaxation occurs.
+        assert len(result) == 0, "Strict filter should remove all (sim=0.45 >= 0.4)"
 
-        assert len(relaxed) == 20, "Relaxed filter should keep all 20 (sim=0.45 < 0.5)"
+        # A low-diversity warning must be logged instead of recursive relaxation.
+        assert any(
+            "passed filters" in str(c.args[0])
+            for c in mock_warn.call_args_list
+        ), "Expected a low-diversity warning rather than recursive relaxation"
 
 
 # ── Test: Mini pipeline with shape fallback ───────────────────────────────
@@ -1052,6 +1055,54 @@ class TestConservedResiduesCentroid:
                             "Conserved residues" in str(c.args[0])
                             for c in mock_warn.call_args_list
                         ), "Expected warning about missing conserved residues"
+
+
+# ── Test: Offline local PDB loading ──────────────────────────────────────
+
+class TestOfflinePDBLoad:
+    def test_uses_local_3qpd_pdb(self, tmp_path):
+        """
+        prepare_targets must use the bundled tests/data/3QPD.pdb locally
+        instead of downloading it — fetch_structure must NOT be called for
+        3QPD, and the local path must be the one passed to cleaning.
+        """
+        from unittest.mock import MagicMock
+        import discovery_pipeline as dp
+
+        tests_data = Path(__file__).parent / "tests" / "data"
+        local_3qpd = str(tests_data / "3QPD.pdb")
+        assert os.path.exists(local_3qpd), "tests/data/3QPD.pdb must be present"
+
+        # If fetch_structure were ever called, return a fake path (so it never
+        # raises) and let us assert afterwards which pdb_ids reached it.
+        mock_fetch = MagicMock(
+            side_effect=lambda pdb_id, out_dir: os.path.join(out_dir, f"{pdb_id}.pdb")
+        )
+
+        clean_inputs = []
+
+        def side_clean(in_path, out_path, **kwargs):
+            import shutil
+            clean_inputs.append(in_path)
+            shutil.copy(in_path, out_path)
+            return out_path
+
+        with patch.object(dp, "fetch_structure", mock_fetch):
+            with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
+                with patch.object(dp, "compute_residue_centroid",
+                                  return_value=np.zeros(3)):
+                    dp.prepare_targets(
+                        str(tmp_path), str(tmp_path),
+                        {"vina": False, "USE_VINA": False},
+                    )
+
+        # 3QPD must be sourced locally, never downloaded.
+        assert not any(
+            call.args[0] == "3QPD" for call in mock_fetch.call_args_list
+        ), "fetch_structure must not be called to download 3QPD when a local copy exists"
+        assert local_3qpd in clean_inputs, (
+            "Local tests/data/3QPD.pdb should be the apo structure passed to cleaning"
+        )
 
 
 # ── Test: CSV low-conf suffix ──────────────────────────────────────────────

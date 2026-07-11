@@ -109,6 +109,9 @@ OUTPUT_DIR = Path("output")
 CSV_REPORT = OUTPUT_DIR / "top_candidates.csv"
 TOP_N = 10
 
+# Repository root (used to locate bundled offline PDB files under tests/data).
+REPO_ROOT = Path(__file__).resolve().parent
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LOGGING CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -701,11 +704,19 @@ def prepare_targets(
     log.info("─── Phase 1: Target Preparation & Centroid Calculation ───")
     result = {}
 
-    # ── Fetch structures ──
-    holo_path = fetch_structure(PDB_IDS["PBP2a_holo"], pdb_dir)
-    apo_path = fetch_structure(PDB_IDS["PBP2a_apo"], pdb_dir)
-    trypsin_path = fetch_structure(PDB_IDS["trypsin"], pdb_dir)
-    ces1_path = fetch_structure(PDB_IDS["CES1"], pdb_dir)
+    # ── Fetch structures (prefer bundled offline PDBs under tests/data) ──
+    def _resolve_structure(pdb_id: str) -> str:
+        """Return a local tests/data/{pdb_id}.pdb path if present, else download."""
+        local_pdb = REPO_ROOT / "tests" / "data" / f"{pdb_id}.pdb"
+        if local_pdb.exists():
+            log.info(f"  Using local structure for {pdb_id}: {local_pdb}")
+            return str(local_pdb)
+        return fetch_structure(pdb_id, pdb_dir)
+
+    holo_path = _resolve_structure(PDB_IDS["PBP2a_holo"])
+    apo_path = _resolve_structure(PDB_IDS["PBP2a_apo"])
+    trypsin_path = _resolve_structure(PDB_IDS["trypsin"])
+    ces1_path = _resolve_structure(PDB_IDS["CES1"])
 
     result["holo_pdb"] = holo_path
 
@@ -1146,13 +1157,12 @@ def apply_filters(
     log.info(f"  Brenk alerts: {skipped_brenk} removed.")
     log.info(f"  Passed filters: {len(passed)} compounds.")
 
-    # 5. Diversity check — relax if < 100
-    if len(passed) < DIVERSITY_MIN_COUNT and similarity_threshold < SIMILARITY_THRESHOLD_RELAXED:
+    # 5. Diversity check — warn if < DIVERSITY_MIN_COUNT (no recursive relaxation)
+    if len(passed) < DIVERSITY_MIN_COUNT:
         log.warning(
-            f"  Only {len(passed)} compounds passed strict filters (< {DIVERSITY_MIN_COUNT}). "
-            f"Relaxing similarity threshold to {SIMILARITY_THRESHOLD_RELAXED} and re-running."
+            f"  Only {len(passed)} compounds passed filters (< {DIVERSITY_MIN_COUNT}). "
+            f"Returning current passed list without relaxing the similarity threshold."
         )
-        return apply_filters(records, similarity_threshold=SIMILARITY_THRESHOLD_RELAXED)
 
     log.info("─── Phase 2 complete ───")
     return passed
@@ -2183,7 +2193,11 @@ def analyze_selectivity_and_resistance(
 #  PHASE 5 — REPORTING & ARTIFACTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def generate_csv_report(top10: List[CompoundRecord]) -> str:
+def generate_csv_report(
+    top10: List[CompoundRecord],
+    validation_rmsd: Optional[float] = None,
+    validation_ok: bool = False,
+) -> str:
     """
     Phase 5.1 — Write top_candidates.csv with all required columns.
 
@@ -2191,7 +2205,7 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
         Selectivity_Confidence, Shape_Score, Max_Similarity, Passes_Lipinski,
-        QED_Score, Binding_Mode_Notes.
+        QED_Score, Binding_Mode_Notes, Redock_RMSD, Redock_Validated.
 
     Returns path to CSV.
     """
@@ -2235,6 +2249,10 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
+            "Redock_RMSD": (
+                f"{validation_rmsd:.3f}" if validation_rmsd is not None else "N/A"
+            ),
+            "Redock_Validated": str(bool(validation_ok)),
         })
 
     df = pd.DataFrame(rows)
@@ -2400,7 +2418,11 @@ def main(target_count: int = 500):
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 
     # ── Phase 5: Reporting & Artifacts ──
-    generate_csv_report(top10)
+    generate_csv_report(
+        top10,
+        validation_rmsd=redock_rmsd,
+        validation_ok=validation_ok,
+    )
 
     top3 = top10[:3]
     generate_images(top3)
