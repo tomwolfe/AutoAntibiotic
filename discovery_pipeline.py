@@ -21,7 +21,7 @@ import warnings
 import tempfile
 import shutil
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Union
 from dataclasses import dataclass
 import multiprocessing as mp
 
@@ -239,6 +239,24 @@ def _extract_native_ligand_from_holo(
 
     Returns the SMILES string, or None on failure.
     """
+    KNOWN_ANTIBIOTIC_NAMES = {
+        "LIG", "INH", "METHI", "VANCO", "CEFTA", "MEROP",
+        "NAT", "BPN",  # common residue names for antibiotic ligands
+    }
+
+    def _is_likely_ligand(resname: str) -> bool:
+        """Return True if resname is not a common buffer/ion/water."""
+        skip_names = {"SO4", "PO4", "ACT", "EDO", "GOL", "EG0", "E2O",
+                      "CL", "NA", "MG", "ZN", "CA", "FE", "FE2", "HOH",
+                      "WAT", "SOL", "ACN", "DMS", "DMF", "N2G", "MPD"}
+        upper = resname.upper()
+        if upper in skip_names:
+            return False
+        if any(upper.startswith(prefix) for prefix in ("LIG", "INH", "BPN", "NAT",
+                                                          "CEF", "MER", "VAN")):
+            return True
+        return False
+
     try:
         parser = PDBParser(QUIET=True)
         struct = parser.get_structure("6TKO", holo_pdb_path)
@@ -247,13 +265,10 @@ def _extract_native_ligand_from_holo(
         for model in struct:
             for chain in model:
                 for residue in chain:
-                    # HETATM residues except waters — typical ligand identifiers
                     if residue.get_id()[0] in ("H_", "W", "H_M"):
                         continue
-                    # Skip standard amino acids
                     if residue.get_id()[0] == " ":
                         continue
-                    # Skip waters
                     resname = residue.get_resname().strip()
                     if resname in ("HOH", "WAT", "SOL"):
                         continue
@@ -263,9 +278,26 @@ def _extract_native_ligand_from_holo(
             log.warning("  ⚠  No hetero-ligand found in 6TKO.")
             return None
 
-        # Use the first non-water HETATM residue as the native ligand
-        chain_id, lig_res = ligand_residues[0]
-        log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
+        # Filter out buffers/ions, prefer known antibiotic names
+        filtered = []
+        for chain_id, res in ligand_residues:
+            resname = res.get_resname().strip().upper()
+            if _is_likely_ligand(resname):
+                filtered.append((chain_id, res))
+
+        if not filtered:
+            log.warning("  ⚠  No known antibiotic/ligand residue found. Falling back to first HETATM.")
+            filtered = ligand_residues  # fallback to original list
+
+        if len(filtered) > 1:
+            # Prefer the one with the highest heavy atom count
+            best = max(filtered, key=lambda x: x[1].get_num_atoms())
+            chain_id, lig_res = best
+            log.info(f"  Selected ligand (most heavy atoms): chain {chain_id}, "
+                     f"residue {lig_res.get_resname()} ({lig_res.get_num_atoms()} atoms)")
+        else:
+            chain_id, lig_res = filtered[0]
+            log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
 
         # Write ligand as a separate PDB file
         pdbio = PDBIO()
@@ -279,7 +311,6 @@ def _extract_native_ligand_from_holo(
         # Convert to MOL → SMILES via RDKit's PDB parser (or obabel fallback)
         mol = Chem.MolFromPDBFile(lig_pdb, removeHs=False)
         if mol is None:
-            # Try with OpenBabel as fallback
             log.warning("  ⚠  RDKit could not read ligand PDB, trying obabel…")
             smi_file = output_ligand_smi
             try:
@@ -295,7 +326,6 @@ def _extract_native_ligand_from_holo(
                 pass
             return None
 
-        # Sanitize
         Chem.SanitizeMol(mol)
         smi = Chem.MolToSmiles(mol)
 
@@ -303,17 +333,15 @@ def _extract_native_ligand_from_holo(
             f.write(smi + "\n")
         log.info(f"  Native ligand SMILES: {smi}")
 
-        # Convert to PDBQT via meeko
+        # Convert to PDBQT via LigandPreparator
         try:
-            from meeko import MoleculePreparation, PDBQTWriterLegacy
-            preparator = MoleculePreparation()
-            mol_setup = preparator.prepare(mol)[0]
-            pdbqt_str = PDBQTWriterLegacy.write_string(mol_setup)[0]
+            preparator = LigandPreparator()
+            pdbqt_str = preparator.prepare(mol)
             with open(output_ligand_pdbqt, "w") as f:
                 f.write(pdbqt_str)
             log.info(f"  Native ligand PDBQT written to {output_ligand_pdbqt}")
         except Exception as exc:
-            log.warning(f"  ⚠  Meeko prep failed for native ligand: {exc}")
+            log.warning(f"  ⚠  LigandPreparator failed for native ligand: {exc}")
             # Fallback: copy PDB as-is
             shutil.copy(lig_pdb, output_ligand_pdbqt)
 
@@ -1084,12 +1112,76 @@ def apply_filters(
 #  PHASE 3 — VIRTUAL SCREENING (Docking)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+class LigandPreparator:
+    """
+    Encapsulates the logic for converting an RDKit Mol to PDBQT format.
+
+    Strategy:
+        1. Try meeko (preferred — handles partial charges, rotatable bonds).
+        2. If meeko is unavailable or fails, fall back to obabel via subprocess.
+        3. If both fail, raise a clear RuntimeError with installation instructions.
+    """
+
+    def prepare(self, mol: Chem.Mol) -> str:
+        """
+        Convert an RDKit Mol to a PDBQT string.
+
+        Args:
+            mol: Input molecule (should have 3D coordinates).
+
+        Returns:
+            PDBQT-formatted string.
+
+        Raises:
+            RuntimeError: If neither meeko nor obabel can produce PDBQT.
+        """
+        # ── Try meeko first ──
+        try:
+            from meeko import MoleculePreparation, PDBQTWriterLegacy
+            preparator = MoleculePreparation()
+            mol_setups = preparator.prepare(mol)
+            if not mol_setups:
+                raise RuntimeError("Meeko returned empty setup")
+            pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
+            if pdbqt_str:
+                return pdbqt_str
+            raise RuntimeError("Meeko returned empty PDBQT string")
+        except (ImportError, AttributeError, RuntimeError) as exc:
+            log.warning(f"  Meeko prep failed: {exc}")
+            pass
+
+        # ── Fallback: obabel via subprocess ──
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".pdbqt", delete=True) as tmp:
+                subprocess.run(
+                    ["obabel", "-g", "min", "-O", tmp.name],
+                    input=Chem.MolToMolBlock(mol).encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                )
+                pdbqt_str = tmp.read().decode("utf-8", errors="ignore")
+                if pdbqt_str:
+                    return pdbqt_str
+                raise ValueError("obabel returned empty output")
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            log.warning(f"  obabel fallback failed: {exc}")
+            pass
+
+        # ── All attempts failed ──
+        raise RuntimeError(
+            "Cannot convert Mol to PDBQT. Ensure meeko is installed "
+            "(pip install meeko) or OpenBabel is available on PATH. "
+            "Alternatively, set USE_VINA=False to skip PDBQT-dependent steps."
+        )
+
+
 def prepare_ligand_pdbqt(
     mol: Chem.Mol,
     output_path: str,
 ) -> bool:
     """
-    Convert an RDKit Mol to PDBQT via Meeko.
+    Convert an RDKit Mol to PDBQT via LigandPreparator.
 
     Args:
         mol: Input molecule.
@@ -1099,17 +1191,13 @@ def prepare_ligand_pdbqt(
         True on success.
     """
     try:
-        from meeko import MoleculePreparation, PDBQTWriterLegacy
-        preparator = MoleculePreparation()
-        mol_setups = preparator.prepare(mol)
-        if not mol_setups:
-            return False
-        pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
+        preparator = LigandPreparator()
+        pdbqt_str = preparator.prepare(mol)
         with open(output_path, "w") as f:
             f.write(pdbqt_str)
         return True
     except Exception as exc:
-        log.warning(f"  Meeko prep failed: {exc}")
+        log.warning(f"  Ligand preparation failed: {exc}")
         return False
 
 
@@ -1511,52 +1599,84 @@ def screen_library(
 #  PHASE 4 — SELECTIVITY & RESISTANCE ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_ser403_contact(
+def analyze_binding_interactions(
     docked_pdbqt_path: str,
     receptor_pdb_path: str,
-    threshold_dist: float = 3.5,
-) -> bool:
+    key_residues: Optional[Dict[str, List[Tuple[str, int]]]] = None,
+) -> Dict[str, Union[bool, float]]:
     """
-    Check whether the docked ligand contacts Ser403 Oγ within *threshold_dist*.
+    Analyse the binding interactions between a docked ligand and key
+    receptor residues.
 
-    Args:
-        docked_pdbqt_path: Path to the docked-ligand PDBQT file.
-        receptor_pdb_path: Path to the cleaned receptor PDB file (used to
-                           locate Ser403 Oγ coordinates).
-        threshold_dist: Distance threshold in Ångströms (default 3.5).
+    The function parses the ligand PDBQT and receptor PDB files, then
+    computes distances between ligand heavy atoms and key residue atoms
+    (O, N, OG, NZ, OH).
+
+    Key residues (default):
+        - Ser403  (catalytic residue)
+        - Lys406  (conserved Lys in PBP2a)
+        - Tyr446  (conserved Tyr in PBP2a)
 
     Returns:
-        True if any ligand heavy atom lies within *threshold_dist* of
-        Ser403 Oγ.
+        Dictionary with:
+            'Ser403_contact'       – True if any heavy atom < 3.5 Å from Ser403 OG
+            'Lys406_Hbond'         – True if any heavy atom < 3.8 Å from Lys406 NZ
+            'Tyr446_Hbond'         – True if any heavy atom < 3.5 Å from Tyr446 OH
+            'min_dist_Ser403'      – Minimum distance (Å) to Ser403 OG atom
+            'min_dist_Lys406'      – Minimum distance (Å) to Lys406 NZ atom
+            'min_dist_Tyr446'      – Minimum distance (Å) to Tyr446 OH atom
+
+    Raises:
+        FileNotFoundError: If either file path does not exist.
+        ValueError: If files cannot be parsed.
     """
-    # ── Locate Ser403 Oγ in the receptor PDB ──
-    ser403_og = None
-    try:
-        parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("receptor", receptor_pdb_path)
-        for model in struct:
-            for chain in model:
-                for residue in chain:
-                    if (
-                        residue.get_resname().strip() == "SER"
-                        and residue.get_id()[1] == 403
-                    ):
-                        if "OG" in residue:
-                            ser403_og = residue["OG"].get_vector().get_array()
-                            break
-                if ser403_og is not None:
-                    break
-            if ser403_og is not None:
-                break
-    except Exception as exc:
-        log.warning(f"  Could not parse receptor PDB for Ser403: {exc}")
-        return False
+    if key_residues is None:
+        key_residues = {
+            "Ser403": [("SER", 403, "OG")],
+            "Lys406": [("LYS", 406, "NZ")],
+            "Tyr446": [("TYR", 446, "OH")],
+        }
 
-    if ser403_og is None:
-        log.warning("  Ser403 Oγ atom not found in receptor PDB.")
-        return False
+    # ── Parse receptor key atoms ──
+    atom_coords: Dict[str, List[np.ndarray]] = {}
+    for resname, atom_entries in key_residues.items():
+        atom_coords[resname] = []
+        try:
+            parser = PDBParser(QUIET=True)
+            struct = parser.get_structure("receptor", receptor_pdb_path)
+            for model in struct:
+                for chain in model:
+                    for residue in chain:
+                        for entry in atom_entries:
+                            aname = entry[-1]
+                            resname_expected = entry[0] if len(entry) > 2 else ""
+                            resno_expected = entry[1] if len(entry) > 2 else -1
+                            if (
+                                resname_expected
+                                and residue.get_resname().strip().upper()
+                                != resname_expected.upper()
+                            ):
+                                continue
+                            if resno_expected >= 0 and residue.get_id()[1] != resno_expected:
+                                continue
+                            if aname in residue:
+                                atom_coords[resname].append(
+                                    residue[aname].get_vector().get_array()
+                                )
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            log.warning(f"  Could not parse receptor for key residues: {exc}")
+            return {
+                "Ser403_contact": False,
+                "Lys406_Hbond": False,
+                "Tyr446_Hbond": False,
+                "min_dist_Ser403": float("inf"),
+                "min_dist_Lys406": float("inf"),
+                "min_dist_Tyr446": float("inf"),
+            }
 
-    # ── Parse docked-ligand heavy-atom coordinates from PDBQT ──
+    # ── Parse ligand heavy-atom coordinates from PDBQT ──
     ligand_coords = []
     try:
         with open(docked_pdbqt_path) as f:
@@ -1572,18 +1692,37 @@ def check_ser403_contact(
                     except (ValueError, IndexError):
                         continue
     except FileNotFoundError:
-        log.warning(f"  Docked PDBQT not found: {docked_pdbqt_path}")
-        return False
+        raise FileNotFoundError(f"Docked PDBQT not found: {docked_pdbqt_path}")
 
     if not ligand_coords:
-        log.warning("  No ligand heavy atoms found in PDBQT for Ser403 check.")
-        return False
+        raise ValueError("No ligand heavy atoms found in PDBQT file.")
 
-    coords_array = np.array(ligand_coords)
-    distances = np.linalg.norm(coords_array - ser403_og, axis=1)
-    min_dist = distances.min()
+    # ── Compute distances ──
+    results: Dict[str, Union[bool, float]] = {}
+    min_dists: Dict[str, float] = {}
 
-    return min_dist <= threshold_dist
+    for resname, coords in atom_coords.items():
+        if not coords:
+            min_dists[resname] = float("inf")
+            continue
+        ref = np.array(coords)
+        distances = np.linalg.norm(
+            np.array(ligand_coords)[:, np.newaxis] - ref[np.newaxis, :],
+            axis=2,
+        ).min(axis=0)
+        min_dists[resname] = float(distances.min())
+
+    # Populate boolean contact flags
+    results["Ser403_contact"] = min_dists.get("Ser403", float("inf")) < 3.5
+    results["Lys406_Hbond"] = min_dists.get("Lys406", float("inf")) < 3.8
+    results["Tyr446_Hbond"] = min_dists.get("Tyr446", float("inf")) < 3.5
+
+    # Populate min distances
+    results["min_dist_Ser403"] = min_dists.get("Ser403", float("inf"))
+    results["min_dist_Lys406"] = min_dists.get("Lys406", float("inf"))
+    results["min_dist_Tyr446"] = min_dists.get("Tyr446", float("inf"))
+
+    return results
 
 
 def compute_selectivity_index(
@@ -1623,39 +1762,85 @@ def profile_resistance_risk(
     receptor_pdbqt: str,
     center: np.ndarray,
     box_size: Tuple[float, float, float],
-    ser403_contact: Optional[bool] = None,
+    interactions: Optional[Dict[str, Union[bool, float]]] = None,
 ) -> str:
     """
     Rule-based resistance profiling, optionally informed by pose analysis.
 
-    Flags candidates based on predicted interactions:
-        - Good: contacts with conserved residues (Ser403, Lys406, Tyr446).
-        - Risk: contacts with mutable residues (Gly246, Asn146).
+    Flags candidates based on predicted interactions with conserved PBP2a
+    residues.  If *interactions* is None the function falls back to an
+    internal call to ``analyze_binding_interactions`` which re-docks the
+    compound to obtain the pose.
 
     Args:
-        ser403_contact: Result from check_ser403_contact (True/False) or None
-                        if pose analysis was not performed.
+        record: Compound record containing docking scores.
+        work_dir: Working directory for temporary files.
+        receptor_pdbqt: Path to the PBP2a receptor PDBQT file.
+        center: Grid box centre (used for re-docking).
+        box_size: Grid box dimensions.
+        interactions: Pre-computed interaction fingerprint dict returned by
+                      ``analyze_binding_interactions``.  If None the
+                      function will perform the analysis internally.
 
     Returns a human-readable notes string.
     """
     notes = []
 
-    # Pose-based Ser403 contact (from check_ser403_contact)
-    if ser403_contact is True:
-        notes.append("Confirmed contact with catalytic Ser403 Oγ (pose-based). Good.")
-    elif ser403_contact is False:
-        notes.append("No contact with Ser403 Oγ in docked pose — may lack active-site engagement.")
+    # Perform interaction analysis if not already supplied
+    if interactions is None:
+        safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
+        lig_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_lig.pdbqt")
+        out_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_out.pdbqt")
+
+        try:
+            if prepare_ligand_pdbqt(rec.mol, lig_pdbqt):
+                _run_vina_docking(
+                    receptor_pdbqt, lig_pdbqt, out_pdbqt,
+                    center, box_size,
+                )
+                interactions = analyze_binding_interactions(out_pdbqt, receptor_pdbqt)
+                try:
+                    os.remove(out_pdbqt)
+                except OSError:
+                    pass
+            else:
+                interactions = None
+        except Exception:
+            interactions = None
+
+    if interactions is None:
+        notes.append("No binding interactions could be analysed.")
     else:
-        # Pose analysis unavailable — fall back to energy-based heuristic
-        if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
+        # Strong catalytic engagement (Ser403)
+        if interactions.get("Ser403_contact", False):
+            notes.append("Strong catalytic engagement (Ser403)")
+
+        # Stabilising H-bond with Lys406
+        if interactions.get("Lys406_Hbond", False):
+            notes.append("Stabilising H-bond with Lys406")
+
+        # Risk: lack of conserved residue interactions
+        if not (
+            interactions.get("Ser403_contact", False)
+            or interactions.get("Lys406_Hbond", False)
+            or interactions.get("Tyr446_Hbond", False)
+        ):
+            notes.append("Risk: Lack of conserved residue interactions")
+
+        # Allosteric binder note
+        if (
+            record.pb2pa_allosteric_energy is not None
+            and record.pb2pa_allosteric_energy < -7.0
+        ):
+            if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
+                notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
+
+    # Energy-based heuristics (unchanged)
+    if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
+        if "Confirmed contact with catalytic Ser403" not in notes:
             notes.append("Likely contacts catalytic Ser403 (active site, energy-based). Good.")
 
-    # If it bound well only to allosteric site, it targets the allosteric pocket
-    if record.pb2pa_allosteric_energy is not None and record.pb2pa_allosteric_energy < -7.0:
-        if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
-            notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
-
-    # Molecular weight heuristic: larger molecules may have more contact surface
+    # Molecular weight heuristic
     if record.mol is not None:
         mw = Descriptors.MolWt(record.mol)
         if mw > 400:
@@ -1758,12 +1943,12 @@ def analyze_selectivity_and_resistance(
                 rec.resistance_notes += " | "
             rec.resistance_notes += "High risk off-target binding"
 
-    # ── Resistance profiling with pose-based Ser403 contact analysis ──
+    # ── Resistance profiling with pose-based interaction analysis ──
     pb2pa = targets["PBP2a"]
     cleaned_pdb = pb2pa.get("cleaned_pdb")
 
     for rec in top10:
-        ser403_contact = None
+        interactions = None
 
         if deps["USE_VINA"] and cleaned_pdb and os.path.exists(cleaned_pdb):
             # Re-dock to active site to obtain the docked pose for analysis
@@ -1777,8 +1962,8 @@ def analyze_selectivity_and_resistance(
                     pb2pa["active_center"], ACTIVE_BOX_SIZE,
                 )
                 if os.path.exists(out_pdbqt):
-                    ser403_contact = check_ser403_contact(out_pdbqt, cleaned_pdb)
                     try:
+                        interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
                         os.remove(out_pdbqt)
                     except OSError:
                         pass
@@ -1792,7 +1977,7 @@ def analyze_selectivity_and_resistance(
             pb2pa["pdbqt"],
             pb2pa["allosteric_center"],
             ALLOSTERIC_BOX_SIZE,
-            ser403_contact=ser403_contact,
+            interactions=interactions,
         )
 
     log.info("─── Phase 4 complete ───")

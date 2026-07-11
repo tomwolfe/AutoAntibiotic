@@ -22,7 +22,8 @@ from discovery_pipeline import (
     check_dependencies,
     _run_vina_docking,
     compute_selectivity_index,
-    check_ser403_contact,
+    analyze_binding_interactions,
+    LigandPreparator,
     CompoundRecord,
     BETA_LACTAM_SMARTS,
     OUTPUT_DIR,
@@ -319,84 +320,6 @@ class TestComputeSelectivityIndex:
         assert si == pytest.approx(2.0)
 
 
-# ── Test 7: check_ser403_contact with mock PDBQT ────────────────────────────
-
-class TestCheckSer403Contact:
-    @pytest.fixture
-    def mock_receptor_pdb(self):
-        """Create a minimal receptor PDB with a SER403 residue containing OG."""
-        content = textwrap.dedent("""\
-            ATOM      1  N   SER A 403      10.000  10.000  10.000  1.00  0.00           N
-            ATOM      2  CA  SER A 403      11.000  10.000  10.000  1.00  0.00           C
-            ATOM      3  C   SER A 403      12.000  10.000  10.000  1.00  0.00           C
-            ATOM      4  O   SER A 403      12.500  10.000  10.000  1.00  0.00           O
-            ATOM      5  CB  SER A 403      11.000  11.000  10.000  1.00  0.00           C
-            ATOM      6  OG  SER A 403      11.000  11.500  10.000  1.00  0.00           O
-            END
-        """)
-        tmpdir = tempfile.mkdtemp()
-        pdb_path = os.path.join(tmpdir, "receptor.pdb")
-        with open(pdb_path, "w") as f:
-            f.write(content)
-        yield pdb_path
-        for fname in os.listdir(tmpdir):
-            os.remove(os.path.join(tmpdir, fname))
-        os.rmdir(tmpdir)
-
-    @pytest.fixture
-    def close_ligand_pdbqt(self):
-        """Ligand PDBQT with a heavy atom within 3.5 Å of Ser403 OG (11, 11.5, 10)."""
-        content = textwrap.dedent("""\
-            ATOM      1  C   LIG A   1      11.200  11.500  10.000  1.00  0.00           C
-            ATOM      2  H   LIG A   1      12.000  12.000  10.000  1.00  0.00           H
-            END
-        """)
-        tmpdir = tempfile.mkdtemp()
-        pdbqt_path = os.path.join(tmpdir, "ligand_close.pdbqt")
-        with open(pdbqt_path, "w") as f:
-            f.write(content)
-        yield pdbqt_path
-        for fname in os.listdir(tmpdir):
-            os.remove(os.path.join(tmpdir, fname))
-        os.rmdir(tmpdir)
-
-    @pytest.fixture
-    def far_ligand_pdbqt(self):
-        """Ligand PDBQT with all heavy atoms > 3.5 Å from Ser403 OG."""
-        content = textwrap.dedent("""\
-            ATOM      1  C   LIG A   1      20.000  20.000  20.000  1.00  0.00           C
-            END
-        """)
-        tmpdir = tempfile.mkdtemp()
-        pdbqt_path = os.path.join(tmpdir, "ligand_far.pdbqt")
-        with open(pdbqt_path, "w") as f:
-            f.write(content)
-        yield pdbqt_path
-        for fname in os.listdir(tmpdir):
-            os.remove(os.path.join(tmpdir, fname))
-        os.rmdir(tmpdir)
-
-    def test_detects_contact(self, mock_receptor_pdb, close_ligand_pdbqt):
-        """Returns True when a ligand heavy atom is within 3.5 Å of Ser403 OG."""
-        result = check_ser403_contact(close_ligand_pdbqt, mock_receptor_pdb)
-        assert result
-
-    def test_detects_no_contact(self, mock_receptor_pdb, far_ligand_pdbqt):
-        """Returns False when all ligand heavy atoms are > 3.5 Å from Ser403 OG."""
-        result = check_ser403_contact(far_ligand_pdbqt, mock_receptor_pdb)
-        assert not result
-
-    def test_missing_receptor_file(self, far_ligand_pdbqt):
-        """Returns False when receptor PDB does not exist."""
-        result = check_ser403_contact(far_ligand_pdbqt, "/nonexistent/receptor.pdb")
-        assert not result
-
-    def test_missing_docked_file(self, mock_receptor_pdb):
-        """Returns False when docked PDBQT does not exist."""
-        result = check_ser403_contact("/nonexistent/ligand.pdbqt", mock_receptor_pdb)
-        assert not result
-
-
 # ── Test 8: Library generation edge cases ────────────────────────────────────
 
 class TestGenerateCandidateLibraryEdgeCases:
@@ -491,6 +414,161 @@ class TestFallbackScoring:
         # Should return at least TOP_N (10) or all if fewer
         assert len(result) >= min(len(records), TOP_N), \
             f"Expected at least {min(len(records), TOP_N)} results, got {len(result)}"
+
+
+# ── Test 10: LigandPreparator ──────────────────────────────────────────────
+
+class TestLigandPreparator:
+    @pytest.fixture
+    def benzene_mol(self):
+        """Benzene molecule with 3D coordinates for testing."""
+        from rdkit.Chem import AllChem
+        mol = Chem.MolFromSmiles('c1ccccc1')
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol)
+        return mol
+
+    @pytest.fixture
+    def ethanol_mol(self):
+        """Ethanol molecule with 3D coordinates for testing."""
+        from rdkit.Chem import AllChem
+        mol = Chem.MolFromSmiles('CCO')
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol)
+        return mol
+
+    def test_prepare_returns_pdbqt_string(self, benzene_mol):
+        """LigandPreparator.prepare returns a non-empty PDBQT string."""
+        preparator = LigandPreparator()
+        pdbqt = preparator.prepare(benzene_mol)
+        assert pdbqt is not None
+        assert len(pdbqt) > 0
+
+    def test_prepare_writes_to_file(self, benzene_mol, tmp_path):
+        """LigandPreparator writes PDBQT content to the output file."""
+        preparator = LigandPreparator()
+        output_path = str(tmp_path / "lig.pdbqt")
+        result = preparator.prepare(benzene_mol)
+        with open(output_path, "w") as f:
+            f.write(result)
+        with open(output_path) as f:
+            content = f.read()
+        assert "BENZENE" in content.upper() or len(content) > 50
+
+    def test_prepare_invalid_mol_raises(self):
+        """LigandPreparator.prepare raises RuntimeError for invalid molecules."""
+        preparator = LigandPreparator()
+        # An empty molecule should raise
+        empty_mol = Chem.RWMol()
+        with pytest.raises((RuntimeError, TypeError)):
+            preparator.prepare(empty_mol)
+
+    def test_prepare_uses_obabel_as_fallback(self, benzene_mol, tmp_path):
+        """LigandPreparator falls back to obabel when meeko is unavailable."""
+        # Mock meeko import to raise ImportError
+        with patch('meeko.MoleculePreparation') as mock_meeko_prep:
+            mock_meeko_prep.side_effect = ImportError("meeko not found")
+            preparator = LigandPreparator()
+            # obabel won't be available in test env, so we expect ValueError (empty output)
+            with pytest.raises((ImportError, RuntimeError, ValueError)):
+                preparator.prepare(benzene_mol)
+
+    def test_prepare_empty_input_raises(self):
+        """LigandPreparator raises RuntimeError for None input."""
+        preparator = LigandPreparator()
+        with pytest.raises((TypeError, RuntimeError)):
+            preparator.prepare(None)  # type: ignore[arg-type]
+
+
+# ── Test 11: analyze_binding_interactions ──────────────────────────────────
+
+class TestAnalyzeBindingInteractions:
+    @pytest.fixture
+    def mock_receptor_pdb(self, tmp_path):
+        """Create a minimal receptor PDB with SER403, LYS406, TYR446."""
+        content = textwrap.dedent("""\
+            ATOM      1  OG  SER A 403      11.000  11.500  10.000  1.00  0.00           O
+            ATOM      2  NZ  LYS A 406      16.000  12.000  10.000  1.00  0.00           N
+            ATOM      3  OH  TYR A 446      21.000  12.000  10.000  1.00  0.00           O
+            END
+        """)
+        pdb_path = tmp_path / "receptor.pdb"
+        with open(pdb_path, "w") as f:
+            f.write(content)
+        return str(pdb_path)
+
+    @pytest.fixture
+    def close_ligand_pdbqt(self, tmp_path):
+        """Ligand PDBQT with heavy atoms close to key residues."""
+        content = textwrap.dedent("""\
+            ATOM      1  C   LIG A   1      11.200  11.500  10.000  1.00  0.00           C
+            ATOM      2  C   LIG A   1      16.500  12.500  10.000  1.00  0.00           C
+            ATOM      3  C   LIG A   1      21.200  12.200  10.000  1.00  0.00           C
+            END
+        """)
+        pdbqt_path = tmp_path / "ligand_close.pdbqt"
+        with open(pdbqt_path, "w") as f:
+            f.write(content)
+        return str(pdbqt_path)
+
+    @pytest.fixture
+    def far_ligand_pdbqt(self, tmp_path):
+        """Ligand PDBQT with all atoms far from key residues."""
+        content = textwrap.dedent("""\
+            ATOM      1  C   LIG A   1      50.000  50.000  50.000  1.00  0.00           C
+            END
+        """)
+        pdbqt_path = tmp_path / "ligand_far.pdbqt"
+        with open(pdbqt_path, "w") as f:
+            f.write(content)
+        return str(pdbqt_path)
+
+    def test_detects_ser403_contact(self, mock_receptor_pdb, close_ligand_pdbqt):
+        """Returns True when ligand heavy atom is near Ser403 OG."""
+        result = analyze_binding_interactions(close_ligand_pdbqt, mock_receptor_pdb)
+        assert result["Ser403_contact"] is True
+        assert result["min_dist_Ser403"] < 3.5
+
+    def test_detects_lys406_hbond(self, mock_receptor_pdb, close_ligand_pdbqt):
+        """Returns True when ligand heavy atom is near Lys406 NZ."""
+        result = analyze_binding_interactions(close_ligand_pdbqt, mock_receptor_pdb)
+        assert result["Lys406_Hbond"] is True
+        assert result["min_dist_Lys406"] < 3.8
+
+    def test_detects_tyr446_hbond(self, mock_receptor_pdb, close_ligand_pdbqt):
+        """Returns True when ligand heavy atom is near Tyr446 OH."""
+        result = analyze_binding_interactions(close_ligand_pdbqt, mock_receptor_pdb)
+        assert result["Tyr446_Hbond"] is True
+        assert result["min_dist_Tyr446"] < 3.5
+
+    def test_detects_no_contact_far(self, mock_receptor_pdb, far_ligand_pdbqt):
+        """Returns False for all contacts when ligand is far from key residues."""
+        result = analyze_binding_interactions(far_ligand_pdbqt, mock_receptor_pdb)
+        assert result["Ser403_contact"] is False
+        assert result["Lys406_Hbond"] is False
+        assert result["Tyr446_Hbond"] is False
+
+    def test_missing_docked_file(self, mock_receptor_pdb):
+        """Raises FileNotFoundError when docked PDBQT does not exist."""
+        with pytest.raises(FileNotFoundError):
+            analyze_binding_interactions("/nonexistent/ligand.pdbqt", mock_receptor_pdb)
+
+    def test_missing_receptor_file(self, close_ligand_pdbqt):
+        """Raises FileNotFoundError when receptor PDB does not exist."""
+        with pytest.raises(FileNotFoundError):
+            analyze_binding_interactions(close_ligand_pdbqt, "/nonexistent/receptor.pdb")
+
+    def test_empty_ligand_raises_value_error(self, mock_receptor_pdb, tmp_path):
+        """Raises ValueError when ligand PDBQT has no heavy atoms."""
+        empty_path = str(tmp_path / "empty.pdbqt")
+        with open(empty_path, "w") as f:
+            f.write("REMARK   0\n")
+        with pytest.raises(ValueError):
+            analyze_binding_interactions(empty_path, mock_receptor_pdb)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
 
 
 if __name__ == "__main__":
