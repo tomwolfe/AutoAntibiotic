@@ -758,6 +758,125 @@ def _compute_complex_gb_energy_relaxed(
         return None
 
 
+def _compute_complex_gb_energy_with_state(
+    receptor_pdb_prepared: str,
+    lig_pdb_tag: str,
+    forcefield: Any,
+    cpu_platform: Any,
+    work_dir_mm: str,
+    tag: str,
+) -> Optional[Tuple[float, Any, Any]]:
+    """Concatenate the prepared receptor and ligand PDB, minimize the
+    complex, and return ``(energy_kcal, topology, positions)``."""
+    try:
+        lig_pdb = os.path.join(work_dir_mm, f"lig_{lig_pdb_tag}.pdb")
+        rec_pdb = receptor_pdb_prepared
+
+        complex_pdb = os.path.join(work_dir_mm, f"complex_{tag}.pdb")
+        with open(rec_pdb) as f:
+            rec_lines = f.readlines()
+        with open(lig_pdb) as f:
+            lig_lines = f.readlines()
+
+        with open(complex_pdb, "w") as f:
+            for line in rec_lines:
+                if line.startswith(("END", "TER")):
+                    continue
+                f.write(line)
+            f.write("TER\n")
+            for line in lig_lines:
+                if line.startswith(("END", "TER")):
+                    continue
+                f.write(line)
+            f.write("END\n")
+
+        complex_pdb_obj = _openmm_app.PDBFile(complex_pdb)
+        system = forcefield.createSystem(
+            complex_pdb_obj.topology,
+            nonbondedMethod=_openmm_app.NoCutoff,
+            constraints=_openmm_app.HBonds,
+            implicitSolvent=_openmm_app.OBC2,
+        )
+        simulation = _openmm_app.Simulation(
+            complex_pdb_obj.topology, system,
+            _openmm.LangevinMiddleIntegrator(
+                300 * _openmm_unit.kelvin,
+                1.0 / _openmm_unit.picosecond,
+                0.002 * _openmm_unit.picosecond,
+            ),
+            cpu_platform,
+        )
+        simulation.context.setPositions(complex_pdb_obj.positions)
+        simulation.minimizeEnergy(maxIterations=500)
+
+        state = simulation.context.getState(getEnergy=True, getPositions=True)
+        energy = state.getPotentialEnergy().value_in_unit(
+            _openmm_unit.kilocalorie_per_mole,
+        )
+        positions = state.getPositions()
+        return energy, complex_pdb_obj.topology, positions
+    except Exception as exc:
+        log.warning(f"  Complex GB energy (with state) failed for {tag}: {exc}")
+        return None
+
+
+def _compute_energy_without_ligand(
+    complex_topology: Any,
+    complex_positions: Any,
+    forcefield: Any,
+    cpu_platform: Any,
+    ligand_resnames: frozenset = frozenset({"LIG", "UNL"}),
+) -> Optional[float]:
+    """Compute OBC2 energy of the system with ligand residues removed.
+
+    Builds a new topology containing everything except the named ligand
+    residues and evaluates the potential energy on the given positions.
+    """
+    try:
+        new_topology = _openmm_app.Topology()
+        chain_map: dict = {}
+        new_positions = []
+
+        for chain in complex_topology.chains():
+            new_chain = new_topology.addChain(chain.id)
+            chain_map[chain.id] = new_chain
+            for residue in chain.residues():
+                if residue.name in ligand_resnames:
+                    continue
+                new_res = new_topology.addResidue(
+                    residue.name, new_chain, residue.id,
+                )
+                for atom in residue.atoms():
+                    new_topology.addAtom(
+                        atom.name, atom.element, new_res, atom.id,
+                    )
+                    new_positions.append(complex_positions[atom.index])
+
+        system = forcefield.createSystem(
+            new_topology,
+            nonbondedMethod=_openmm_app.NoCutoff,
+            constraints=_openmm_app.HBonds,
+            implicitSolvent=_openmm_app.OBC2,
+        )
+        simulation = _openmm_app.Simulation(
+            new_topology, system,
+            _openmm.LangevinMiddleIntegrator(
+                300 * _openmm_unit.kelvin,
+                1.0 / _openmm_unit.picosecond,
+                0.002 * _openmm_unit.picosecond,
+            ),
+            cpu_platform,
+        )
+        simulation.context.setPositions(new_positions)
+        energy = simulation.context.getState(
+            getEnergy=True,
+        ).getPotentialEnergy().value_in_unit(_openmm_unit.kilocalorie_per_mole)
+        return energy
+    except Exception as exc:
+        log.warning(f"  Receptor-only energy (ligand removed) failed: {exc}")
+        return None
+
+
 def rescore_with_mmgbsa(
     top_candidates: List[CompoundRecord],
     receptor_pdb: str,
@@ -880,14 +999,21 @@ def rescore_with_mmgbsa(
                 if lig_energy is None:
                     continue
 
-                complex_energy = _compute_complex_gb_energy(
+                complex_result = _compute_complex_gb_energy_with_state(
                     rec_pdb_prepared, f"{tag}_c{conf_idx}", forcefield,
                     cpu_platform, work_dir_mm, f"{tag}_c{conf_idx}",
                 )
-                if complex_energy is None:
+                if complex_result is None:
+                    continue
+                complex_energy, complex_topology, complex_positions = complex_result
+
+                rec_relaxed_energy = _compute_energy_without_ligand(
+                    complex_topology, complex_positions, forcefield, cpu_platform,
+                )
+                if rec_relaxed_energy is None:
                     continue
 
-                binding_energy = complex_energy - rec_energy - lig_energy
+                binding_energy = complex_energy - rec_relaxed_energy - lig_energy
 
                 # ── Water displacement correction ──
                 if water_results is not None and water_results.high_energy_waters:
@@ -1022,7 +1148,14 @@ def _process_one_candidate_explicit(args: Tuple) -> Dict[str, Any]:
         if complex_energy is None:
             continue
 
-        binding_energy = complex_energy - rec_energy - lig_energy
+        # Note: Receptor energy calculated with original water box after ligand removal.
+        rec_relaxed_energy = _compute_energy_without_ligand(
+            complex_topology, relaxed_positions, forcefield, cpu_platform,
+        )
+        if rec_relaxed_energy is None:
+            continue
+
+        binding_energy = complex_energy - rec_relaxed_energy - lig_energy
 
         # Water displacement correction
         if high_energy_waters:
@@ -1276,7 +1409,14 @@ def _rescore_explicit_solvent_loop(
                 if complex_energy is None:
                     continue
 
-                binding_energy = complex_energy - rec_energy - lig_energy
+                # Note: Receptor energy calculated with original water box after ligand removal.
+                rec_relaxed_energy = _compute_energy_without_ligand(
+                    complex_topology, relaxed_positions, forcefield, cpu_platform,
+                )
+                if rec_relaxed_energy is None:
+                    continue
+
+                binding_energy = complex_energy - rec_relaxed_energy - lig_energy
 
                 # ── Water displacement correction ──
                 if water_results is not None and water_results.high_energy_waters:

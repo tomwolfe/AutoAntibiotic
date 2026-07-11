@@ -177,6 +177,49 @@ class TestRescoreWithMMGBSA:
         CONFIG.mm_gbsa_top_n = saved
         assert len(result) == len(top_candidates)
 
+    def test_mmgbsa_uses_relaxed_receptor_energy(
+        self,
+        top_candidates: List[CompoundRecord],
+        dummy_receptor_pdb: str,
+        temp_work_dir: str,
+    ) -> None:
+        """Receptor energy is taken from minimized complex (not static PDB)."""
+        fake_rec_initial = -50.0
+        fake_complex_gb = -100.0
+        fake_rec_relaxed = -80.0
+        fake_lig_gb = 5.0
+        # ΔG = complex - rec_relaxed - lig = -100 - (-80) - 5 = -25
+        expected = -25.0
+
+        with patch.multiple(
+            "autoantibiotic.ml_scoring.scoring",
+            _HAVE_OPENMM=True,
+            _HAVE_PDBFIXER=True,
+            _prepare_receptor_for_mmgbsa=MagicMock(
+                return_value=(
+                    MagicMock(),
+                    MagicMock(),
+                    MagicMock(),
+                    fake_rec_initial,
+                )
+            ),
+            _compute_ligand_gb_energy=MagicMock(return_value=fake_lig_gb),
+            _compute_complex_gb_energy_with_state=MagicMock(
+                return_value=(fake_complex_gb, MagicMock(), MagicMock()),
+            ),
+            _compute_energy_without_ligand=MagicMock(
+                return_value=fake_rec_relaxed,
+            ),
+        ):
+            result = rescore_with_mmgbsa(
+                top_candidates[:1],
+                dummy_receptor_pdb,
+                temp_work_dir,
+            )
+        assert len(result) == 1
+        assert result[0].ml_score is not None
+        assert result[0].ml_score == pytest.approx(expected, abs=1e-4)
+
 
 # ── ML rescoring dispatch ─────────────────────────────────────
 
@@ -294,7 +337,10 @@ class TestWaterDisplacementCorrection:
                 )
             ),
             _compute_ligand_gb_energy=MagicMock(return_value=fake_lig_energy),
-            _compute_complex_gb_energy=MagicMock(return_value=fake_complex_energy),
+            _compute_complex_gb_energy_with_state=MagicMock(
+                return_value=(fake_complex_energy, MagicMock(), MagicMock()),
+            ),
+            _compute_energy_without_ligand=MagicMock(return_value=fake_rec_energy),
         ):
             result = rescore_with_mmgbsa(
                 [candidate],
@@ -344,7 +390,10 @@ class TestWaterDisplacementCorrection:
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
             _compute_ligand_gb_energy=MagicMock(return_value=50.0),
-            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+            _compute_complex_gb_energy_with_state=MagicMock(
+                return_value=(-1950.0, MagicMock(), MagicMock()),
+            ),
+            _compute_energy_without_ligand=MagicMock(return_value=-2000.0),
         ):
             result = rescore_with_mmgbsa(
                 [candidate],
@@ -381,7 +430,10 @@ class TestWaterDisplacementCorrection:
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
             _compute_ligand_gb_energy=MagicMock(return_value=50.0),
-            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+            _compute_complex_gb_energy_with_state=MagicMock(
+                return_value=(-1950.0, MagicMock(), MagicMock()),
+            ),
+            _compute_energy_without_ligand=MagicMock(return_value=-2000.0),
         ):
             result = rescore_with_mmgbsa(
                 [candidate],
@@ -431,7 +483,10 @@ class TestWaterDisplacementIntegration:
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
             _compute_ligand_gb_energy=MagicMock(return_value=50.0),
-            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+            _compute_complex_gb_energy_with_state=MagicMock(
+                return_value=(-1950.0, MagicMock(), MagicMock()),
+            ),
+            _compute_energy_without_ligand=MagicMock(return_value=-2000.0),
         ):
             result = rescore_with_mmgbsa(
                 [candidate],
@@ -472,7 +527,10 @@ class TestWaterDisplacementIntegration:
                 return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
             ),
             _compute_ligand_gb_energy=MagicMock(return_value=50.0),
-            _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+            _compute_complex_gb_energy_with_state=MagicMock(
+                return_value=(-1950.0, MagicMock(), MagicMock()),
+            ),
+            _compute_energy_without_ligand=MagicMock(return_value=-2000.0),
         ):
             result = rescore_with_mmgbsa(
                 [candidate],
@@ -512,7 +570,10 @@ class TestEnsembleMMGBSA:
                     return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
                 ),
                 _compute_ligand_gb_energy=MagicMock(return_value=50.0),
-                _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+                _compute_complex_gb_energy_with_state=MagicMock(
+                    return_value=(-1950.0, MagicMock(), MagicMock()),
+                ),
+                _compute_energy_without_ligand=MagicMock(return_value=-2000.0),
             ):
                 result = rescore_with_mmgbsa(
                     top_candidates,
@@ -544,7 +605,10 @@ class TestEnsembleMMGBSA:
                     return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
                 ),
                 _compute_ligand_gb_energy=MagicMock(return_value=50.0),
-                _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+                _compute_complex_gb_energy_with_state=MagicMock(
+                    return_value=(-1950.0, MagicMock(), MagicMock()),
+                ),
+                _compute_energy_without_ligand=MagicMock(return_value=-2000.0),
             ):
                 result = rescore_with_mmgbsa(
                     top_candidates,
@@ -579,7 +643,10 @@ class TestEnsembleMMGBSA:
                     return_value=(MagicMock(), MagicMock(), MagicMock(), -2000.0)
                 ),
                 _compute_ligand_gb_energy=MagicMock(return_value=50.0),
-                _compute_complex_gb_energy=MagicMock(return_value=-1950.0),
+                _compute_complex_gb_energy_with_state=MagicMock(
+                    return_value=(-1950.0, MagicMock(), MagicMock()),
+                ),
+                _compute_energy_without_ligand=MagicMock(return_value=-2000.0),
             ):
                 result = rescore_with_mmgbsa(
                     top_candidates[:1],
@@ -941,16 +1008,17 @@ class TestExplicitSolventMMGBSA:
                         with patch("autoantibiotic.ml_scoring.scoring._openmm_app", _mock_openmm_app, create=True):
                             with patch("autoantibiotic.ml_scoring.scoring._openmm_unit", _mock_openmm_unit, create=True):
                                 with patch("autoantibiotic.ml_scoring.scoring._compute_ligand_gb_energy", return_value=50.0):
-                                    with patch("autoantibiotic.ml_scoring.scoring._compute_complex_gb_energy", return_value=-1950.0):
-                                        mock_fixer = MagicMock()
-                                        mock_fixer.topology = MagicMock()
-                                        mock_fixer.positions = []
-                                        _pdbfixer_mock.PDBFixer.return_value = mock_fixer
+                                    with patch("autoantibiotic.ml_scoring.scoring._compute_energy_without_ligand", return_value=-2000.0):
+                                        with patch("autoantibiotic.ml_scoring.scoring._compute_complex_gb_energy", return_value=-1950.0):
+                                            mock_fixer = MagicMock()
+                                            mock_fixer.topology = MagicMock()
+                                            mock_fixer.positions = []
+                                            _pdbfixer_mock.PDBFixer.return_value = mock_fixer
 
-                                        from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
-                                        result = rescore_with_explicit_mmgbsa(
-                                            top_candidates, pdb_path, temp_work_dir,
-                                        )
+                                            from autoantibiotic.ml_scoring.scoring import rescore_with_explicit_mmgbsa
+                                            result = rescore_with_explicit_mmgbsa(
+                                                top_candidates, pdb_path, temp_work_dir,
+                                            )
             assert len(result) == len(top_candidates)
         finally:
             CONFIG.use_explicit_solvent_mmgbsa = saved_flag

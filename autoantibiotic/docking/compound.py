@@ -15,18 +15,12 @@ from ..config import CONFIG, PipelineConfig, ConfigurationError
 from ..models import CompoundRecord
 from ..io_utils import (
     AutoAntibioticError,
-    DockingParseError,
-    DockingResultValidator,
-    GninaError,
-    ToolExecutor,
-    VinaError,
     log,
     make_cache_key,
 )
 from .base import DockingEngine
 
 _CacheLike = Optional[Dict[str, float]]
-_DOCKING_BINARY_VALIDATED: bool = False
 
 
 # ── Ligand Preparation ─────────────────────────────────────────────
@@ -120,134 +114,6 @@ def prepare_ligand_pdbqt(
         log.warning(f"  Ligand preparation failed unexpectedly: {exc3}")
         return False
 
-
-# ── Internal docking-tool runner ───────────────────────────────────
-
-
-def _run_docking_tool(
-    tool_name: str,
-    receptor_pdbqt: str,
-    ligand_pdbqt: str,
-    output_pdbqt: str,
-    center: np.ndarray,
-    box_size: Tuple[float, float, float],
-    timeout: Optional[int] = None,
-    config: Optional[PipelineConfig] = None,
-    engine: Optional[DockingEngine] = None,
-) -> Optional[float]:
-    """Run a single docking job via the external tool wrapper.
-
-    Builds the command-line invocation for the given docking tool
-    (*vina* or *gnina*) with the specified receptor, ligand, search-box
-    centre and dimensions, then parses the score from the tool's output.
-
-    Args:
-        tool_name: ``"vina"`` or ``"gnina"``.
-        receptor_pdbqt: Path to the receptor PDBQT file.
-        ligand_pdbqt: Path to the ligand PDBQT file.
-        output_pdbqt: Path to write the docked-pose PDBQT file.
-        center: 3-element array of (x, y, z) box centre coordinates.
-        box_size: Tuple of (x, y, z) box dimensions in Ångström.
-        timeout: Maximum wall-clock seconds for the subprocess.
-        config: Optional pipeline config.
-        engine: Optional DockingEngine instance. When provided, delegates
-            to engine.dock() instead of running the binary directly.
-
-    Returns:
-        Best binding energy (kcal/mol) for vina, CNNscore (0–1) for
-        gnina, or None if docking failed or timed out.
-    """
-    cfg = config or CONFIG
-
-    if engine is not None:
-        return engine.dock(ligand_pdbqt, receptor_pdbqt, center, box_size)
-
-    if timeout is None:
-        timeout = cfg.vina_timeout_s
-
-    if cfg.dry_run:
-        if tool_name == "gnina":
-            return float(np.random.uniform(0.5, 0.95))
-        return float(np.random.uniform(-10.0, -5.0))
-
-    binary = cfg.gnina_binary_path if tool_name == "gnina" else "vina"
-
-    args = [
-        "--receptor", receptor_pdbqt,
-        "--ligand", ligand_pdbqt,
-        "--out", output_pdbqt,
-        "--center_x", f"{center[0]:.3f}",
-        "--center_y", f"{center[1]:.3f}",
-        "--center_z", f"{center[2]:.3f}",
-        "--size_x", f"{box_size[0]:.1f}",
-        "--size_y", f"{box_size[1]:.1f}",
-        "--size_z", f"{box_size[2]:.1f}",
-        "--exhaustiveness", str(cfg.vina_exhaustiveness),
-        "--num_modes", str(cfg.vina_num_modes),
-    ]
-
-    validator = DockingResultValidator()
-
-    global _DOCKING_BINARY_VALIDATED
-    if (
-        cfg.validate_docking_binaries_on_startup
-        and not _DOCKING_BINARY_VALIDATED
-    ):
-        health_executor = ToolExecutor(retry=False)
-        try:
-            version_result = health_executor.run(binary, ["--version"], timeout=10)
-            version_out = version_result.stdout or version_result.stderr
-            if not validator.validate_binary_health(tool_name, version_out):
-                raise ConfigurationError(
-                    f"{binary} version check failed. "
-                    f"Expected Vina 1.2.x or GNINA 1.x, got: "
-                    f"{version_out.strip()!r}"
-                )
-            log.info(f"  ✓  {binary} binary health validated.")
-        except AutoAntibioticError as exc:
-            raise ConfigurationError(
-                f"Cannot run {binary} for version check: {exc}"
-            )
-        _DOCKING_BINARY_VALIDATED = True
-
-    executor = ToolExecutor(retry=True)
-    try:
-        result = executor.run(binary, args, timeout=timeout)
-        if result.returncode != 0 or result.timed_out:
-            log.warning(f"  {binary} error: {result.stderr.strip() or 'timed out'}")
-            raise DockingParseError(
-                f"{binary} returned non-zero exit code {result.returncode}. "
-                f"stderr: {result.stderr.strip()}"
-            )
-        if tool_name == "gnina":
-            score = validator.parse_gnina(result.stdout)
-            if score is not None:
-                return score
-            score = validator.parse_gnina(result.stderr)
-            if score is not None:
-                return score
-            raise DockingParseError(
-                f"{binary} output did not contain a valid CNNscore/CNNaffinity."
-            )
-        else:
-            energy = validator.parse_vina(result.stdout)
-            if energy is not None:
-                return energy
-            energy = validator.parse_vina(result.stderr)
-            if energy is not None:
-                return energy
-            raise DockingParseError(
-                f"{binary} output did not contain a valid binding energy."
-            )
-    except (RuntimeError, VinaError, GninaError, AutoAntibioticError) as exc:
-        log.warning(f"  {binary} execution failed: {exc}")
-        if isinstance(exc, DockingParseError):
-            raise
-        if isinstance(exc, (VinaError, GninaError)):
-            raise DockingParseError(str(exc)) from exc
-        return None
-
-
 # ── Single-compound docking ────────────────────────────────────────
 
 
@@ -288,21 +154,18 @@ def dock_compound(
         return None, "PrepFailure"
 
     method = "None"
-    try:
-        energy = _run_docking_tool(tool_name, receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size, config=cfg, engine=engine)
-        method = "GNINA" if tool_name == "gnina" else "Vina"
-    except DockingParseError:
-        energy = None
+    if engine is None:
+        from . import get_engine
+        engine = get_engine(tool_name, cfg)
+    energy = engine.dock(lig_pdbqt, receptor_pdbqt, center, box_size)
+    method = "GNINA" if tool_name == "gnina" else "Vina"
 
     if energy is None and cfg.use_gnina:
         log.warning("  GNINA docking failed, falling back to Vina.")
-        try:
-            from . import get_engine
-            fallback_engine = get_engine("vina", cfg) if engine is not None else None
-            energy = _run_docking_tool("vina", receptor_pdbqt, lig_pdbqt, out_pdbqt, center, box_size, config=cfg, engine=fallback_engine)
-            method = "Vina"
-        except DockingParseError:
-            energy = None
+        from . import get_engine as _get_engine
+        fallback_engine = _get_engine("vina", cfg)
+        energy = fallback_engine.dock(lig_pdbqt, receptor_pdbqt, center, box_size)
+        method = "Vina"
 
     # Keep out_pdbqt on disk for downstream IFP analysis.
     for f in (lig_pdbqt,):

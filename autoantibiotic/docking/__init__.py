@@ -21,7 +21,6 @@ except ImportError:
 from .base import DockingEngine
 from .engines import VinaEngine, GninaEngine, RdkitShapeEngine
 from .compound import (
-    _run_docking_tool,
     dock_compound,
     dock_compound_ensemble,
     prepare_ligand_pdbqt,
@@ -60,7 +59,6 @@ __all__ = [
     "run_redocking_validation",
     "screen_library",
     "_parallel_dock",
-    "_run_docking_tool",
 ]
 
 
