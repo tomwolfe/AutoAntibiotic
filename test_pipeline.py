@@ -645,7 +645,7 @@ class TestMiniPipelineShapeFallback:
 
         for row in rows:
             assert row["PBP2a_Allosteric_Energy"] == "N/A", row
-            assert row["Selectivity_Confidence"] in {"High", "Low", "None"}, row
+            assert row["Selectivity_Confidence"] in {"High", "Low", "None", "Unassessed"}, row
 
 
 # ── Test 10: LigandPreparator ──────────────────────────────────────────────

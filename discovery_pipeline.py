@@ -15,6 +15,7 @@ Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina
 
 import os
 import sys
+import json
 import subprocess
 import logging
 import warnings
@@ -730,17 +731,26 @@ def prepare_targets(
     active_center = compute_residue_centroid(cleaned_pdb, ACTIVE_SITE_RESIDUES)
     log.info(f"    Active site center: {active_center}")
 
-    # Cross-check conserved catalytic residues are present in the structure
+    # Cross-check conserved catalytic residues are present in the structure.
+    # If the conserved centroid cannot be computed, fall back to the active
+    # site centre (which shares SER403) so downstream steps always have a
+    # valid conserved centre rather than leaving it uncalculated.
     try:
-        compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
+        conserved_center = compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Conserved residues {CONSERVED_RESIDUES} missing: {exc}")
+        log.warning(
+            "  Falling back to active-site centre for the conserved centre "
+            "so it is not left uncalculated."
+        )
+        conserved_center = active_center
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
         "cleaned_pdb": pbp2a_clean_pdb,
         "allosteric_center": allosteric_center,
         "active_center": active_center,
+        "conserved_center": conserved_center,
     }
 
     # ── Clean trypsin ──
@@ -831,6 +841,10 @@ class CompoundRecord:
     #   "Low"  if 1 human target provided a valid energy,
     #   "None" if 0 human targets provided a valid energy.
     selectivity_confidence: str = "None"
+
+    # Path to the active-site Vina docked pose (PDBQT), populated during
+    # screening so that pose-based interaction analysis need not re-dock.
+    active_docked_pdbqt: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1338,8 +1352,15 @@ def dock_compound(
         center, box_size,
     )
 
-    # Cleanup temp files
+    # Keep the docked pose for the active site so downstream pose analysis
+    # (binding interactions) can reuse it instead of re-docking.
+    if tag == "active":
+        record.active_docked_pdbqt = out_pdbqt
+
+    # Cleanup temp files (keep the active-site pose for later analysis)
     for f in (lig_pdbqt, out_pdbqt):
+        if tag == "active" and f == out_pdbqt:
+            continue
         try:
             os.remove(f)
         except OSError:
@@ -2047,26 +2068,34 @@ def analyze_selectivity_and_resistance(
         interactions = None
 
         if deps["USE_VINA"] and cleaned_pdb and os.path.exists(cleaned_pdb):
-            # Re-dock to active site to obtain the docked pose for analysis
-            safe_id = rec.compound_id.replace("/", "_").replace(" ", "_")
-            lig_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_lig.pdbqt")
-            out_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_out.pdbqt")
+            # Prefer the active-site pose captured during screening to avoid
+            # re-docking; fall back to a fresh pose dock otherwise.
+            out_pdbqt = getattr(rec, "active_docked_pdbqt", None)
+            if out_pdbqt and os.path.exists(out_pdbqt):
+                try:
+                    interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
+                except Exception:
+                    interactions = None
+            else:
+                safe_id = rec.compound_id.replace("/", "_").replace(" ", "_")
+                lig_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_lig.pdbqt")
+                out_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_out.pdbqt")
 
-            if prepare_ligand_pdbqt(rec.mol, lig_pdbqt):
-                _run_vina_docking(
-                    pb2pa["pdbqt"], lig_pdbqt, out_pdbqt,
-                    pb2pa["active_center"], ACTIVE_BOX_SIZE,
-                )
-                if os.path.exists(out_pdbqt):
+                if prepare_ligand_pdbqt(rec.mol, lig_pdbqt):
+                    _run_vina_docking(
+                        pb2pa["pdbqt"], lig_pdbqt, out_pdbqt,
+                        pb2pa["active_center"], ACTIVE_BOX_SIZE,
+                    )
+                    if os.path.exists(out_pdbqt):
+                        try:
+                            interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
+                            os.remove(out_pdbqt)
+                        except OSError:
+                            pass
                     try:
-                        interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
-                        os.remove(out_pdbqt)
+                        os.remove(lig_pdbqt)
                     except OSError:
                         pass
-                try:
-                    os.remove(lig_pdbqt)
-                except OSError:
-                    pass
 
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
@@ -2124,7 +2153,10 @@ def generate_csv_report(top10: List[CompoundRecord]) -> str:
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
                 else "N/A"
             ) + ("" if rec.selectivity_confidence == "High" else " (low-conf)"),
-            "Selectivity_Confidence": rec.selectivity_confidence,
+            "Selectivity_Confidence": (
+                "Unassessed" if rec.selectivity_confidence == "None"
+                else rec.selectivity_confidence
+            ),
             "Shape_Score": (
                 f"{rec.shape_score:.2f}" if rec.shape_score is not None
                 else "N/A"
@@ -2217,12 +2249,45 @@ def main(target_count: int = 500):
     targets = prepare_targets(pdb_dir, work_dir, deps)
 
     # ── Phase 0: Redocking validation ──
-    validation_ok, redock_rmsd = run_redocking_validation(
-        holo_pdb_path=targets["holo_pdb"],
-        target_pdbqt_path=targets["PBP2a"]["pdbqt"],
-        work_dir=work_dir,
-        deps=deps,
-    )
+    # Skip the (expensive) redocking gate if a prior successful run already
+    # wrote the validation flag, unless AUTOANTIBIOTIC_FORCE is set.
+    validation_flag = os.path.join(work_dir, ".validation_done")
+    validation_json = os.path.join(work_dir, "validation_results.json")
+
+    if os.path.exists(validation_flag) and not os.environ.get("AUTOANTIBIOTIC_FORCE"):
+        try:
+            with open(validation_json) as fh:
+                vdata = json.load(fh)
+            validation_ok = bool(vdata.get("validation_ok", False))
+            redock_rmsd = vdata.get("redock_rmsd", None)
+            log.info("  Reusing cached redocking validation from previous run.")
+        except Exception as exc:
+            log.warning(f"  Could not read cached validation ({exc}); re-running.")
+            validation_ok, redock_rmsd = run_redocking_validation(
+                holo_pdb_path=targets["holo_pdb"],
+                target_pdbqt_path=targets["PBP2a"]["pdbqt"],
+                work_dir=work_dir,
+                deps=deps,
+            )
+    else:
+        validation_ok, redock_rmsd = run_redocking_validation(
+            holo_pdb_path=targets["holo_pdb"],
+            target_pdbqt_path=targets["PBP2a"]["pdbqt"],
+            work_dir=work_dir,
+            deps=deps,
+        )
+        # Persist a successful validation so subsequent runs can skip it.
+        if validation_ok and not os.environ.get("AUTOANTIBIOTIC_FORCE"):
+            try:
+                with open(validation_json, "w") as fh:
+                    json.dump(
+                        {"validation_ok": validation_ok, "redock_rmsd": redock_rmsd},
+                        fh,
+                    )
+                with open(validation_flag, "w") as fh:
+                    fh.write("done")
+            except Exception as exc:
+                log.warning(f"  Could not cache validation result ({exc}).")
 
     if not validation_ok and not os.environ.get("AUTOANTIBIOTIC_FORCE"):
         log.error(
