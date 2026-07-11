@@ -1,4 +1,7 @@
-rdkit-pypi==2023.9.6
+# RDKit: install via conda rather than pip for stability:
+#   conda install -c conda-forge rdkit
+# The rdkit-pypi pip package works but is not recommended for production.
+# RDKit is NOT listed here to avoid accidental pip installation.
 biopython==1.83
 pandas==2.1.5
 numpy==1.26.2

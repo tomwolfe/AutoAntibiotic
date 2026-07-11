@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
+import sys
 from pathlib import Path
 from typing import Optional, List
 
@@ -106,6 +108,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Validate all pipeline inputs (binaries, SMILES, directories) and exit. "
         "Returns exit code 0 on success, 1 if any issues are found.",
     )
+    parser.add_argument(
+        "--show-config", action="store_true",
+        help="Print the final resolved configuration as JSON and exit.",
+    )
     args = parser.parse_args(argv)
 
     # ── Create a local copy of CONFIG and apply CLI overrides ──
@@ -155,6 +161,11 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if args.retrain_model is not None:
         cfg.retrain_model_path = args.retrain_model
+
+    # ── Show resolved configuration and exit ──
+    if args.show_config:
+        print(json.dumps(cfg.__dict__, default=str, indent=2))
+        raise SystemExit(0)
 
     # ── Validate inputs (if requested) ──
     if args.validate_inputs:

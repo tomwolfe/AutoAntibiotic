@@ -8,7 +8,9 @@ version = "4.0.0"
 description = "MRSA PBP2a Inhibitor Screening Pipeline"
 requires-python = ">=3.9"
 dependencies = [
-    "rdkit-pypi>=2023.9.6",
+    # RDKit: install via conda (conda install -c conda-forge rdkit) rather than pip,
+    # as the conda distribution is more stable and includes full functionality.
+    # The rdkit-pypi pip package works but is not recommended for production.
     "biopython>=1.83",
     "pandas>=2.1.5",
     "numpy>=1.26.2",

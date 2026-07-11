@@ -893,6 +893,33 @@ def validate_pipeline_inputs(config: PipelineConfig) -> Dict[str, List[str]]:
     return issues
 
 
+def check_optional_dependencies() -> None:
+    """Check for optional external binaries and log prominent warnings
+    when they are missing.
+
+    Uses ``shutil.which`` for Vina/GNINA and ``importlib.util.find_spec``
+    for the OpenMM Python package.
+    """
+    import importlib.util
+    import shutil
+
+    if shutil.which("vina") is None:
+        log.warning(
+            "  ⚠️  Vina not found. Falling back to RDKit Shape scoring."
+        )
+
+    if shutil.which("gnina") is None:
+        log.warning(
+            "  ⚠️  GNINA not found. Falling back to AutoDock Vina."
+        )
+
+    if importlib.util.find_spec("openmm") is None:
+        log.warning(
+            "  ⚠️  OpenMM not found. MM-GB/SA rescoring and FEP will be "
+            "unavailable."
+        )
+
+
 def verify_dependencies() -> Dict[str, Any]:
     """Phase 0 — Dependency Verification.
 
@@ -952,5 +979,8 @@ def verify_dependencies() -> Dict[str, Any]:
             "  No PDBQT conversion tool found. A minimal RDKit-based PDBQT "
             "fallback will be used for the receptor."
         )
+
+    # Also check optional dependencies for a prominent startup warning
+    check_optional_dependencies()
 
     return status

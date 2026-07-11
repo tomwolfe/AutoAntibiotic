@@ -44,19 +44,21 @@ conda create -n autoantibiotic python=3.11
 conda activate autoantibiotic
 ```
 
-### 3. Install Python dependencies
+### 3. Install RDKit (Conda-only, required)
 
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Install RDKit (Conda-only, recommended over pip)
+RDKit **must** be installed via Conda for stability and full functionality:
 
 ```bash
 conda install -c conda-forge rdkit
 ```
 
-> **Note:** The `rdkit-pypi` pip package works but the Conda version is more stable and includes additional functionality.
+> **Note:** Do **not** install `rdkit-pypi` via pip — it is not listed in `requirements.txt` intentionally. The Conda distribution is the supported installation method.
+
+### 4. Install remaining Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
 
 ### 5. Install optional external binaries
 
@@ -211,6 +213,22 @@ python -c "from autoantibiotic.config import CONFIG; CONFIG.use_fep_resistance =
 ```
 
 This uses OpenMM + openmmtools to compute ΔΔG between wild-type and mutant receptor binding via alchemical free energy methods (see "FEP resistance profiling — Top-Hit Only" above).
+
+### Showing resolved configuration
+
+```bash
+python -m autoantibiotic --show-config
+```
+
+Prints the final resolved configuration as a JSON object and exits. Useful for debugging or verifying CLI overrides.
+
+### Validating pipeline inputs
+
+```bash
+python -m autoantibiotic --validate-inputs
+```
+
+Checks all pipeline inputs (binaries, SMILES, directories) and returns exit code 0 if valid, 1 if issues are found.
 
 ### Combining options
 
