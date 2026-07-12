@@ -826,6 +826,11 @@ def prepare_targets(
     ):
         log.info("CI mode: using mock PDBs - not for scientific use.")
         result["mode"] = "ci"
+    elif os.environ.get("AUTOANTIBIOTIC_CI") == "1":
+        # Allow forcing CI/mock behaviour explicitly without relying on the
+        # bundled-PDB path heuristic (e.g. when structures are injected).
+        result["mode"] = "ci"
+        log.info("CI mode forced via env")
     else:
         result["mode"] = os.environ.get("AUTOANTIBIOTIC_MODE", "science")
 
@@ -1006,6 +1011,10 @@ NATURAL_PRODUCT_SCAFFOLDS = [
     "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin
     "COc1cc2c(cc1OC)[n+]1ccc3cc4c(cc3c1CC2)OCO4",              # Berberine
     "CC1(C)OC2C3C(=O)OC4C(OO5)C3C5C2C4O1",                     # Artemisinin (approximate)
+    "Oc1ccccc1C(=O)O",                                         # Salicylic acid (salicylate)
+    "O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12",                    # 7-Hydroxyflavone (flavonoid core)
+    "CC1OCCCC(=O)C1",                                          # Macrolide-like lactone core (no β-lactam)
+    "Oc1c(O)c(O)cc(C(=O)O)c1",                                 # Gallic acid (phenolic)
 ]
 
 # Positive control SMILES (to verify pipeline)
@@ -1940,49 +1949,31 @@ def profile_resistance_risk(
     Rule-based resistance profiling, optionally informed by pose analysis.
 
     Flags candidates based on predicted interactions with conserved PBP2a
-    residues.  If *interactions* is None the function falls back to an
-    internal call to ``analyze_binding_interactions`` which reuses the
-    active-site docked pose from screening (record.active_docked_pdbqt).
+    residues.  The interaction fingerprint (*interactions*) must be supplied
+    by the caller — it is derived from the active-site pose captured during
+    screen_library (record.active_docked_pdbqt).  This function no longer
+    re-docks internally; if *interactions* is None it notes "no pose".
 
     Args:
         record: Compound record containing docking scores.
         work_dir: Working directory for temporary files.
         receptor_pdbqt: Path to the PBP2a receptor PDBQT file.
-        center: Grid box centre (used for re-docking).
-        box_size: Grid box dimensions.
+        center: Grid box centre (unused — retained for signature stability).
+        box_size: Grid box dimensions (unused — retained for stability).
         interactions: Pre-computed interaction fingerprint dict returned by
-                      ``analyze_binding_interactions``.  If None the
-                      function will perform the analysis internally.
+                      ``analyze_binding_interactions``.  If None, the pose is
+                      flagged as unavailable.
 
     Returns a human-readable notes string.
     """
     pose_notes = []
     energy_notes = []
 
-    # Perform interaction analysis if not already supplied
+    # Pose-based interactions are supplied by the caller (the active-site pose
+    # captured during screen_library via record.active_docked_pdbqt). We no
+    # longer re-dock here — if no pose is available we simply note that.
     if interactions is None:
-        safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
-        lig_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_lig.pdbqt")
-        out_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_out.pdbqt")
-
-        try:
-            if prepare_ligand_pdbqt(rec.mol, lig_pdbqt):
-                _run_vina_docking(
-                    receptor_pdbqt, lig_pdbqt, out_pdbqt,
-                    center, box_size,
-                )
-                interactions = analyze_binding_interactions(out_pdbqt, receptor_pdbqt)
-                try:
-                    os.remove(out_pdbqt)
-                except OSError:
-                    pass
-            else:
-                interactions = None
-        except Exception:
-            interactions = None
-
-    if interactions is None:
-        pose_notes.append("No binding interactions could be analysed.")
+        pose_notes.append("no pose — binding interactions not analysed.")
     else:
         # ── Quantitative resistance check from measured pose distances ──
         # The interaction fingerprint already exposes the minimum ligand→residue
@@ -2179,35 +2170,17 @@ def analyze_selectivity_and_resistance(
     for rec in top10:
         interactions = None
 
-        if deps["USE_VINA"] and cleaned_pdb and os.path.exists(cleaned_pdb):
-            # Prefer the active-site pose captured during screening to avoid
-            # re-docking; fall back to a fresh pose dock otherwise.
+        # Always use the active-site pose captured during screen_library
+        # (record.active_docked_pdbqt) for pose-based interaction analysis.
+        # If no pose was retained (e.g. fallback shape screening), skip the
+        # analysis and let profile_resistance_risk note "no pose".
+        if cleaned_pdb and os.path.exists(cleaned_pdb):
             out_pdbqt = getattr(rec, "active_docked_pdbqt", None)
             if out_pdbqt and os.path.exists(out_pdbqt):
                 try:
                     interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
                 except Exception:
                     interactions = None
-            else:
-                safe_id = rec.compound_id.replace("/", "_").replace(" ", "_")
-                lig_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_lig.pdbqt")
-                out_pdbqt = os.path.join(work_dir, f"{safe_id}_pose_out.pdbqt")
-
-                if prepare_ligand_pdbqt(rec.mol, lig_pdbqt):
-                    _run_vina_docking(
-                        pb2pa["pdbqt"], lig_pdbqt, out_pdbqt,
-                        pb2pa["active_center"], ACTIVE_BOX_SIZE,
-                    )
-                    if os.path.exists(out_pdbqt):
-                        try:
-                            interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
-                            os.remove(out_pdbqt)
-                        except OSError:
-                            pass
-                    try:
-                        os.remove(lig_pdbqt)
-                    except OSError:
-                        pass
 
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
@@ -2482,8 +2455,16 @@ def main(target_count: int = 500, force: bool = False):
     n_filtered = len(filtered)
 
     if n_filtered == 0:
-        log.warning("  No compounds passed filters. Halting pipeline.")
-        return
+        # No compound survived the strict+relaxed filter chain. Rather than
+        # silently abort (which would yield no report at all), fall back to
+        # the unfiltered generated library so a candidate report is still
+        # produced. These candidates carry no ADMET/PAINS guarantees and are
+        # flagged accordingly downstream.
+        log.warning(
+            "  No compounds passed filters. Falling back to the unfiltered "
+            "generated library so a report is still produced."
+        )
+        filtered = all_records
 
     # ── Phase 3: Virtual screening ──
     top10 = screen_library(filtered, targets, work_dir, deps)
