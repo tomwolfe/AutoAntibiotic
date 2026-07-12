@@ -1119,6 +1119,52 @@ class TestConservedResiduesCentroid:
 
 # ── Test: Offline local PDB loading ──────────────────────────────────────
 
+class TestPrepareTargetsNoneCenter:
+    def test_active_center_none_when_centroid_fails(self, tmp_path):
+        """
+        When compute_residue_centroid raises for the active site (both
+        CONSERVED_RESIDUES and ACTIVE_SITE_RESIDUES), prepare_targets must
+        leave PBP2a active_center as None instead of falling back to the
+        allosteric center.
+        """
+        from discovery_pipeline import prepare_targets, CONSERVED_RESIDUES, ACTIVE_SITE_RESIDUES
+        import discovery_pipeline as dp
+
+        pdb = tmp_path / "p.pdb"
+        pdb.write_text(textwrap.dedent("""\
+            ATOM      1  N   ALA A 237      41.234  12.345  78.901  1.00  0.00           N
+            ATOM      2  CA  ALA A 237      42.345  13.456  79.012  1.00  0.00           C
+            ATOM      3  C   ALA A 237      43.456  14.567  80.123  1.00  0.00           C
+            ATOM      4  O   ALA A 237      44.567  15.678  81.234  1.00  0.00           O
+            END
+        """))
+
+        active_res = [list(CONSERVED_RESIDUES), list(ACTIVE_SITE_RESIDUES)]
+
+        def side_centroid(p, r):
+            if r in active_res:
+                raise ValueError("No matching residues found")
+            return np.zeros(3)
+
+        def side_clean(in_path, out_path, **kwargs):
+            import shutil
+            shutil.copy(str(pdb), out_path)
+            return out_path
+
+        with patch.object(dp, "fetch_structure", return_value=str(pdb)):
+            with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
+                with patch.object(dp, "compute_residue_centroid", side_effect=side_centroid):
+                    result = prepare_targets(
+                        str(tmp_path), str(tmp_path),
+                        {"vina": False, "USE_VINA": False},
+                    )
+
+        assert result["PBP2a"]["active_center"] is None, (
+            "PBP2a active_center should be None when active-site centroid "
+            "computation fails."
+        )
+
+
 class TestOfflinePDBLoad:
     def test_uses_local_3qpd_pdb(self, tmp_path):
         """

@@ -871,7 +871,7 @@ def prepare_targets(
         except (ValueError, Exception) as exc2:
             log.warning(f"  ⚠  Active-site residues {ACTIVE_SITE_RESIDUES} missing: {exc2}")
             log.warning("  Residue missing – grid center set to None; supply real PDB.")
-            active_center = allosteric_center
+            active_center = None
     log.info(f"    Active site center: {active_center}")
 
     if allosteric_center is None or active_center is None:
@@ -899,8 +899,8 @@ def prepare_targets(
         tryp_center = compute_residue_centroid(tryp_clean_pdb, TRYPSIN_CATALYTIC_RESIDUES)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Trypsin catalytic residues {TRYPSIN_CATALYTIC_RESIDUES} missing: {exc}")
-        log.warning("  Falling back to the origin for the trypsin centre.")
-        tryp_center = np.zeros(3)
+        log.warning("  Residue missing – grid center set to None; supply real PDB.")
+        tryp_center = None
     log.info(f"    Trypsin active site center: {tryp_center}")
     result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
 
@@ -916,8 +916,8 @@ def prepare_targets(
         ces1_center = compute_residue_centroid(ces1_clean_pdb, CES1_CATALYTIC_RESIDUES)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  CES1 catalytic residues {CES1_CATALYTIC_RESIDUES} missing: {exc}")
-        log.warning("  Falling back to the origin for the CES1 centre.")
-        ces1_center = np.zeros(3)
+        log.warning("  Residue missing – grid center set to None; supply real PDB.")
+        ces1_center = None
     log.info(f"    CES1 active site center: {ces1_center}")
     result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
 
@@ -1015,6 +1015,9 @@ NATURAL_PRODUCT_SCAFFOLDS = [
     "O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12",                    # 7-Hydroxyflavone (flavonoid core)
     "CC1OCCCC(=O)C1",                                          # Macrolide-like lactone core (no β-lactam)
     "Oc1c(O)c(O)cc(C(=O)O)c1",                                 # Gallic acid (phenolic)
+    "CC1=C(C=C(C=C1)O)O",                                      # Hydroquinone
+    "COc1cc2c(cc1OC)C(=O)C3=C(O)C=CC(=C3O2)C",                 # Rottlerin
+    "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",                            # Caffeine
 ]
 
 # Positive control SMILES (to verify pipeline)
@@ -2417,17 +2420,6 @@ def main(target_count: int = 500, force: bool = False):
                 "  ✗  Redocking validation failed in science mode — docking "
                 "results should be interpreted with caution."
             )
-        # Persist a successful validation so subsequent runs can reuse it
-        # only when force + AUTOANTIBIOTIC_FORCE=1 are both given.
-        if validation_ok and reuse_cache:
-            try:
-                with open(validation_json, "w") as fh:
-                    json.dump(
-                        {"validation_ok": validation_ok, "redock_rmsd": redock_rmsd},
-                        fh,
-                    )
-            except Exception as exc:
-                log.warning(f"  Could not cache validation result ({exc}).")
 
     if validation_ok is None:
         log.info(
