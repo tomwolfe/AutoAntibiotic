@@ -13,6 +13,8 @@ Author: AutoAntibiotic Agent
 Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina
 
 CI mode: set USE_VINA=False or use bundled tests/data mocks; real PDBs required for scientific validation.
+
+Bundled tests/data PDBs are minimal mocks; redocking RMSD against them is non‑physical. Use real PDB downloads for science mode.
 """
 
 import os
@@ -2375,13 +2377,12 @@ def main(target_count: int = 500, force: bool = False, cache: bool = False):
     # The (expensive) redocking gate is always executed when USE_VINA=True.
     # The only way to skip it and reuse a prior cached validation is when the
     # user explicitly passes --force AND env AUTOANTIBIOTIC_FORCE=1 is set.
-    validation_flag = os.path.join(work_dir, ".validation_done")
     validation_json = os.path.join(work_dir, "validation_results.json")
 
     reuse_cache = (
         os.environ.get("AUTOANTIBIOTIC_FORCE") == "1"
         and force
-        and os.path.exists(validation_flag)
+        and os.path.exists(validation_json)
     )
 
     if reuse_cache:
@@ -2406,6 +2407,22 @@ def main(target_count: int = 500, force: bool = False, cache: bool = False):
             work_dir=work_dir,
             deps=deps,
         )
+        # Hard gate for science mode: a failed redocking validation against
+        # real PDBs is scientifically unacceptable and must not be silently
+        # bypassed. CI mode (mock PDBs) keeps this diagnostic only.
+        if (
+            targets.get("mode") == "science"
+            and deps["USE_VINA"] is True
+            and validation_ok is False
+        ):
+            if os.environ.get("AUTOANTIBIOTIC_FORCE") == "1":
+                log.warning(
+                    "  ⚠  Redocking validation FAILED in science mode but "
+                    "AUTOANTIBIOTIC_FORCE=1 is set — bypassing gate."
+                )
+            else:
+                log.error("Redocking validation failed on real PDBs – aborting.")
+                sys.exit(2)
         # Persist a successful validation so subsequent runs can reuse it
         # only when force + AUTOANTIBIOTIC_FORCE=1 are both given.
         if validation_ok and reuse_cache:
@@ -2507,7 +2524,11 @@ if __name__ == "__main__":
     parser.add_argument("--count", type=int, default=500, help="Target compound count")
     parser.add_argument(
         "--force", action="store_true",
-        help="Reuse cached redocking validation (requires AUTOANTIBIOTIC_FORCE=1)",
+        help=(
+            "Reuse cached redocking validation OR bypass a failed redocking gate "
+            "in science mode. Requires AUTOANTIBIOTIC_FORCE=1 to reuse cached "
+            "validation OR to bypass a failed redocking gate in science mode."
+        ),
     )
     parser.add_argument(
         "--cache", action="store_true",
