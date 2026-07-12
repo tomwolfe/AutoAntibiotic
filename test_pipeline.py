@@ -26,6 +26,7 @@ from discovery_pipeline import (
     _run_vina_docking,
     compute_selectivity_index,
     analyze_binding_interactions,
+    profile_resistance_risk,
     LigandPreparator,
     CompoundRecord,
     BETA_LACTAM_SMARTS,
@@ -1188,6 +1189,45 @@ class TestCsvLowConfSuffix:
         by_id = {r["Compound_ID"]: r for r in rows}
         assert by_id["AA-0001"]["Selectivity_Index"] == "3.50", by_id["AA-0001"]
         assert by_id["AA-0002"]["Selectivity_Index"] == "1.20 (low-conf)", by_id["AA-0002"]
+
+
+# ── Test: resistance flags unverified residue on missing SER403 ─────────────
+
+class TestResistanceUnverifiedResidue:
+    def test_resistance_unverified_on_missing_residue(self, tmp_path):
+        """
+        When the cleaned receptor PDB lacks SER403, profile_resistance_risk must
+        report an 'unverified' residue note rather than fabricating a distance.
+        """
+        # Cleaned PDB missing SER403 (only LYS406 and TYR446 present).
+        receptor = tmp_path / "receptor_no_ser403.pdb"
+        receptor.write_text(textwrap.dedent("""\
+            ATOM      1  NZ  LYS A 406      16.000  12.000  10.000  1.00  0.00           N
+            ATOM      2  OH  TYR A 446      21.000  12.000  10.000  1.00  0.00           O
+            END
+        """))
+
+        ligand = tmp_path / "ligand.pdbqt"
+        ligand.write_text(textwrap.dedent("""\
+            ATOM      1  C   LIG A   1      16.500  12.500  10.000  1.00  0.00           C
+            ATOM      2  C   LIG A   1      21.200  12.200  10.000  1.00  0.00           C
+            END
+        """))
+
+        interactions = analyze_binding_interactions(str(ligand), str(receptor))
+        assert interactions["min_dist_Ser403"] == float("inf")
+        assert "Ser403" in interactions["unverified_residues"]
+
+        record = CompoundRecord(compound_id="AA-UNV", smiles="c1ccccc1")
+        notes = profile_resistance_risk(
+            record,
+            str(tmp_path),
+            "receptor.pdbqt",
+            np.zeros(3),
+            (20.0, 20.0, 20.0),
+            interactions=interactions,
+        )
+        assert "unverified" in notes.lower(), notes
 
 
 if __name__ == "__main__":

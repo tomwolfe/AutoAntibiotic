@@ -953,6 +953,12 @@ def prepare_targets(
 @dataclass
 class CompoundRecord:
     """Stores all computed properties for a single candidate."""
+
+    # Selectivity confidence labels
+    CONF_HIGH = "High"
+    CONF_LOW = "Low"
+    CONF_NONE = "None"
+
     compound_id: str
     smiles: str
     mol: Optional[Chem.Mol] = None
@@ -1867,9 +1873,13 @@ def analyze_binding_interactions(
     results: Dict[str, Union[bool, float]] = {}
     min_dists: Dict[str, float] = {}
 
+    unverified_residues: List[str] = []
     for resname, coords in atom_coords.items():
         if not coords:
+            # The supplied receptor PDB lacks this key residue: do NOT fake a
+            # distance. Mark it unverified and leave min_dist as +inf.
             min_dists[resname] = float("inf")
+            unverified_residues.append(resname)
             continue
         ref = np.array(coords)
         distances = np.linalg.norm(
@@ -1887,6 +1897,10 @@ def analyze_binding_interactions(
     results["min_dist_Ser403"] = min_dists.get("Ser403", float("inf"))
     results["min_dist_Lys406"] = min_dists.get("Lys406", float("inf"))
     results["min_dist_Tyr446"] = min_dists.get("Tyr446", float("inf"))
+
+    # Residues absent from the supplied receptor PDB (unverified — no faked
+    # coordinates or distances were used for them).
+    results["unverified_residues"] = unverified_residues
 
     return results
 
@@ -1983,6 +1997,13 @@ def profile_resistance_risk(
         lys = interactions.get("min_dist_Lys406", float("inf"))
         tyr = interactions.get("min_dist_Tyr446", float("inf"))
 
+        # Residues absent from the cleaned receptor PDB are unverified: flag
+        # them explicitly rather than treating their (infinite) distance as a
+        # scientific measurement.
+        unverified = interactions.get("unverified_residues") or []
+        for resname in unverified:
+            pose_notes.append(f"unverified residue ({resname}) — absent from cleaned PDB")
+
         if np.isfinite(ser):
             if ser < 3.5:
                 pose_notes.append(f"Strong catalytic engagement (Ser403, d={ser:.2f} Å)")
@@ -2074,7 +2095,7 @@ def analyze_selectivity_and_resistance(
         log.warning("  Vina unavailable — skipping selectivity docking. Flagging all as uncertain.")
         for rec in top10:
             rec.selectivity_index = None
-            rec.selectivity_confidence = "None"
+            rec.selectivity_confidence = CompoundRecord.CONF_NONE
             rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
         return top10
 
@@ -2109,11 +2130,11 @@ def analyze_selectivity_and_resistance(
         # Track how many human off-targets provided valid energies and
         # record the resulting selectivity confidence.
         if n_human_targets >= 2:
-            rec.selectivity_confidence = "High"
+            rec.selectivity_confidence = CompoundRecord.CONF_HIGH
         elif n_human_targets == 1:
-            rec.selectivity_confidence = "Low"
+            rec.selectivity_confidence = CompoundRecord.CONF_LOW
         else:
-            rec.selectivity_confidence = "None"
+            rec.selectivity_confidence = CompoundRecord.CONF_NONE
 
         if not energies_human:
             log.warning(f"  {rec.compound_id}: No human docking data. SI = N/A.")
@@ -2350,7 +2371,7 @@ def print_summary(
 #  MAIN — Pipeline Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main(target_count: int = 500, force: bool = False, cache: bool = False):
+def main(target_count: int = 500, force: bool = False):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -2455,34 +2476,10 @@ def main(target_count: int = 500, force: bool = False, cache: bool = False):
             )
 
     # ── Phase 2: Library generation & filtering ──
-    cache_path = os.path.join(work_dir, "filtered.pkl")
-    if cache and os.path.exists(cache_path):
-        import pickle
-        try:
-            with open(cache_path, "rb") as fh:
-                filtered = pickle.load(fh)
-            n_total = len(filtered)
-            n_filtered = len(filtered)
-            log.info(f"  Loaded cached filtered records from {cache_path}")
-        except Exception as exc:
-            log.warning(f"  Could not load cache ({exc}); regenerating.")
-            all_records = generate_candidate_library(target_count=target_count)
-            n_total = len(all_records)
-            filtered = apply_filters(all_records)
-            n_filtered = len(filtered)
-    else:
-        all_records = generate_candidate_library(target_count=target_count)
-        n_total = len(all_records)
-        filtered = apply_filters(all_records)
-        n_filtered = len(filtered)
-        if cache:
-            import pickle
-            try:
-                with open(cache_path, "wb") as fh:
-                    pickle.dump(filtered, fh)
-                log.info(f"  Saved filtered records to cache: {cache_path}")
-            except Exception as exc:
-                log.warning(f"  Could not save cache ({exc}).")
+    all_records = generate_candidate_library(target_count=target_count)
+    n_total = len(all_records)
+    filtered = apply_filters(all_records)
+    n_filtered = len(filtered)
 
     if n_filtered == 0:
         log.warning("  No compounds passed filters. Halting pipeline.")
@@ -2530,9 +2527,5 @@ if __name__ == "__main__":
             "validation OR to bypass a failed redocking gate in science mode."
         ),
     )
-    parser.add_argument(
-        "--cache", action="store_true",
-        help="Load/save the filtered candidate library via OUTPUT_DIR/workdir/filtered.pkl",
-    )
     args = parser.parse_args()
-    main(target_count=args.count, force=args.force, cache=args.cache)
+    main(target_count=args.count, force=args.force)
