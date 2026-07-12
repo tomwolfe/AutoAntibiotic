@@ -140,6 +140,13 @@ def ensure_output_dir() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def select_top(records, score_key, descending=False, n=TOP_N):
+    """Return the top *n* records sorted by *score_key* (skips None scores)."""
+    valid = [r for r in records if getattr(r, score_key, None) is not None]
+    valid.sort(key=lambda r: getattr(r, score_key), reverse=descending)
+    return valid[:n]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 0 — DEPENDENCY CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -405,6 +412,7 @@ def run_redocking_validation(
 
     # Offline CI mocks: never report a (non-physical) RMSD against test PDBs.
     if holo_pdb_path and "tests/data" in holo_pdb_path:
+        skipped = "mock"
         log.info("Skipping redocking: mock PDB")
         return False, None
 
@@ -734,6 +742,17 @@ def prepare_targets(
     ces1_path = _resolve_structure(PDB_IDS["CES1"])
 
     result["holo_pdb"] = holo_path
+
+    # ── Mock-vs-real boundary ──
+    mock_present = any(
+        p and "tests/data" in p
+        for p in (holo_path, apo_path, trypsin_path, ces1_path)
+    )
+    if mock_present:
+        log.info("CI mode: using mock PDBs - not for scientific use.")
+    result["mode"] = os.environ.get(
+        "AUTOANTIBIOTIC_MODE", "ci" if mock_present else "science"
+    )
 
     # ── Clean PBP2a (use holo for grid calc, but we need the protein only) ──
     log.info("  Cleaning PBP2a (apo)…")
@@ -1732,13 +1751,10 @@ def screen_library(
     # ── Select top 10 ──
     if deps["USE_VINA"]:
         # Rank by allosteric energy (lower = better)
-        ranked = [r for r in records if r.pb2pa_allosteric_energy is not None]
-        ranked.sort(key=lambda r: r.pb2pa_allosteric_energy)
+        top10 = select_top(records, "pb2pa_allosteric_energy")
     else:
-        ranked = [r for r in records if r.shape_score is not None]
-        ranked.sort(key=lambda r: r.shape_score)
+        top10 = select_top(records, "shape_score")
 
-    top10 = ranked[:TOP_N]
     log.info(f"  Top {len(top10)} candidates selected.")
     for i, r in enumerate(top10):
         energy_str = (
@@ -2258,7 +2274,9 @@ def generate_csv_report(
             "Redock_RMSD": (
                 f"{validation_rmsd:.3f}" if validation_rmsd is not None else "N/A"
             ),
-            "Redock_Validated": str(bool(validation_ok)) + (" (mock)" if is_mock else ""),
+            "Redock_Validated": (
+                "N/A" if validation_ok is None else str(bool(validation_ok))
+            ) + (" (mock)" if is_mock else ""),
         })
 
     df = pd.DataFrame(rows)
@@ -2403,7 +2421,11 @@ def main(target_count: int = 500, force: bool = False, cache: bool = False):
             except Exception as exc:
                 log.warning(f"  Could not cache validation result ({exc}).")
 
-    if not validation_ok:
+    if validation_ok is None:
+        log.info(
+            "  Redocking validation not applicable (mock PDB / skipped)."
+        )
+    elif not validation_ok:
         log.error(
             "  ✗  Redocking validation failed — docking results should be "
             "interpreted with caution."
