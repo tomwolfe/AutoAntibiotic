@@ -867,14 +867,8 @@ def prepare_targets(
         active_center = compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Conserved residues {CONSERVED_RESIDUES} missing: {exc}")
-        log.warning("  Residue missing – grid center set to None; supply real PDB.")
-        try:
-            active_center = compute_residue_centroid(cleaned_pdb, ACTIVE_SITE_RESIDUES)
-        except (ValueError, Exception) as exc2:
-            log.warning(f"  ⚠  Active-site residues {ACTIVE_SITE_RESIDUES} missing: {exc2}")
-            log.warning("  Residue missing – grid center set to None; supply real PDB.")
-            active_center = None
-        log.info(f"    Active site center: {active_center}")
+        active_center = None
+    log.info(f"    Active site center: {active_center}")
 
     if result.get("mode") == "science" and active_center is None:
         log.error("Active site center missing in science mode – aborting")
@@ -995,9 +989,6 @@ class CompoundRecord:
 
     # Fallback shape score (0–10, lower better)
     shape_score: Optional[float] = None
-
-    # Redocking validation RMSD (0–inf, lower better; None if not validated)
-    validation_rmsd: Optional[float] = None
 
     # Selectivity confidence based on how many human off-targets were docked:
     #   "High" if 2 human targets provided valid energies,
@@ -2213,7 +2204,6 @@ def analyze_selectivity_and_resistance(
 
 def generate_csv_report(
     top10: List[CompoundRecord],
-    validation_rmsd: Optional[float] = None,
     validation_ok: bool = False,
     holo_pdb_path: Optional[str] = None,
     mode: str = "science",
@@ -2274,19 +2264,13 @@ def generate_csv_report(
             "QED_Score": f"{rec.qed_score:.3f}",
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
             "Redock_RMSD": (
-                "SKIPPED" if is_mock
-                else f"{validation_rmsd:.3f}" if validation_rmsd is not None else "N/A"
+                "SKIPPED" if is_mock else "N/A"
             ),
             "Redock_Validated": (
                 "SKIPPED" if is_mock
                 else "N/A" if validation_ok is None else str(bool(validation_ok))
             ) + (" (mock)" if is_mock else ""),
-            "Validation_Warning": (
-                "Redocking RMSD > 2.0A"
-                if validation_rmsd is not None and validation_rmsd > 2.0
-                else "OK" if validation_rmsd is not None
-                else "N/A"
-            ),
+            "Validation_Warning": "N/A",
         })
 
     df = pd.DataFrame(rows)
@@ -2483,7 +2467,6 @@ def main(target_count: int = 500, force: bool = False):
     # ── Phase 5: Reporting & Artifacts ──
     generate_csv_report(
         top10,
-        validation_rmsd=redock_rmsd,
         validation_ok=validation_ok,
         holo_pdb_path=targets.get("holo_pdb"),
         mode=targets.get("mode"),

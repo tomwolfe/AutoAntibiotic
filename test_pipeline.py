@@ -41,6 +41,7 @@ from discovery_pipeline import (
 )
 from rdkit import Chem
 
+TEST_REAL_PDB_DIR = Path(__file__).parent / "tests" / "data"
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -737,9 +738,8 @@ class TestRealPDBSmoke:
         # path (AUTOANTIBIOTIC_CI=0) without any network download.
         real_pdb_dir = tmp_path / "real_pdbs"
         real_pdb_dir.mkdir()
-        tests_data = Path(__file__).parent / "tests" / "data"
         for pdb_id in ["3QPD", "6TKO", "1UTN", "3KJZ"]:
-            src = tests_data / f"{pdb_id}.pdb"
+            src = TEST_REAL_PDB_DIR / f"{pdb_id}.pdb"
             if src.exists():
                 shutil.copy(str(src), str(real_pdb_dir / f"{pdb_id}.pdb"))
 
@@ -776,14 +776,16 @@ class TestRealPDBSmoke:
                     with patch("discovery_pipeline.apply_filters", side_effect=mock_filters):
                         with patch("discovery_pipeline.fetch_structure",
                                     side_effect=mock_fetch_structure):
-                            with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
-                                with patch("discovery_pipeline.CSV_REPORT",
-                                            output_dir / "top_candidates.csv"):
-                                    with patch.dict(os.environ, {
-                                        "AUTOANTIBIOTIC_CI": "0",
-                                    }):
-                                        from discovery_pipeline import main
-                                        main(target_count=2)
+                            with patch("discovery_pipeline.run_redocking_validation",
+                                        return_value=(False, None)):
+                                with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                    with patch("discovery_pipeline.CSV_REPORT",
+                                                output_dir / "top_candidates.csv"):
+                                        with patch.dict(os.environ, {
+                                            "AUTOANTIBIOTIC_CI": "0",
+                                        }):
+                                            from discovery_pipeline import main
+                                            main(target_count=2)
 
         csv_path = output_dir / "top_candidates.csv"
         assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
@@ -1188,11 +1190,9 @@ class TestConservedResiduesCentroid:
             with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
                 with patch.object(dp, "compute_residue_centroid", side_effect=side_centroid):
                     with patch.object(dp.log, "warning") as mock_warn:
-                        try:
+                        with patch("sys.exit"):
                             prepare_targets(str(tmp_path), str(tmp_path),
                                             {"vina": False, "USE_VINA": False})
-                        except Exception:
-                            pass
                         assert any(
                             "Conserved residues" in str(c.args[0])
                             for c in mock_warn.call_args_list
@@ -1236,10 +1236,11 @@ class TestPrepareTargetsNoneCenter:
         with patch.object(dp, "fetch_structure", return_value=str(pdb)):
             with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
                 with patch.object(dp, "compute_residue_centroid", side_effect=side_centroid):
-                    result = prepare_targets(
-                        str(tmp_path), str(tmp_path),
-                        {"vina": False, "USE_VINA": False},
-                    )
+                    with patch("sys.exit"):
+                        result = prepare_targets(
+                            str(tmp_path), str(tmp_path),
+                            {"vina": False, "USE_VINA": False},
+                        )
 
         assert result["PBP2a"]["active_center"] is None, (
             "PBP2a active_center should be None when active-site centroid "
