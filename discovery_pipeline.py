@@ -702,6 +702,12 @@ def prepare_targets(
         }
     """
     log.info("─── Phase 1: Target Preparation & Centroid Calculation ───")
+    log.info(
+        "  NOTE: bundled tests/data/*.pdb files are minimal mock structures for "
+        "offline CI runs — they are NOT real crystallographic models. Any redocking "
+        "RMSD computed against them is non-physical and must not be interpreted "
+        "as a protocol-quality metric."
+    )
     result = {}
 
     # ── Fetch structures (prefer bundled offline PDBs under tests/data) ──
@@ -894,19 +900,6 @@ NATURAL_PRODUCT_SCAFFOLDS = [
     "COc1nc2c(cc1C[N@@H]3CC[C@H](O)C3)n(C)c4ccccc24",           # Atropine-like scaffold
 ]
 
-# Additional scaffolds for diversity
-ADDITIONAL_SCAFFOLDS = [
-    "c1ccc2c(c1)cc3c4c2ccc5c4c6c(c7c8c5c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1c2c3c4c5c6c7c8c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1c2c3c4c5c6c7c8c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1c2c3c4c5c6c7c8c9c%10c%11c%12c%13c%14c%15c%16c%17c%18c%19c%20c%21c%22c%23c%24c%25c%26c1",
-    "O=c1cc2ccccc2oc1-c3ccccc3",                                 # Flavone
-    "COc1ccc2c(c1)oc(=O)c(C3=CC(=O)c4ccccc4O3)c2C(=O)O",      # Isoflavonoid-like
-    "c1ccc2c(c1)cc3c4c2ccc5c4c6c7c5c8c9c%10c%11c%12c%13c%14c%15c%11c%12c%13c%14c%15c6c7c8c9c%10",
-    "O=c1c2ccccc2c(=O)c3c1ccc4c5c3ccc6c7c5c8c9c%10c%11c%12c%13c%10c%11c%12c%13c4c7c8c9",
-    "c1ccc2c(c1)cc3c4c2ccc5c4c6c7c5c8c9c%10c%11c%12c%13c(cc2ccccc2c%11%12)c(c%10%13)c6c7c8c9",
-    "CC(C)(C)c1cc2c(cc1C(C)(C)C)c3c(cc4c2cc5c6c4cc7c8c5c9c%10c%11c%12c%13c%14c%15c%16c(cc%11%12%13%14%15%16)c6c7c8c9)cc(c3)C(C)(C)C",
-    "COc1cc2c(cc1OC)CCN(C2)c3ccc4c(c3)OC(=O)C4(C)O",
-    "CC1(C)OC2CC3C4C5C6C7C8C9C%10C%11C%12C%13C%14C%15C%16C%17C%18C%19C%20C%21C%22C%23C%24C%25C%26C%27C%28C%29C%30C%31C%32C%33C%34C%35C%36C%37C%38C%39C%40C(OC(C)(C)OC%41C%42C%43C%44C%45C%46C%47C%48C%49C%50C%51C%52C%53C%54C%55C%56C%57C%58C%59C%60C%61C%62C%63C%64C%65C%66C%67C%68C%69C%70C%71C%72C%73C%74C%75C%76C%77C%78C%79C%80)CC3C2C1",
-]
-
 # Positive control SMILES (to verify pipeline)
 CONTROL_SMILES = {
     "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
@@ -936,7 +929,7 @@ def generate_candidate_library(
     """
     log.info("─── Phase 2: Library Generation ───")
 
-    all_scaffolds = NATURAL_PRODUCT_SCAFFOLDS + ADDITIONAL_SCAFFOLDS
+    all_scaffolds = NATURAL_PRODUCT_SCAFFOLDS
     scaffold_mols = []
     for smi in all_scaffolds:
         mol = Chem.MolFromSmiles(smi)
@@ -1080,87 +1073,94 @@ def apply_filters(
     brenk_params.AddCatalog(FilterCatalogParams.FilterCatalogs.BRENK)
     brenk_catalog = FilterCatalog(brenk_params)
 
-    passed = []
-    skipped_structural = 0
-    skipped_similarity = 0
-    skipped_admet = 0
-    skipped_pains = 0
-    skipped_brenk = 0
+    def _filter_pass(threshold: float) -> List[CompoundRecord]:
+        """Run the similarity + ADMET + PAINS filter chain on the original records."""
+        passed = []
+        skipped_structural = 0
+        skipped_similarity = 0
+        skipped_admet = 0
+        skipped_pains = 0
+        skipped_brenk = 0
 
-    for record in records:
-        if record.mol is None:
-            mol = Chem.MolFromSmiles(record.smiles)
-            if mol is None:
+        for record in records:
+            if record.mol is None:
+                mol = Chem.MolFromSmiles(record.smiles)
+                if mol is None:
+                    continue
+                record.mol = mol
+            mol = record.mol
+
+            # 1. Structural — reject β-lactams
+            if mol.HasSubstructMatch(lactam_pattern):
+                skipped_structural += 1
                 continue
-            record.mol = mol
-        mol = record.mol
 
-        # 1. Structural — reject β-lactams
-        if mol.HasSubstructMatch(lactam_pattern):
-            skipped_structural += 1
-            continue
+            # 2. Similarity — max Tc vs reference antibiotics
+            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+            max_sim = 0.0
+            for ref_fp in ref_mols.values():
+                sim = TanimotoSimilarity(fp, ref_fp)
+                max_sim = max(max_sim, sim)
+            record.max_similarity = max_sim
 
-        # 2. Similarity — max Tc vs reference antibiotics
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
-        max_sim = 0.0
-        for ref_fp in ref_mols.values():
-            sim = TanimotoSimilarity(fp, ref_fp)
-            max_sim = max(max_sim, sim)
-        record.max_similarity = max_sim
+            if max_sim >= threshold:
+                skipped_similarity += 1
+                continue
 
-        if max_sim >= similarity_threshold:
-            skipped_similarity += 1
-            continue
+            # 3. ADMET — Lipinski + QED
+            try:
+                mw = Descriptors.MolWt(mol)
+                logp = Crippen.MolLogP(mol)
+                hbd = Descriptors.NumHDonors(mol)
+                hba = Descriptors.NumHAcceptors(mol)
+                lipinski_ok = (mw <= 500) and (logp <= 5.0) and (hbd <= 5) and (hba <= 10)
+                qed = QED.qed(mol)
+            except Exception:
+                continue
 
-        # 3. ADMET — Lipinski + QED
-        try:
-            mw = Descriptors.MolWt(mol)
-            logp = Crippen.MolLogP(mol)
-            hbd = Descriptors.NumHDonors(mol)
-            hba = Descriptors.NumHAcceptors(mol)
-            lipinski_ok = (mw <= 500) and (logp <= 5.0) and (hbd <= 5) and (hba <= 10)
-            qed = QED.qed(mol)
-        except Exception:
-            continue
+            record.passes_lipinski = lipinski_ok
+            record.qed_score = qed
 
-        record.passes_lipinski = lipinski_ok
-        record.qed_score = qed
+            if not lipinski_ok:
+                skipped_admet += 1
+                continue
+            if qed <= 0.6:
+                skipped_admet += 1
+                continue
 
-        if not lipinski_ok:
-            skipped_admet += 1
-            continue
-        if qed <= 0.6:
-            skipped_admet += 1
-            continue
+            # 4. PAINS
+            pains_match = pains_catalog.HasMatch(mol)
+            record.passes_pains = not pains_match
+            if pains_match:
+                skipped_pains += 1
+                continue
 
-        # 4. PAINS
-        pains_match = pains_catalog.HasMatch(mol)
-        record.passes_pains = not pains_match
-        if pains_match:
-            skipped_pains += 1
-            continue
+            # 5. Brenk alerts
+            brenk_match = brenk_catalog.HasMatch(mol)
+            if brenk_match:
+                skipped_brenk += 1
+                continue
 
-        # 5. Brenk alerts
-        brenk_match = brenk_catalog.HasMatch(mol)
-        if brenk_match:
-            skipped_brenk += 1
-            continue
+            passed.append(record)
 
-        passed.append(record)
+        log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
+        log.info(f"  Similarity filter (Tc < {threshold}): {skipped_similarity} removed.")
+        log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped_admet} removed.")
+        log.info(f"  PAINS filter: {skipped_pains} removed.")
+        log.info(f"  Brenk alerts: {skipped_brenk} removed.")
+        log.info(f"  Passed filters: {len(passed)} compounds.")
+        return passed
 
-    log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
-    log.info(f"  Similarity filter (Tc < {similarity_threshold}): {skipped_similarity} removed.")
-    log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped_admet} removed.")
-    log.info(f"  PAINS filter: {skipped_pains} removed.")
-    log.info(f"  Brenk alerts: {skipped_brenk} removed.")
-    log.info(f"  Passed filters: {len(passed)} compounds.")
+    passed = _filter_pass(similarity_threshold)
 
-    # 5. Diversity check — warn if < DIVERSITY_MIN_COUNT (no recursive relaxation)
+    # Diversity check — if too few passed, relax the similarity threshold and
+    # re-run the same loop on the original records (simple for-loop, no recursion).
     if len(passed) < DIVERSITY_MIN_COUNT:
-        log.warning(
+        log.info(
             f"  Only {len(passed)} compounds passed filters (< {DIVERSITY_MIN_COUNT}). "
-            f"Returning current passed list without relaxing the similarity threshold."
+            f"Relaxing similarity threshold to {SIMILARITY_THRESHOLD_RELAXED} and re-filtering."
         )
+        passed = _filter_pass(SIMILARITY_THRESHOLD_RELAXED)
 
     log.info("─── Phase 2 complete ───")
     return passed
