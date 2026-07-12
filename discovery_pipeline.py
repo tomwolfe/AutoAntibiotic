@@ -11,6 +11,8 @@ resistance-risk analysis.
 
 Author: AutoAntibiotic Agent
 Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina
+
+CI mode: set USE_VINA=False or use bundled tests/data mocks; real PDBs required for scientific validation.
 """
 
 import os
@@ -400,6 +402,11 @@ def run_redocking_validation(
     Returns (success: bool, rmsd: float | None).
     """
     log.info("─── Phase 0: Redocking Validation ───")
+
+    # Offline CI mocks: never report a (non-physical) RMSD against test PDBs.
+    if holo_pdb_path and "tests/data" in holo_pdb_path:
+        log.info("Skipping redocking: mock PDB")
+        return False, None
 
     lig_smi = os.path.join(work_dir, "native_ligand.smi")
     lig_pdbqt = os.path.join(work_dir, "native_ligand.pdbqt")
@@ -2216,6 +2223,7 @@ def generate_csv_report(
     ensure_output_dir()
 
     structure_source = "mock" if holo_pdb_path and "tests/data" in holo_pdb_path else "real"
+    is_mock = structure_source == "mock"
 
     rows = []
     for rec in top10:
@@ -2246,7 +2254,7 @@ def generate_csv_report(
             "Selectivity_Confidence": (
                 "Unassessed" if rec.selectivity_confidence == "None"
                 else rec.selectivity_confidence
-            ),
+            ) + (" (mock)" if is_mock else ""),
             "Shape_Score": (
                 f"{rec.shape_score:.2f}" if rec.shape_score is not None
                 else "N/A"
@@ -2258,7 +2266,7 @@ def generate_csv_report(
             "Redock_RMSD": (
                 f"{validation_rmsd:.3f}" if validation_rmsd is not None else "N/A"
             ),
-            "Redock_Validated": str(bool(validation_ok)),
+            "Redock_Validated": str(bool(validation_ok)) + (" (mock)" if is_mock else ""),
         })
 
     df = pd.DataFrame(rows)

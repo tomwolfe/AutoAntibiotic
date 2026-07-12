@@ -400,7 +400,34 @@ class TestRedockingValidation:
         assert result == (False, None), f"Expected (False, None), got {result}"
 
 
-# ── Run ──────────────────────────────────────────────────────────────────────
+class TestMockRedockingSkip:
+    def test_skips_mock_pdb_with_vina_enabled(self, tmp_path):
+        """
+        When USE_VINA is True but holo_pdb_path points at a bundled
+        tests/data mock, run_redocking_validation must short-circuit and
+        return (False, None) without attempting redocking (no fake RMSD).
+        """
+        from pathlib import Path
+        tests_data = Path(__file__).parent / "tests" / "data"
+        mock_holo = str(tests_data / "6TKO.pdb")
+        assert os.path.exists(mock_holo), "tests/data/6TKO.pdb must be present"
+
+        deps = {"vina": True, "USE_VINA": True}
+        with patch(
+            "discovery_pipeline._extract_native_ligand_from_holo",
+            return_value="CCO",
+        ):
+            with patch(
+                "discovery_pipeline._run_vina_docking",
+                return_value=None,
+            ):
+                result = run_redocking_validation(
+                    holo_pdb_path=mock_holo,
+                    target_pdbqt_path=str(tmp_path / "PBP2a.pdbqt"),
+                    work_dir=str(tmp_path),
+                    deps=deps,
+                )
+        assert result == (False, None), f"Expected (False, None), got {result}"
 
 # ── Test 9: Fallback Scoring (TestFallbackScoring) ──────────────────────────
 
@@ -677,7 +704,10 @@ class TestMiniPipelineShapeFallback:
 
         for row in rows:
             assert row["PBP2a_Allosteric_Energy"] == "N/A", row
-            assert row["Selectivity_Confidence"] in {"High", "Low", "None", "Unassessed"}, row
+            assert any(
+                row["Selectivity_Confidence"].startswith(c)
+                for c in {"High", "Low", "None", "Unassessed"}
+            ), row
 
 
 # ── Test 10: LigandPreparator ──────────────────────────────────────────────
