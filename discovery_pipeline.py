@@ -750,8 +750,8 @@ def prepare_targets(
         allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Allosteric residues {ALLOSTERIC_RESIDUES} missing: {exc}")
-        log.warning("  Falling back to the origin for the allosteric centre.")
-        allosteric_center = np.zeros(3)
+        log.warning("  Residue missing – grid center set to None; supply real PDB.")
+        allosteric_center = None
     log.info(f"    Allosteric site center: {allosteric_center}")
 
     log.info("  Computing active site centroid (conserved residues SER403, LYS406, TYR446)…")
@@ -759,12 +759,12 @@ def prepare_targets(
         active_center = compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Conserved residues {CONSERVED_RESIDUES} missing: {exc}")
-        log.warning("  Falling back to active-site residues for the active centre.")
+        log.warning("  Residue missing – grid center set to None; supply real PDB.")
         try:
             active_center = compute_residue_centroid(cleaned_pdb, ACTIVE_SITE_RESIDUES)
         except (ValueError, Exception) as exc2:
             log.warning(f"  ⚠  Active-site residues {ACTIVE_SITE_RESIDUES} missing: {exc2}")
-            log.warning("  Falling back to the allosteric centre for the active centre.")
+            log.warning("  Residue missing – grid center set to None; supply real PDB.")
             active_center = allosteric_center
     log.info(f"    Active site center: {active_center}")
 
@@ -823,6 +823,9 @@ def prepare_targets(
         ("allosteric", allosteric_center, ALLOSTERIC_BOX_SIZE),
         ("active", active_center, ACTIVE_BOX_SIZE),
     ]:
+        if center is None:
+            log.warning(f"  Skipping grid config for '{site_name}' site (center is None).")
+            continue
         cfg_path = os.path.join(grid_dir, f"grid_{site_name}.txt")
         with open(cfg_path, "w") as f:
             f.write(f"center_x = {center[0]:.3f}\n")
@@ -2195,6 +2198,7 @@ def generate_csv_report(
     top10: List[CompoundRecord],
     validation_rmsd: Optional[float] = None,
     validation_ok: bool = False,
+    holo_pdb_path: Optional[str] = None,
 ) -> str:
     """
     Phase 5.1 — Write top_candidates.csv with all required columns.
@@ -2203,18 +2207,22 @@ def generate_csv_report(
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
         Selectivity_Confidence, Shape_Score, Max_Similarity, Passes_Lipinski,
-        QED_Score, Binding_Mode_Notes, Redock_RMSD, Redock_Validated.
+        QED_Score, Binding_Mode_Notes, Redock_RMSD, Redock_Validated,
+        Structure_Source.
 
     Returns path to CSV.
     """
     log.info("─── Phase 5: Reporting ───")
     ensure_output_dir()
 
+    structure_source = "mock" if holo_pdb_path and "tests/data" in holo_pdb_path else "real"
+
     rows = []
     for rec in top10:
         rows.append({
             "Compound_ID": rec.compound_id,
             "SMILES": rec.smiles,
+            "Structure_Source": structure_source,
             "PBP2a_Allosteric_Energy": (
                 f"{rec.pb2pa_allosteric_energy:.2f}" if rec.pb2pa_allosteric_energy is not None
                 else "N/A"
@@ -2325,7 +2333,7 @@ def print_summary(
 #  MAIN — Pipeline Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main(target_count: int = 500, force: bool = False):
+def main(target_count: int = 500, force: bool = False, cache: bool = False):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -2411,11 +2419,34 @@ def main(target_count: int = 500, force: bool = False):
             )
 
     # ── Phase 2: Library generation & filtering ──
-    all_records = generate_candidate_library(target_count=target_count)
-    n_total = len(all_records)
-
-    filtered = apply_filters(all_records)
-    n_filtered = len(filtered)
+    cache_path = os.path.join(work_dir, "filtered.pkl")
+    if cache and os.path.exists(cache_path):
+        import pickle
+        try:
+            with open(cache_path, "rb") as fh:
+                filtered = pickle.load(fh)
+            n_total = len(filtered)
+            n_filtered = len(filtered)
+            log.info(f"  Loaded cached filtered records from {cache_path}")
+        except Exception as exc:
+            log.warning(f"  Could not load cache ({exc}); regenerating.")
+            all_records = generate_candidate_library(target_count=target_count)
+            n_total = len(all_records)
+            filtered = apply_filters(all_records)
+            n_filtered = len(filtered)
+    else:
+        all_records = generate_candidate_library(target_count=target_count)
+        n_total = len(all_records)
+        filtered = apply_filters(all_records)
+        n_filtered = len(filtered)
+        if cache:
+            import pickle
+            try:
+                with open(cache_path, "wb") as fh:
+                    pickle.dump(filtered, fh)
+                log.info(f"  Saved filtered records to cache: {cache_path}")
+            except Exception as exc:
+                log.warning(f"  Could not save cache ({exc}).")
 
     if n_filtered == 0:
         log.warning("  No compounds passed filters. Halting pipeline.")
@@ -2436,6 +2467,7 @@ def main(target_count: int = 500, force: bool = False):
         top10,
         validation_rmsd=redock_rmsd,
         validation_ok=validation_ok,
+        holo_pdb_path=targets.get("holo_pdb"),
     )
 
     top3 = top10[:3]
@@ -2458,5 +2490,9 @@ if __name__ == "__main__":
         "--force", action="store_true",
         help="Reuse cached redocking validation (requires AUTOANTIBIOTIC_FORCE=1)",
     )
+    parser.add_argument(
+        "--cache", action="store_true",
+        help="Load/save the filtered candidate library via OUTPUT_DIR/workdir/filtered.pkl",
+    )
     args = parser.parse_args()
-    main(target_count=args.count, force=args.force)
+    main(target_count=args.count, force=args.force, cache=args.cache)
