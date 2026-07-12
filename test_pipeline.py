@@ -164,8 +164,7 @@ class TestGenerateCandidateLibrary:
     def test_returns_at_least_10_compounds(self):
         """generate_candidate_library returns a multi-compound library with default params.
 
-        After the invalid ADDITIONAL_SCAFFOLDS entries were removed, the library is
-        generated from NATURAL_PRODUCT_SCAFFOLDS plus the 2 CONTROL_SMILES. The
+        The library is generated from NATURAL_PRODUCT_SCAFFOLDS plus the 2 CONTROL_SMILES. The
         robust floor is therefore the control compounds; we also require at least one
         generated (non-control) compound to confirm BRICS expansion ran.
         """

@@ -147,6 +147,98 @@ def select_top(records, score_key, descending=False, n=TOP_N):
     return valid[:n]
 
 
+class LigandPreparator:
+    """
+    Encapsulates the logic for converting an RDKit Mol to PDBQT format.
+
+    Strategy:
+        1. Try meeko (preferred — handles partial charges, rotatable bonds).
+        2. If meeko is unavailable or fails, fall back to obabel via subprocess.
+        3. If both fail, raise a clear RuntimeError with installation instructions.
+    """
+
+    def prepare(self, mol: Chem.Mol) -> str:
+        """
+        Convert an RDKit Mol to a PDBQT string.
+
+        Args:
+            mol: Input molecule (should have 3D coordinates).
+
+        Returns:
+            PDBQT-formatted string.
+
+        Raises:
+            RuntimeError: If neither meeko nor obabel can produce PDBQT.
+        """
+        meeko_error = None
+        # ── Try meeko first ──
+        try:
+            from meeko import MoleculePreparation, PDBQTWriterLegacy
+            preparator = MoleculePreparation()
+            mol_setups = preparator.prepare(mol)
+            if not mol_setups:
+                raise RuntimeError("Meeko returned an empty setup for the input molecule")
+            pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
+            if pdbqt_str:
+                return pdbqt_str
+            raise RuntimeError("Meeko produced an empty PDBQT string for the input molecule")
+        except (ImportError, AttributeError, RuntimeError) as exc:
+            meeko_error = str(exc)
+            log.warning(f"Meeko failed: {exc}")
+
+        # ── Fallback: obabel via subprocess ──
+        obabel_error = None
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".pdbqt", delete=True) as tmp:
+                subprocess.run(
+                    ["obabel", "-g", "min", "-O", tmp.name],
+                    input=Chem.MolToMolBlock(mol).encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                )
+                pdbqt_str = tmp.read().decode("utf-8", errors="ignore")
+                if pdbqt_str:
+                    return pdbqt_str
+                raise ValueError("obabel returned empty output")
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError) as exc:
+            obabel_error = str(exc)
+            log.warning(f"obabel fallback failed: {exc}")
+
+        # ── All attempts failed ──
+        raise RuntimeError(
+            "Cannot convert Mol to PDBQT. Ensure meeko is installed "
+            "(pip install meeko) or OpenBabel is available on PATH. "
+            "Alternatively, set USE_VINA=False to skip PDBQT-dependent steps."
+            f" meeko error: {meeko_error}; obabel error: {obabel_error}"
+        )
+
+
+def prepare_ligand_pdbqt(
+    mol: Chem.Mol,
+    output_path: str,
+) -> bool:
+    """
+    Convert an RDKit Mol to PDBQT via LigandPreparator.
+
+    Args:
+        mol: Input molecule.
+        output_path: Destination .pdbqt path.
+
+    Returns:
+        True on success.
+    """
+    try:
+        preparator = LigandPreparator()
+        pdbqt_str = preparator.prepare(mol)
+        with open(output_path, "w") as f:
+            f.write(pdbqt_str)
+        return True
+    except Exception as exc:
+        log.warning(f"  Ligand preparation failed: {exc}")
+        return False
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 0 — DEPENDENCY CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -582,32 +674,18 @@ def clean_pdb_structure(
             except Exception as exc:
                 log.warning(f"  RDKit PDB parsing failed for hydrogen addition: {exc}. Skipping.")
 
-        # Convert to PDBQT for Vina (using meeko for receptor)
+        # Convert to PDBQT for Vina via obabel (add gasteiger charges).
+        # If obabel is unavailable, copy the PDB as-is with a .pdbqt extension.
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
         try:
-            from meeko import MoleculePreparation, PDBQTWriterLegacy
-            # For receptor PDBQT, we use a simpler approach via obabel or
-            # prepare_receptor. Prefer prepare_receptor (ADFR suite) if available.
-            try:
-                subprocess.run(
-                    ["prepare_receptor", "-r", out_path, "-o", pdbqt_path],
-                    capture_output=True, timeout=60,
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                # Fallback: use obabel to add gasteiger charges and write PDBQT
-                try:
-                    subprocess.run(
-                        ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
-                        capture_output=True, timeout=60,
-                    )
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    log.warning(
-                        "  Neither prepare_receptor nor obabel found. "
-                        "Writing PDB as-is; Vina may fail."
-                    )
-                    shutil.copy(out_path, pdbqt_path)
-        except Exception as exc:
-            log.warning(f"  Receptor PDBQT conversion warning: {exc}")
+            subprocess.run(
+                ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
+                capture_output=True, timeout=60,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            log.warning(
+                "  obabel not found. Writing PDB as-is; Vina may fail."
+            )
             shutil.copy(out_path, pdbqt_path)
 
         return pdbqt_path if os.path.exists(pdbqt_path) else out_path
@@ -744,15 +822,14 @@ def prepare_targets(
     result["holo_pdb"] = holo_path
 
     # ── Mock-vs-real boundary ──
-    mock_present = any(
+    if any(
         p and "tests/data" in p
         for p in (holo_path, apo_path, trypsin_path, ces1_path)
-    )
-    if mock_present:
+    ):
         log.info("CI mode: using mock PDBs - not for scientific use.")
-    result["mode"] = os.environ.get(
-        "AUTOANTIBIOTIC_MODE", "ci" if mock_present else "science"
-    )
+        result["mode"] = "ci"
+    else:
+        result["mode"] = os.environ.get("AUTOANTIBIOTIC_MODE", "science")
 
     # ── Clean PBP2a (use holo for grid calc, but we need the protein only) ──
     log.info("  Cleaning PBP2a (apo)…")
@@ -793,6 +870,13 @@ def prepare_targets(
             log.warning("  Residue missing – grid center set to None; supply real PDB.")
             active_center = allosteric_center
     log.info(f"    Active site center: {active_center}")
+
+    if allosteric_center is None or active_center is None:
+        log.error("  ✗  PBP2a grid center(s) undefined; defaulting to origin. Supply a real PDB.")
+        if allosteric_center is None:
+            allosteric_center = np.zeros(3)
+        if active_center is None:
+            active_center = np.zeros(3)
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
@@ -1190,98 +1274,6 @@ def apply_filters(
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 3 — VIRTUAL SCREENING (Docking)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-class LigandPreparator:
-    """
-    Encapsulates the logic for converting an RDKit Mol to PDBQT format.
-
-    Strategy:
-        1. Try meeko (preferred — handles partial charges, rotatable bonds).
-        2. If meeko is unavailable or fails, fall back to obabel via subprocess.
-        3. If both fail, raise a clear RuntimeError with installation instructions.
-    """
-
-    def prepare(self, mol: Chem.Mol) -> str:
-        """
-        Convert an RDKit Mol to a PDBQT string.
-
-        Args:
-            mol: Input molecule (should have 3D coordinates).
-
-        Returns:
-            PDBQT-formatted string.
-
-        Raises:
-            RuntimeError: If neither meeko nor obabel can produce PDBQT.
-        """
-        meeko_error = None
-        # ── Try meeko first ──
-        try:
-            from meeko import MoleculePreparation, PDBQTWriterLegacy
-            preparator = MoleculePreparation()
-            mol_setups = preparator.prepare(mol)
-            if not mol_setups:
-                raise RuntimeError("Meeko returned an empty setup for the input molecule")
-            pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
-            if pdbqt_str:
-                return pdbqt_str
-            raise RuntimeError("Meeko produced an empty PDBQT string for the input molecule")
-        except (ImportError, AttributeError, RuntimeError) as exc:
-            meeko_error = str(exc)
-            log.warning(f"Meeko failed: {exc}")
-
-        # ── Fallback: obabel via subprocess ──
-        obabel_error = None
-        try:
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".pdbqt", delete=True) as tmp:
-                subprocess.run(
-                    ["obabel", "-g", "min", "-O", tmp.name],
-                    input=Chem.MolToMolBlock(mol).encode("utf-8"),
-                    capture_output=True,
-                    timeout=30,
-                )
-                pdbqt_str = tmp.read().decode("utf-8", errors="ignore")
-                if pdbqt_str:
-                    return pdbqt_str
-                raise ValueError("obabel returned empty output")
-        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError) as exc:
-            obabel_error = str(exc)
-            log.warning(f"obabel fallback failed: {exc}")
-
-        # ── All attempts failed ──
-        raise RuntimeError(
-            "Cannot convert Mol to PDBQT. Ensure meeko is installed "
-            "(pip install meeko) or OpenBabel is available on PATH. "
-            "Alternatively, set USE_VINA=False to skip PDBQT-dependent steps."
-            f" meeko error: {meeko_error}; obabel error: {obabel_error}"
-        )
-
-
-def prepare_ligand_pdbqt(
-    mol: Chem.Mol,
-    output_path: str,
-) -> bool:
-    """
-    Convert an RDKit Mol to PDBQT via LigandPreparator.
-
-    Args:
-        mol: Input molecule.
-        output_path: Destination .pdbqt path.
-
-    Returns:
-        True on success.
-    """
-    try:
-        preparator = LigandPreparator()
-        pdbqt_str = preparator.prepare(mol)
-        with open(output_path, "w") as f:
-            f.write(pdbqt_str)
-        return True
-    except Exception as exc:
-        log.warning(f"  Ligand preparation failed: {exc}")
-        return False
-
 
 def _run_vina_docking(
     receptor_pdbqt: str,
@@ -1952,7 +1944,8 @@ def profile_resistance_risk(
 
     Returns a human-readable notes string.
     """
-    notes = []
+    pose_notes = []
+    energy_notes = []
 
     # Perform interaction analysis if not already supplied
     if interactions is None:
@@ -1977,7 +1970,7 @@ def profile_resistance_risk(
             interactions = None
 
     if interactions is None:
-        notes.append("No binding interactions could be analysed.")
+        pose_notes.append("No binding interactions could be analysed.")
     else:
         # ── Quantitative resistance check from measured pose distances ──
         # The interaction fingerprint already exposes the minimum ligand→residue
@@ -1990,27 +1983,27 @@ def profile_resistance_risk(
 
         if np.isfinite(ser):
             if ser < 3.5:
-                notes.append(f"Strong catalytic engagement (Ser403, d={ser:.2f} Å)")
+                pose_notes.append(f"Strong catalytic engagement (Ser403, d={ser:.2f} Å)")
             elif ser < 5.0:
-                notes.append(f"Weak Ser403 contact (d={ser:.2f} Å) — resistance risk")
+                pose_notes.append(f"Weak Ser403 contact (d={ser:.2f} Å) — resistance risk")
             else:
-                notes.append(f"Loss of Ser403 engagement (d={ser:.2f} Å) — high resistance risk")
+                pose_notes.append(f"Loss of Ser403 engagement (d={ser:.2f} Å) — high resistance risk")
         else:
-            notes.append("Ser403 distance undefined — high resistance risk")
+            pose_notes.append("Ser403 distance undefined — high resistance risk")
 
         if np.isfinite(lys):
             if lys < 3.8:
-                notes.append(f"Stabilising H-bond with Lys406 (d={lys:.2f} Å)")
+                pose_notes.append(f"Stabilising H-bond with Lys406 (d={lys:.2f} Å)")
             elif lys < 5.0:
-                notes.append(f"Weak Lys406 contact (d={lys:.2f} Å) — resistance risk")
+                pose_notes.append(f"Weak Lys406 contact (d={lys:.2f} Å) — resistance risk")
         else:
-            notes.append("Lys406 distance undefined — resistance risk")
+            pose_notes.append("Lys406 distance undefined — resistance risk")
 
         if np.isfinite(tyr):
             if tyr < 3.5:
-                notes.append(f"Stabilising contact with Tyr446 (d={tyr:.2f} Å)")
+                pose_notes.append(f"Stabilising contact with Tyr446 (d={tyr:.2f} Å)")
             elif tyr < 5.0:
-                notes.append(f"Weak Tyr446 contact (d={tyr:.2f} Å) — resistance risk")
+                pose_notes.append(f"Weak Tyr446 contact (d={tyr:.2f} Å) — resistance risk")
 
         # Aggregate: if the closest conserved-residue contact exceeds 5 Å the
         # compound avoids the catalytic network entirely and is flagged as a
@@ -2018,7 +2011,7 @@ def profile_resistance_risk(
         # the active site to escape it).
         best_conserved = min(ser, lys, tyr)
         if np.isfinite(best_conserved) and best_conserved >= 5.0:
-            notes.append(
+            pose_notes.append(
                 f"Avoids conserved catalytic network (min d={best_conserved:.2f} Å) — high resistance risk"
             )
 
@@ -2028,25 +2021,29 @@ def profile_resistance_risk(
             and record.pb2pa_allosteric_energy < -7.0
         ):
             if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
-                notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
+                pose_notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
 
-    # Energy-based heuristics (unchanged)
+    # Energy-based heuristics
     if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
-        if "Confirmed contact with catalytic Ser403" not in notes:
-            notes.append("Likely contacts catalytic Ser403 (active site, energy-based). Good.")
+        energy_notes.append("Likely contacts catalytic Ser403 (active site, energy-based). Good.")
 
     # Molecular weight heuristic
     if record.mol is not None:
         mw = Descriptors.MolWt(record.mol)
         if mw > 400:
-            notes.append("High MW (>400) — broad interaction surface, may contact multiple residues.")
+            energy_notes.append("High MW (>400) — broad interaction surface, may contact multiple residues.")
         n_rot = Descriptors.NumRotatableBonds(record.mol)
         if n_rot < 5:
-            notes.append("Rigid scaffold — reduced entropic penalty, may enhance binding specificity.")
+            energy_notes.append("Rigid scaffold — reduced entropic penalty, may enhance binding specificity.")
 
     # Resistance risk indicators
     if record.qed_score > 0.8:
-        notes.append("High drug-likeness (QED > 0.8) — good developability profile.")
+        energy_notes.append("High drug-likeness (QED > 0.8) — good developability profile.")
+
+    if pose_notes and energy_notes:
+        notes = pose_notes + energy_notes
+    else:
+        notes = pose_notes or energy_notes
 
     if not notes:
         notes.append("No specific resistance flags identified.")
