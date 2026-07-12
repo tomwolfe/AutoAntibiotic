@@ -775,17 +775,11 @@ def prepare_targets(
             active_center = allosteric_center
     log.info(f"    Active site center: {active_center}")
 
-    # The conserved catalytic centre is captured directly by active_center
-    # (computed from CONSERVED_RESIDUES above), so keep it aliased here for
-    # downstream compatibility.
-    conserved_center = active_center
-
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
         "cleaned_pdb": pbp2a_clean_pdb,
         "allosteric_center": allosteric_center,
         "active_center": active_center,
-        "conserved_center": conserved_center,
     }
 
     # ── Clean trypsin ──
@@ -906,8 +900,6 @@ NATURAL_PRODUCT_SCAFFOLDS = [
     "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin
     "COc1cc2c(cc1OC)[n+]1ccc3cc4c(cc3c1CC2)OCO4",              # Berberine
     "CC1(C)OC2C3C(=O)OC4C(OO5)C3C5C2C4O1",                     # Artemisinin (approximate)
-    "CCC1(O)C(=O)OCC2=C1C=C4N(CC3=C2C=CC5=C3C=CC(=O)O5)C=O",  # Camptothecin
-    "COc1nc2c(cc1C[N@@H]3CC[C@H](O)C3)n(C)c4ccccc24",           # Atropine-like scaffold
 ]
 
 # Positive control SMILES (to verify pipeline)
@@ -1929,8 +1921,8 @@ def profile_resistance_risk(
 
     Flags candidates based on predicted interactions with conserved PBP2a
     residues.  If *interactions* is None the function falls back to an
-    internal call to ``analyze_binding_interactions`` which re-docks the
-    compound to obtain the pose.
+    internal call to ``analyze_binding_interactions`` which reuses the
+    active-site docked pose from screening (record.active_docked_pdbqt).
 
     Args:
         record: Compound record containing docking scores.

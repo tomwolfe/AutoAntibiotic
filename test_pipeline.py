@@ -681,7 +681,6 @@ class TestMiniPipelineShapeFallback:
             f"Unexpected allosteric centroid: {targets['PBP2a']['allosteric_center']}"
         )
         assert _ok_centroid(targets["PBP2a"]["active_center"])
-        assert _ok_centroid(targets["PBP2a"]["conserved_center"])
         assert _ok_centroid(targets["trypsin"]["active_center"])
         assert _ok_centroid(targets["CES1"]["active_center"])
 
