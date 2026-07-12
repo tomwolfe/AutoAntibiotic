@@ -663,7 +663,10 @@ class TestMiniPipelineShapeFallback:
                         with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                             with patch("discovery_pipeline.CSV_REPORT",
                                         output_dir / "top_candidates.csv"):
-                                with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
+                                with patch.dict(os.environ, {
+                                    "AUTOANTIBIOTIC_FORCE": "1",
+                                    "AUTOANTIBIOTIC_CI": "1",
+                                }):
                                     from discovery_pipeline import main
                                     main(target_count=3)
 
@@ -1148,10 +1151,11 @@ class TestOfflinePDBLoad:
             with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
                 with patch.object(dp, "compute_residue_centroid",
                                   return_value=np.zeros(3)):
-                    dp.prepare_targets(
-                        str(tmp_path), str(tmp_path),
-                        {"vina": False, "USE_VINA": False},
-                    )
+                    with patch.dict(os.environ, {"AUTOANTIBIOTIC_CI": "1"}):
+                        dp.prepare_targets(
+                            str(tmp_path), str(tmp_path),
+                            {"vina": False, "USE_VINA": False},
+                        )
 
         # 3QPD must be sourced locally, never downloaded.
         assert not any(

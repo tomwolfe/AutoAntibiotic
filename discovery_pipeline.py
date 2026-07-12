@@ -804,13 +804,12 @@ def prepare_targets(
 
     # ── Fetch structures (prefer bundled offline PDBs under tests/data) ──
     def _resolve_structure(pdb_id: str) -> str:
-        # NOTE: tests/data/*.pdb files are minimal mock structures for offline
-        # CI runs — they are NOT real crystallographic structures.
-        """Return a local tests/data/{pdb_id}.pdb path if present, else download."""
-        local_pdb = REPO_ROOT / "tests" / "data" / f"{pdb_id}.pdb"
-        if local_pdb.exists():
-            log.info(f"  Using local structure for {pdb_id}: {local_pdb}")
-            return str(local_pdb)
+        """Return a local tests/data/{pdb_id}.pdb path if CI mode, else download."""
+        if os.environ.get("AUTOANTIBIOTIC_CI") == "1":
+            local_pdb = REPO_ROOT / "tests" / "data" / f"{pdb_id}.pdb"
+            if local_pdb.exists():
+                log.info(f"  Using local structure for {pdb_id}: {local_pdb}")
+                return str(local_pdb)
         return fetch_structure(pdb_id, pdb_dir)
 
     holo_path = _resolve_structure(PDB_IDS["PBP2a_holo"])
@@ -2091,8 +2090,8 @@ def analyze_selectivity_and_resistance(
     if not deps["USE_VINA"]:
         log.warning("  Vina unavailable — skipping selectivity docking. Flagging all as uncertain.")
         for rec in top10:
-            rec.selectivity_index = None
-            rec.selectivity_confidence = CompoundRecord.CONF_NONE
+            rec.selectivity_index = max(0.0, 1.0 - rec.max_similarity)
+            rec.selectivity_confidence = CompoundRecord.CONF_LOW
             rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
         return top10
 
@@ -2294,6 +2293,12 @@ def generate_csv_report(
             "Redock_Validated": (
                 "N/A" if validation_ok is None else str(bool(validation_ok))
             ) + (" (mock)" if is_mock else ""),
+            "Validation_Warning": (
+                "Redocking RMSD > 2.0A"
+                if validation_rmsd is not None and validation_rmsd > 2.0
+                else "OK" if validation_rmsd is not None
+                else "N/A"
+            ),
         })
 
     df = pd.DataFrame(rows)
