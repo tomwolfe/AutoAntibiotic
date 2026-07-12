@@ -712,6 +712,88 @@ class TestMiniPipelineShapeFallback:
             ), row
 
 
+# ── Test: Real PDB smoke test (science mode, real PDBs) ────────────────────
+
+class TestRealPDBSmoke:
+    def test_real_pdb_smoke(self, tmp_path):
+        """
+        With AUTOANTIBIOTIC_CI=0 (science mode) and real PDBs supplied via
+        prepare_targets spy, main() must run end-to-end, write
+        top_candidates.csv with 2 rows, using the mocked library/filters.
+        """
+        import csv
+        import discovery_pipeline as dp
+
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        pdb_dir = tmp_path / "pdb"
+        pdb_dir.mkdir()
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Provide local PDBs to fetch_structure via a neutral directory (path
+        # must NOT contain "tests/data", otherwise prepare_targets would treat
+        # them as mocks and switch to CI mode). This exercises the science-mode
+        # path (AUTOANTIBIOTIC_CI=0) without any network download.
+        real_pdb_dir = tmp_path / "real_pdbs"
+        real_pdb_dir.mkdir()
+        tests_data = Path(__file__).parent / "tests" / "data"
+        for pdb_id in ["3QPD", "6TKO", "1UTN", "3KJZ"]:
+            src = tests_data / f"{pdb_id}.pdb"
+            if src.exists():
+                shutil.copy(str(src), str(real_pdb_dir / f"{pdb_id}.pdb"))
+
+        def mock_fetch_structure(pdb_id, out_dir):
+            return str(real_pdb_dir / f"{pdb_id}.pdb")
+
+        captured = {}
+        real_prepare_targets = dp.prepare_targets
+
+        def spy_prepare(pdb_dir_arg, work_dir_arg, deps):
+            result = real_prepare_targets(pdb_dir_arg, work_dir_arg, deps)
+            captured["targets"] = result
+            return result
+
+        def mock_generate(target_count=2):
+            smis = ["c1ccccc1", "Cc1ccccc1"]
+            recs = []
+            for i, s in enumerate(smis):
+                recs.append(CompoundRecord(
+                    compound_id=f"AA-{i:04d}",
+                    smiles=s,
+                    mol=Chem.MolFromSmiles(s),
+                ))
+            return recs
+
+        def mock_filters(records):
+            return list(records)
+
+        with patch("discovery_pipeline.check_dependencies",
+                   return_value={"vina": False, "USE_VINA": False}):
+            with patch("discovery_pipeline.prepare_targets", side_effect=spy_prepare):
+                with patch("discovery_pipeline.generate_candidate_library",
+                            side_effect=mock_generate):
+                    with patch("discovery_pipeline.apply_filters", side_effect=mock_filters):
+                        with patch("discovery_pipeline.fetch_structure",
+                                    side_effect=mock_fetch_structure):
+                            with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                with patch("discovery_pipeline.CSV_REPORT",
+                                            output_dir / "top_candidates.csv"):
+                                    with patch.dict(os.environ, {
+                                        "AUTOANTIBIOTIC_CI": "0",
+                                    }):
+                                        from discovery_pipeline import main
+                                        main(target_count=2)
+
+        csv_path = output_dir / "top_candidates.csv"
+        assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
+
+        with open(csv_path) as f:
+            rows = list(csv.DictReader(f))
+
+        assert len(rows) == 2, f"Expected 2 rows, got {len(rows)}"
+
+
 # ── Test 10: LigandPreparator ──────────────────────────────────────────────
 
 class TestLigandPreparator:

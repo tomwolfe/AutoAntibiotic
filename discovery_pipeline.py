@@ -14,8 +14,10 @@ Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina
 
 CI mode: set USE_VINA=False or use bundled tests/data mocks; real PDBs required for scientific validation.
 
-Bundled tests/data PDBs are minimal mocks; redocking RMSD against them is non‑physical. Use real PDB downloads for science mode.
-"""
+ Bundled tests/data PDBs are minimal mocks; redocking RMSD against them is non‑physical. Use real PDB downloads for science mode.
+
+For real science runs: set AUTOANTIBIOTIC_CI=0 and place real PDBs in pdb_dir; bundled tests/data are mocks.
+ """
 
 import os
 import sys
@@ -872,7 +874,15 @@ def prepare_targets(
             log.warning(f"  ⚠  Active-site residues {ACTIVE_SITE_RESIDUES} missing: {exc2}")
             log.warning("  Residue missing – grid center set to None; supply real PDB.")
             active_center = None
-    log.info(f"    Active site center: {active_center}")
+        log.info(f"    Active site center: {active_center}")
+
+    if result.get("mode") == "science" and active_center is None:
+        log.error("Active site center missing in science mode – aborting")
+        sys.exit(1)
+
+    if result.get("mode") == "science" and allosteric_center is None:
+        log.error("Active site center missing in science mode – aborting")
+        sys.exit(1)
 
     if allosteric_center is None or active_center is None:
         log.warning(
@@ -2264,10 +2274,12 @@ def generate_csv_report(
             "QED_Score": f"{rec.qed_score:.3f}",
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
             "Redock_RMSD": (
-                f"{validation_rmsd:.3f}" if validation_rmsd is not None else "N/A"
+                "SKIPPED" if is_mock
+                else f"{validation_rmsd:.3f}" if validation_rmsd is not None else "N/A"
             ),
             "Redock_Validated": (
-                "N/A" if validation_ok is None else str(bool(validation_ok))
+                "SKIPPED" if is_mock
+                else "N/A" if validation_ok is None else str(bool(validation_ok))
             ) + (" (mock)" if is_mock else ""),
             "Validation_Warning": (
                 "Redocking RMSD > 2.0A"
