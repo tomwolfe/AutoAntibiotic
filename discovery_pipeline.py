@@ -706,6 +706,8 @@ def prepare_targets(
 
     # ── Fetch structures (prefer bundled offline PDBs under tests/data) ──
     def _resolve_structure(pdb_id: str) -> str:
+        # NOTE: tests/data/*.pdb files are minimal mock structures for offline
+        # CI runs — they are NOT real crystallographic structures.
         """Return a local tests/data/{pdb_id}.pdb path if present, else download."""
         local_pdb = REPO_ROOT / "tests" / "data" / f"{pdb_id}.pdb"
         if local_pdb.exists():
@@ -746,28 +748,24 @@ def prepare_targets(
         allosteric_center = np.zeros(3)
     log.info(f"    Allosteric site center: {allosteric_center}")
 
-    log.info("  Computing active site centroid (SER403)…")
+    log.info("  Computing active site centroid (conserved residues SER403, LYS406, TYR446)…")
     try:
-        active_center = compute_residue_centroid(cleaned_pdb, ACTIVE_SITE_RESIDUES)
-    except (ValueError, Exception) as exc:
-        log.warning(f"  ⚠  Active-site residues {ACTIVE_SITE_RESIDUES} missing: {exc}")
-        log.warning("  Falling back to the allosteric centre for the active centre.")
-        active_center = allosteric_center
-    log.info(f"    Active site center: {active_center}")
-
-    # Cross-check conserved catalytic residues are present in the structure.
-    # If the conserved centroid cannot be computed, fall back to the active
-    # site centre (which shares SER403) so downstream steps always have a
-    # valid conserved centre rather than leaving it uncalculated.
-    try:
-        conserved_center = compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
+        active_center = compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Conserved residues {CONSERVED_RESIDUES} missing: {exc}")
-        log.warning(
-            "  Falling back to active-site centre for the conserved centre "
-            "so it is not left uncalculated."
-        )
-        conserved_center = active_center
+        log.warning("  Falling back to active-site residues for the active centre.")
+        try:
+            active_center = compute_residue_centroid(cleaned_pdb, ACTIVE_SITE_RESIDUES)
+        except (ValueError, Exception) as exc2:
+            log.warning(f"  ⚠  Active-site residues {ACTIVE_SITE_RESIDUES} missing: {exc2}")
+            log.warning("  Falling back to the allosteric centre for the active centre.")
+            active_center = allosteric_center
+    log.info(f"    Active site center: {active_center}")
+
+    # The conserved catalytic centre is captured directly by active_center
+    # (computed from CONSERVED_RESIDUES above), so keep it aliased here for
+    # downstream compatibility.
+    conserved_center = active_center
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
@@ -2058,7 +2056,7 @@ def analyze_selectivity_and_resistance(
     if not deps["USE_VINA"]:
         log.warning("  Vina unavailable — skipping selectivity docking. Flagging all as uncertain.")
         for rec in top10:
-            rec.selectivity_index = 1.0
+            rec.selectivity_index = None
             rec.selectivity_confidence = "None"
             rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
         return top10
@@ -2102,7 +2100,7 @@ def analyze_selectivity_and_resistance(
 
         if not energies_human:
             log.warning(f"  {rec.compound_id}: No human docking data. SI = N/A.")
-            rec.selectivity_index = 1.0
+            rec.selectivity_index = None
             continue
 
         human_min = min(energies_human)
@@ -2402,13 +2400,15 @@ def main(target_count: int = 500, force: bool = False):
             "  ✗  Redocking validation failed — docking results should be "
             "interpreted with caution."
         )
+        # Redocking validation is diagnostic, not a hard gate: never abort.
+        # The validation status is recorded in the CSV (Redock_Validated col).
         if not os.environ.get("AUTOANTIBIOTIC_FORCE"):
             log.warning(
-                "  Proceeding without a validated docking protocol "
-                "(AUTOANTIBIOTIC_FORCE is not set)."
+                "  ⚠  Redocking validation FAILED and AUTOANTIBIOTIC_FORCE is "
+                "not set. Proceeding WITHOUT a validated docking protocol; "
+                "validation status (Redock_Validated=False) will be written to "
+                "the CSV report. Interpret all docking results with caution."
             )
-        # Continue rather than aborting: redocking validation is diagnostic,
-        # not a hard gate.
 
     # ── Phase 2: Library generation & filtering ──
     all_records = generate_candidate_library(target_count=target_count)
