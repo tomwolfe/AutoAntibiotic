@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoantibiotic-discovery-pipeline"
+version = "3.1.0"
+description = "AutoAntibiotic Discovery Pipeline — MRSA PBP2a inhibitor screening"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "rdkit-pypi",
+    "biopython",
+    "pandas",
+    "numpy",
+    "pyyaml",
+    "pytest",
+]
+
+[project.optional-dependencies]
+# Docking / structure-preparation extras.
+# `meeko` and `openbabel-wheel` provide PDBQT preparation; if the wheel is
+# unavailable on your platform, install OpenBabel via your system package
+# manager (e.g. `conda install -c conda-forge openbabel`).
+docking = [
+    "meeko",
+    "openbabel-wheel",
+]
+
+[project.scripts]
+autoantibiotic = "discovery_pipeline:main"
+
+# NOTE: `autodock-vina` is an external system dependency and is NOT a pip
+# package. Install it separately, e.g.:
+#   conda install -c conda-forge vina
+#   # or build from https://github.com/ccsb-scripps/AutoDock-Vina
+# It must be on PATH for the docking (Phase 3) and redocking (Phase 0)
+# steps to run. When Vina is absent, the pipeline falls back to the RDKit
+# Shape/Pharmacophore scoring path.

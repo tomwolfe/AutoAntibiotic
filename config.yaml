@@ -1,0 +1,14 @@
+# AutoAntibiotic Discovery Pipeline — Configuration
+# -----------------------------------------------------------------------------
+# mode: "ci"      -> CI / mock mode. Redocking validation is skipped and no
+#                    physical RMSD is computed/trusted. Use for offline test runs.
+# mode: "science" -> Real scientific validation. Expects real PDBs and runs
+#                    the full redocking protocol. This is the default when this
+#                    file is missing.
+#
+# The mode may also be overridden via environment variables:
+#   AUTOANTIBIOTIC_MODE=ci|science   (explicit, highest precedence)
+#   AUTOANTIBIOTIC_CI=1               (legacy; forces CI mode)
+# -----------------------------------------------------------------------------
+
+mode: science

@@ -635,13 +635,13 @@ class TestMiniPipelineShapeFallback:
         # recurse into the mock.
         real_prepare_targets = dp.prepare_targets
 
-        def spy_prepare(pdb_dir_arg, work_dir_arg, deps):
+        def spy_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
             """Call the real prepare_targets (real PDB loading) and record it."""
             result = real_prepare_targets(pdb_dir_arg, work_dir_arg, deps)
             captured["targets"] = result
             return result
 
-        def mock_generate(target_count=3):
+        def mock_generate(target_count=3, input_csv=None):
             smis = ["c1ccccc1", "Cc1ccccc1", "c1ccc(O)cc1"]
             recs = []
             for i, s in enumerate(smis):
@@ -749,12 +749,12 @@ class TestRealPDBSmoke:
         captured = {}
         real_prepare_targets = dp.prepare_targets
 
-        def spy_prepare(pdb_dir_arg, work_dir_arg, deps):
+        def spy_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
             result = real_prepare_targets(pdb_dir_arg, work_dir_arg, deps)
             captured["targets"] = result
             return result
 
-        def mock_generate(target_count=2):
+        def mock_generate(target_count=2, input_csv=None):
             smis = ["c1ccccc1", "Cc1ccccc1"]
             recs = []
             for i, s in enumerate(smis):
@@ -999,7 +999,7 @@ class TestIntegrationPipeline:
             return str(pdb_dir / f"{pdb_id}.pdb")
 
         # Mock prepare_targets to skip PDB cleaning entirely
-        def mock_prepare_targets(pdb_dir, work_dir, deps):
+        def mock_prepare_targets(pdb_dir, work_dir, deps, config=None):
             return mock_targets
 
         # Mock apply_filters to return all records unchanged
@@ -1084,7 +1084,7 @@ class TestMainRedockingGate:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        def mock_gen(target_count=3):
+        def mock_gen(target_count=3, input_csv=None):
             return [CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
                                    mol=Chem.MolFromSmiles("c1ccccc1")) for i in range(3)]
 
@@ -1122,7 +1122,7 @@ class TestMainRedockingGate:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        def mock_gen(target_count=3):
+        def mock_gen(target_count=3, input_csv=None):
             return [CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
                                    mol=Chem.MolFromSmiles("c1ccccc1")) for i in range(3)]
 

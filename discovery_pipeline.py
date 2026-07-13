@@ -151,6 +151,66 @@ def select_top(records, score_key, descending=False, n=TOP_N):
     return valid[:n]
 
 
+def load_config(config_path: str = "config.yaml") -> dict:
+    """
+    Load pipeline configuration from *config_path* (YAML) or environment.
+
+    The configuration exposes a ``mode`` key, either ``"ci"`` (CI/mock runs,
+    no physical redocking) or ``"science"`` (real scientific validation).
+
+    Resolution order:
+        1. ``config.yaml`` on disk (preferred).
+        2. ``AUTOANTIBIOTIC_MODE`` environment variable (overrides file).
+        3. ``AUTOANTIBIOTIC_CI=1`` environment variable → ``"ci"`` (legacy).
+
+    If no ``config.yaml`` exists, the pipeline defaults to ``mode: science``
+    but emits a warning so the operator is aware of the implicit choice.
+
+    Returns:
+        dict with at least a ``mode`` key.
+    """
+    cfg: Dict[str, str] = {"mode": "science"}
+
+    config_file = Path(config_path)
+    if config_file.exists():
+        try:
+            import yaml
+            with open(config_file) as fh:
+                data = yaml.safe_load(fh) or {}
+            if isinstance(data, dict) and data.get("mode") in ("ci", "science"):
+                cfg["mode"] = data["mode"]
+            else:
+                log.warning(
+                    f"  ⚠  {config_path} missing a valid 'mode' (ci/science); "
+                    "defaulting to mode='science'."
+                )
+        except ImportError:
+            log.warning(
+                "  ⚠  pyyaml is not installed; cannot parse config.yaml. "
+                "Defaulting to mode='science'. Install pyyaml for config support."
+            )
+        except Exception as exc:
+            log.warning(
+                f"  ⚠  Failed to read {config_path} ({exc}); "
+                "defaulting to mode='science'."
+            )
+    else:
+        log.warning(
+            f"  ⚠  {config_path} not found; defaulting to mode='science'. "
+            "Create a config.yaml (mode: ci|science) to set the run mode explicitly."
+        )
+
+    # Environment overrides (explicit is preferred over implicit).
+    env_mode = os.environ.get("AUTOANTIBIOTIC_MODE")
+    if env_mode in ("ci", "science"):
+        cfg["mode"] = env_mode
+    elif os.environ.get("AUTOANTIBIOTIC_CI") == "1":
+        # Legacy escape hatch for offline CI runs.
+        cfg["mode"] = "ci"
+
+    return cfg
+
+
 class LigandPreparator:
     """
     Encapsulates the logic for converting an RDKit Mol to PDBQT format.
@@ -770,7 +830,7 @@ def _centroid_of_pdb_atoms(pdb_path: str) -> Optional[np.ndarray]:
 
 
 def prepare_targets(
-    pdb_dir: str, work_dir: str, deps: dict
+    pdb_dir: str, work_dir: str, deps: dict, config: Optional[dict] = None
 ) -> Dict[str, Dict]:
     """
     Phase 1 — Download, clean, and compute grid centres for all targets.
@@ -804,6 +864,12 @@ def prepare_targets(
     )
     result = {}
 
+    # ── Resolve run mode explicitly from config (no path-based heuristic) ──
+    if config is None:
+        config = load_config()
+    mode = config.get("mode", "science")
+    log.info(f"  Run mode (from config): {mode}")
+
     # ── Fetch structures (prefer bundled offline PDBs under tests/data) ──
     def _resolve_structure(pdb_id: str) -> str:
         """Return a local tests/data/{pdb_id}.pdb path if CI mode, else download."""
@@ -821,20 +887,12 @@ def prepare_targets(
 
     result["holo_pdb"] = holo_path
 
-    # ── Mock-vs-real boundary ──
-    if any(
-        p and "tests/data" in p
-        for p in (holo_path, apo_path, trypsin_path, ces1_path)
-    ):
+    # ── Explicit mode (config-driven, not inferred from file paths) ──
+    if mode == "ci":
         log.info("CI mode: using mock PDBs - not for scientific use.")
-        result["mode"] = "ci"
-    elif os.environ.get("AUTOANTIBIOTIC_CI") == "1":
-        # Allow forcing CI/mock behaviour explicitly without relying on the
-        # bundled-PDB path heuristic (e.g. when structures are injected).
-        result["mode"] = "ci"
-        log.info("CI mode forced via env")
     else:
-        result["mode"] = os.environ.get("AUTOANTIBIOTIC_MODE", "science")
+        log.info("Science mode: real scientific validation expected.")
+    result["mode"] = mode
 
     # ── Clean PBP2a (use holo for grid calc, but we need the protein only) ──
     log.info("  Cleaning PBP2a (apo)…")
@@ -1036,19 +1094,56 @@ def _count_atoms(mol: Chem.Mol) -> int:
 def generate_candidate_library(
     target_count: int = 500,
     seed: int = RANDOM_SEED,
+    input_csv: Optional[str] = None,
 ) -> List[CompoundRecord]:
     """
-    Phase 2.1 — Generate a diverse library by BRICS decomposition of
-    natural product scaffolds, fragment recombination, and expansion.
+    Phase 2.1 — Generate a diverse library.
+
+    If *input_csv* is provided, the library is read directly from that CSV
+    file (expected columns: ``smiles``, ``compound_id``) and the BRICS
+    scaffold-generation logic is skipped entirely.
+
+    Otherwise, a library is generated by BRICS decomposition of natural
+    product scaffolds, fragment recombination, and expansion.
 
     Args:
         target_count: Desired number of compounds (~500).
         seed: Random seed for reproducibility.
+        input_csv: Optional path to an external compound library CSV.
 
     Returns:
         List of CompoundRecord objects (SMILES only, no computed props yet).
     """
     log.info("─── Phase 2: Library Generation ───")
+
+    if input_csv is not None:
+        log.info(f"  Loading external compound library from CSV: {input_csv}")
+        if not os.path.exists(input_csv):
+            raise FileNotFoundError(f"Input library CSV not found: {input_csv}")
+
+        df = pd.read_csv(input_csv)
+        df_cols = {str(c).strip().lower() for c in df.columns}
+        if not {"smiles", "compound_id"}.issubset(df_cols):
+            raise ValueError(
+                f"Input CSV must contain 'smiles' and 'compound_id' columns; "
+                f"found: {list(df.columns)}"
+            )
+
+        records = []
+        for _, row in df.iterrows():
+            smi = str(row["smiles"]).strip()
+            cid = str(row["compound_id"]).strip()
+            if not smi or smi.lower() in ("nan", "none"):
+                log.warning(f"  Skipping row with empty SMILES (compound_id={cid}).")
+                continue
+            mol = Chem.MolFromSmiles(smi)
+            records.append(CompoundRecord(
+                compound_id=cid,
+                smiles=smi,
+                mol=mol,
+            ))
+        log.info(f"  Loaded {len(records)} compounds from external CSV (BRICS skipped).")
+        return records
 
     all_scaffolds = NATURAL_PRODUCT_SCAFFOLDS
     scaffold_mols = []
@@ -2345,17 +2440,27 @@ def print_summary(
 #  MAIN — Pipeline Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main(target_count: int = 500, force: bool = False):
+def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
+         config: Optional[dict] = None):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
-        target_count: Number of candidate compounds to generate.
+        target_count: Number of candidate compounds to generate (BRICS mode).
         force: When True (and env AUTOANTIBIOTIC_FORCE=1 is set), reuse a
             previously cached redocking validation instead of re-running it.
             Otherwise the redocking validation is always executed when
             USE_VINA=True.
+        library: Optional path to an external compound library CSV. When set,
+            BRICS generation is skipped and the CSV compounds are used.
+        config: Optional pre-loaded configuration dict (with a ``mode`` key).
+            If None, :func:`load_config` is invoked to read ``config.yaml``.
     """
     ensure_output_dir()
+
+    # ── Configuration (explicit mode: ci | science) ──
+    if config is None:
+        config = load_config()
+    mode = config.get("mode", "science")
 
     # ── Dependency check ──
     deps = check_dependencies()
@@ -2365,8 +2470,8 @@ def main(target_count: int = 500, force: bool = False):
     pdb_dir = str(OUTPUT_DIR / "pdb")
     os.makedirs(work_dir, exist_ok=True)
 
-    # ── Phase 1: Target preparation ──
-    targets = prepare_targets(pdb_dir, work_dir, deps)
+    # ── Phase1: Target preparation ──
+    targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
 
     # ── Phase 0: Redocking validation ──
     # The (expensive) redocking gate is always executed when USE_VINA=True.
@@ -2437,7 +2542,9 @@ def main(target_count: int = 500, force: bool = False):
             )
 
     # ── Phase 2: Library generation & filtering ──
-    all_records = generate_candidate_library(target_count=target_count)
+    all_records = generate_candidate_library(
+        target_count=target_count, input_csv=library,
+    )
     n_total = len(all_records)
     filtered = apply_filters(all_records)
     n_filtered = len(filtered)
@@ -2496,5 +2603,13 @@ if __name__ == "__main__":
             "validation OR to bypass a failed redocking gate in science mode."
         ),
     )
+    parser.add_argument(
+        "--library", type=str, default=None,
+        help=(
+            "Optional path to an external compound library CSV (columns: "
+            "smiles, compound_id). When provided, BRICS generation is skipped "
+            "and the CSV compounds are used directly."
+        ),
+    )
     args = parser.parse_args()
-    main(target_count=args.count, force=args.force)
+    main(target_count=args.count, force=args.force, library=args.library)
