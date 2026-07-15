@@ -41,6 +41,7 @@ from config.constants import (
     BETA_LACTAM_SMARTS,
     DIVERSITY_MIN_COUNT,
 )
+from tests.helpers import create_minimal_pdb
 from rdkit import Chem
 
 TEST_REAL_PDB_DIR = Path(__file__).parent / "tests" / "data"
@@ -52,15 +53,16 @@ def mock_pdb_dir():
     """Create a temporary directory with a minimal PDB file for centroid testing."""
     tmpdir = tempfile.mkdtemp()
 
-    # Minimal PDB with a single residue (ALA 237) containing a CA atom.
+    # Minimal PDB with a single residue (ALA 237) generated in memory.
     # Coordinates are arbitrary.
-    pdb_content = textwrap.dedent("""\
-        ATOM      1  N   ALA A 237      41.234  12.345  78.901  1.00  0.00           N
-        ATOM      2  CA  ALA A 237      42.345  13.456  79.012  1.00  0.00           C
-        ATOM      3  C   ALA A 237      43.456  14.567  80.123  1.00  0.00           C
-        ATOM      4  O   ALA A 237      44.567  15.678  81.234  1.00  0.00           O
-        END
-    """)
+    pdb_content = create_minimal_pdb({
+        ("ALA", 237, "A"): [
+            ("N", 41.234, 12.345, 78.901),
+            ("CA", 42.345, 13.456, 79.012),
+            ("C", 43.456, 14.567, 80.123),
+            ("O", 44.567, 15.678, 81.234),
+        ],
+    })
     pdb_path = os.path.join(tmpdir, "mock.pdb")
     with open(pdb_path, "w") as f:
         f.write(pdb_content)
@@ -868,12 +870,11 @@ class TestAnalyzeBindingInteractions:
     @pytest.fixture
     def mock_receptor_pdb(self, tmp_path):
         """Create a minimal receptor PDB with SER403, LYS406, TYR446."""
-        content = textwrap.dedent("""\
-            ATOM      1  OG  SER A 403      11.000  11.500  10.000  1.00  0.00           O
-            ATOM      2  NZ  LYS A 406      16.000  12.000  10.000  1.00  0.00           N
-            ATOM      3  OH  TYR A 446      21.000  12.000  10.000  1.00  0.00           O
-            END
-        """)
+        content = create_minimal_pdb({
+            ("SER", 403, "A"): [("OG", 11.000, 11.500, 10.000)],
+            ("LYS", 406, "A"): [("NZ", 16.000, 12.000, 10.000)],
+            ("TYR", 446, "A"): [("OH", 21.000, 12.000, 10.000)],
+        })
         pdb_path = tmp_path / "receptor.pdb"
         with open(pdb_path, "w") as f:
             f.write(content)
@@ -882,12 +883,13 @@ class TestAnalyzeBindingInteractions:
     @pytest.fixture
     def close_ligand_pdbqt(self, tmp_path):
         """Ligand PDBQT with heavy atoms close to key residues."""
-        content = textwrap.dedent("""\
-            ATOM      1  C   LIG A   1      11.200  11.500  10.000  1.00  0.00           C
-            ATOM      2  C   LIG A   1      16.500  12.500  10.000  1.00  0.00           C
-            ATOM      3  C   LIG A   1      21.200  12.200  10.000  1.00  0.00           C
-            END
-        """)
+        content = create_minimal_pdb({
+            ("LIG", 1, "A"): [
+                ("C", 11.200, 11.500, 10.000),
+                ("C", 16.500, 12.500, 10.000),
+                ("C", 21.200, 12.200, 10.000),
+            ],
+        })
         pdbqt_path = tmp_path / "ligand_close.pdbqt"
         with open(pdbqt_path, "w") as f:
             f.write(content)
@@ -896,10 +898,9 @@ class TestAnalyzeBindingInteractions:
     @pytest.fixture
     def far_ligand_pdbqt(self, tmp_path):
         """Ligand PDBQT with all atoms far from key residues."""
-        content = textwrap.dedent("""\
-            ATOM      1  C   LIG A   1      50.000  50.000  50.000  1.00  0.00           C
-            END
-        """)
+        content = create_minimal_pdb({
+            ("LIG", 1, "A"): [("C", 50.000, 50.000, 50.000)],
+        })
         pdbqt_path = tmp_path / "ligand_far.pdbqt"
         with open(pdbqt_path, "w") as f:
             f.write(content)

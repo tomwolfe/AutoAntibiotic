@@ -108,6 +108,11 @@ from config.constants import (
 # Preserve the original import-time side effect (seeding for reproducibility).
 np.random.seed(RANDOM_SEED)
 
+# Configuration loading is isolated in config.loader so the orchestrator stays
+# focused on flow control. Re-exported here so call sites that reference
+# ``discovery_pipeline.load_config`` keep working unchanged.
+from config.loader import load_config
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LOGGING CONFIGURATION
@@ -140,68 +145,6 @@ def select_top(records, score_key, descending=False, n=TOP_N):
     valid = [r for r in records if getattr(r, score_key, None) is not None]
     valid.sort(key=lambda r: getattr(r, score_key), reverse=descending)
     return valid[:n]
-
-
-def load_config(config_path: str = "config.yaml") -> dict:
-    """
-    Load pipeline configuration from *config_path* (YAML) or environment.
-
-    The configuration exposes a ``mode`` key, either ``"ci"`` (CI/mock runs,
-    no physical redocking) or ``"science"`` (real scientific validation).
-
-    Resolution order:
-        1. ``config.yaml`` on disk (preferred).
-        2. ``AUTOANTIBIOTIC_MODE`` environment variable (overrides file).
-        3. ``AUTOANTIBIOTIC_CI=1`` environment variable → ``"ci"`` (legacy).
-
-    If no ``config.yaml`` exists, the pipeline defaults to ``mode: ci``
-    (a fast, offline run that proves the install works) and emits a warning.
-    To perform heavy scientific computations, the user must create a
-    ``config.yaml`` with ``mode: science``.
-
-    Returns:
-        dict with at least a ``mode`` key.
-    """
-    cfg: Dict[str, str] = {"mode": "ci"}
-
-    config_file = Path(config_path)
-    if config_file.exists():
-        try:
-            import yaml
-            with open(config_file) as fh:
-                data = yaml.safe_load(fh) or {}
-            if isinstance(data, dict) and data.get("mode") in ("ci", "science"):
-                cfg["mode"] = data["mode"]
-            else:
-                log.warning(
-                    f"  ⚠  {config_path} missing a valid 'mode' (ci/science); "
-                    "defaulting to mode='ci'."
-                )
-        except ImportError:
-            log.warning(
-                "  ⚠  pyyaml is not installed; cannot parse config.yaml. "
-                "Defaulting to mode='ci'. Install pyyaml for config support."
-            )
-        except Exception as exc:
-            log.warning(
-                f"  ⚠  Failed to read {config_path} ({exc}); "
-                "defaulting to mode='ci'."
-            )
-    else:
-        log.warning(
-            f"  ⚠  {config_path} not found; defaulting to mode='ci'. "
-            "Create a config.yaml (mode: ci|science) to set the run mode explicitly."
-        )
-
-    # Environment overrides (explicit is preferred over implicit).
-    env_mode = os.environ.get("AUTOANTIBIOTIC_MODE")
-    if env_mode in ("ci", "science"):
-        cfg["mode"] = env_mode
-    elif os.environ.get("AUTOANTIBIOTIC_CI") == "1":
-        # Legacy escape hatch for offline CI runs.
-        cfg["mode"] = "ci"
-
-    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -281,25 +224,41 @@ def check_dependencies() -> dict:
             "  ⚠  Vina binary not found. Setting USE_VINA = False. "
             "Pipeline will use RDKit Shape/Pharmacophore fallback."
         )
-        # High-visibility, bold warning printed directly to stdout so the user
+        # High-visibility, bold error printed directly to stdout so the user
         # is not silently left on the (slower, less accurate) fallback path.
+        # The command is copy-pasteable so the fix is one line away.
         print(
             "\033[1;31m"
             "\n"
             "  ╔══════════════════════════════════════════════════════════════════╗\n"
-            "  ║  WARNING: Vina is missing.                                      ║\n"
-            "  ║  For best results, install via:                                 ║\n"
+            "  ║  ERROR: AutoDock Vina not found.                                ║\n"
+            "  ║  Install it via:                                                ║\n"
             "  ║    conda install -c conda-forge vina                            ║\n"
             "  ╚══════════════════════════════════════════════════════════════════╝\n"
             "\033[0m",
             flush=True,
         )
+        log.error("Error: AutoDock Vina not found. Install it via: conda install -c conda-forge vina")
 
     if not obabel_available:
         log.warning(
             "  ⚠  OpenBabel not found. Some conversions may fail; "
             "pipeline will attempt RDKit-based alternatives."
         )
+        # High-visibility, bold error so the missing-binary fix is obvious and
+        # copy-pasteable (mirrors the Vina message above).
+        print(
+            "\033[1;31m"
+            "\n"
+            "  ╔══════════════════════════════════════════════════════════════════╗\n"
+            "  ║  ERROR: OpenBabel not found.                                    ║\n"
+            "  ║  Install it via:                                                ║\n"
+            "  ║    conda install -c conda-forge openbabel                       ║\n"
+            "  ╚══════════════════════════════════════════════════════════════════╝\n"
+            "\033[0m",
+            flush=True,
+        )
+        log.error("Error: OpenBabel not found. Install it via: conda install -c conda-forge openbabel")
 
     return {"vina": vina_available, "USE_VINA": vina_available}
 
