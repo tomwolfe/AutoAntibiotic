@@ -1256,35 +1256,70 @@ def profile_resistance_risk(
         tyr = interactions.get("min_dist_Tyr446", float("inf"))
 
         # Residues absent from the cleaned receptor PDB are unverified: flag
-        # them explicitly rather than treating their (infinite) distance as a
-        # scientific measurement.
+        # them explicitly (in natural language) rather than treating their
+        # (infinite) distance as a scientific measurement.
         unverified = interactions.get("unverified_residues") or []
         for resname in unverified:
-            pose_notes.append(f"unverified residue ({resname}) — absent from cleaned PDB")
+            pose_notes.append(
+                f"unverified residue ({resname}) — absent from cleaned PDB"
+            )
+
+        # ── Natural-language key-interaction summary ──
+        # Build human-readable sentences for the catalytic network so chemists
+        # immediately understand the binding mode rather than parsing raw
+        # distance flags. Track which key contacts are favourably engaged.
+        ser_ok = np.isfinite(ser) and ser < 3.5
+        lys_ok = np.isfinite(lys) and lys < 3.8
 
         if np.isfinite(ser):
-            if ser < 3.5:
-                pose_notes.append(f"Strong catalytic engagement (Ser403, d={ser:.2f} Å)")
+            if ser_ok:
+                pose_notes.append(
+                    f"Forms strong H-bond with catalytic Ser403 ({ser:.1f} Å)."
+                )
             elif ser < 5.0:
-                pose_notes.append(f"Weak Ser403 contact (d={ser:.2f} Å) — resistance risk")
+                pose_notes.append(
+                    f"Weak contact with catalytic Ser403 ({ser:.1f} Å) — resistance risk."
+                )
             else:
-                pose_notes.append(f"Loss of Ser403 engagement (d={ser:.2f} Å) — high resistance risk")
-        else:
-            pose_notes.append("Ser403 distance undefined — high resistance risk")
+                pose_notes.append(
+                    f"Loss of Ser403 engagement ({ser:.1f} Å) — high resistance risk."
+                )
+        elif "Ser403" not in unverified:
+            pose_notes.append(
+                "Ser403 distance undefined — high resistance risk."
+            )
 
         if np.isfinite(lys):
-            if lys < 3.8:
-                pose_notes.append(f"Stabilising H-bond with Lys406 (d={lys:.2f} Å)")
+            if lys_ok:
+                pose_notes.append(
+                    f"Stabilized by Lys406 contact ({lys:.1f} Å)."
+                )
             elif lys < 5.0:
-                pose_notes.append(f"Weak Lys406 contact (d={lys:.2f} Å) — resistance risk")
-        else:
-            pose_notes.append("Lys406 distance undefined — resistance risk")
+                pose_notes.append(
+                    f"Weak Lys406 contact ({lys:.1f} Å) — resistance risk."
+                )
+        elif "Lys406" not in unverified:
+            pose_notes.append(
+                "Lys406 distance undefined — resistance risk."
+            )
+
+        # If neither key catalytic residue is engaged (and neither is merely
+        # unverified due to a missing PDB residue), state this plainly.
+        unverified_key = [r for r in unverified if r in ("Ser403", "Lys406")]
+        if (not ser_ok) and (not lys_ok) and not unverified_key:
+            pose_notes.append(
+                "Lacks key interactions with catalytic Ser403 and Lys406."
+            )
 
         if np.isfinite(tyr):
             if tyr < 3.5:
-                pose_notes.append(f"Stabilising contact with Tyr446 (d={tyr:.2f} Å)")
+                pose_notes.append(
+                    f"Stabilising contact with Tyr446 ({tyr:.1f} Å)."
+                )
             elif tyr < 5.0:
-                pose_notes.append(f"Weak Tyr446 contact (d={tyr:.2f} Å) — resistance risk")
+                pose_notes.append(
+                    f"Weak Tyr446 contact ({tyr:.1f} Å) — resistance risk."
+                )
 
         # Aggregate: if the closest conserved-residue contact exceeds 5 Å the
         # compound avoids the catalytic network entirely and is flagged as a
@@ -1487,9 +1522,9 @@ def generate_csv_report(
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
         Selectivity_Confidence, Shape_Score, Max_Similarity, Passes_Lipinski,
-        QED_Score, Binding_Mode_Notes, Redock_RMSD, Redock_Validated,
-        Validation_Warning, H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446,
-        Structure_Source.
+        QED_Score, Binding_Mode_Notes, Redock_RMSD, Protocol_RMSD,
+        Redock_Validated, Validation_Status, Validation_Warning,
+        H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446, Structure_Source.
 
     Returns path to CSV.
     """
@@ -1526,6 +1561,25 @@ def generate_csv_report(
             validation_warning = "RMSD > 2.0Å or Failed"
         else:
             validation_warning = "None"
+
+        # ── Trust Badge columns ──
+        # Protocol_RMSD: the raw redocking RMSD value (in Å) for every row. In
+        # CI/mock mode the protocol is never redocked, so it reads "SKIPPED".
+        protocol_rmsd_str = "SKIPPED" if is_mock else (
+            f"{redock_rmsd:.3f}" if redock_rmsd is not None else "N/A"
+        )
+
+        # Validation_Status: a quick-glance trust badge so chemists immediately
+        # see protocol quality.
+        #   • CI mode (no real RMSD)            → "CI Mode (Skipped)"
+        #   • redock_rmsd > 2.0 Å               → "CAUTION: High RMSD"
+        #   • otherwise (validated protocol)    → "Validated"
+        if is_mock:
+            validation_status = "CI Mode (Skipped)"
+        elif redock_rmsd is not None and redock_rmsd > 2.0:
+            validation_status = "CAUTION: High RMSD"
+        else:
+            validation_status = "Validated"
 
         rows.append({
             "Compound_ID": rec.compound_id,
@@ -1564,10 +1618,12 @@ def generate_csv_report(
             "QED_Score": f"{rec.qed_score:.3f}",
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
             "Redock_RMSD": redock_rmsd_str,
+            "Protocol_RMSD": protocol_rmsd_str,
             "Redock_Validated": (
                 "SKIPPED" if is_mock
                 else "N/A" if validation_ok is None else str(bool(validation_ok))
             ) + (" (mock)" if is_mock else ""),
+            "Validation_Status": validation_status,
             "Validation_Warning": validation_warning,
             "H_Bond_Ser403": str(h_ser),
             "H_Bond_Lys406": str(h_lys),
@@ -1663,8 +1719,36 @@ def generate_pymol_script(
             continue
         name = f"Ligand_{i + 1}_{rec.compound_id}"
         lines.append(f"load {pose!r}, {name}")
+        # Show the ligand as sticks coloured by element for quick inspection.
         lines.append(f"color byelement, {name}")
         lines.append(f"show sticks, {name}")
+
+        # ── Dashed hydrogen-bond lines from the pose-derived interaction fingerprint ──
+        # Draw a dashed measurement line for each conserved residue whose
+        # ligand→residue distance is within the H-bond cutoff (Ser403/Tyr446 < 3.5 Å,
+        # Lys406 < 3.8 Å). These come straight from the record.interactions dict
+        # computed during Phase 4, so the script reflects the real measured pose.
+        inter = getattr(rec, "interactions", None)
+        if inter:
+            ser_d = inter.get("min_dist_Ser403", float("inf"))
+            lys_d = inter.get("min_dist_Lys406", float("inf"))
+            tyr_d = inter.get("min_dist_Tyr446", float("inf"))
+            if np.isfinite(ser_d) and ser_d < 3.5:
+                lines.append(
+                    f"distance hbond_ser_{i + 1}, {name}, resi 403 & name OG, cutoff=3.5"
+                )
+                lines.append("dash wid 2.0")
+            if np.isfinite(lys_d) and lys_d < 3.8:
+                lines.append(
+                    f"distance hbond_lys_{i + 1}, {name}, resi 406 & name NZ, cutoff=3.8"
+                )
+                lines.append("dash wid 2.0")
+            if np.isfinite(tyr_d) and tyr_d < 3.5:
+                lines.append(
+                    f"distance hbond_tyr_{i + 1}, {name}, resi 446 & name OH, cutoff=3.5"
+                )
+                lines.append("dash wid 2.0")
+        lines.append("")
         loaded += 1
 
     lines.append("")
@@ -1816,7 +1900,8 @@ def _read_records_from_sdf(sdf_path: str) -> List[CompoundRecord]:
 
 
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
-          config: Optional[dict] = None, sdf: Optional[str] = None):
+          config: Optional[dict] = None, sdf: Optional[str] = None,
+          smiles: Optional[str] = None):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -1832,6 +1917,9 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         sdf: Optional path to an SDF file of pre-made molecules. When set,
             RDKit's ``Chem.SDMolSupplier`` reads the structures and BRICS
             generation is skipped entirely.
+        smiles: Optional SMILES string for single-compound screening. When
+            set, the full library pipeline (phases 2/4/5) is skipped and a
+            single compound is docked & summarised immediately.
     """
     ensure_output_dir()
 
@@ -1850,6 +1938,51 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
 
     # ── Phase1: Target preparation ──
     targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
+
+    # ── Single-compound ("--smiles") mode ──
+    # Screen one molecule instantly and print a text summary. This bypasses the
+    # full library generation / selectivity / reporting phases entirely so a
+    # chemist can inspect a single candidate in seconds.
+    if smiles is not None:
+        log.info("─── Single-Compound Mode (--smiles) ───")
+        rec = screen_single_compound(smiles, targets, work_dir, deps)
+
+        pb2pa = targets.get("PBP2a", {})
+        cleaned_pdb = pb2pa.get("cleaned_pdb")
+        pose = getattr(rec, "active_docked_pdbqt", None)
+
+        # Analyse the active-site pose (if available) and summarise interactions.
+        if pose and os.path.exists(pose) and cleaned_pdb and os.path.exists(cleaned_pdb):
+            try:
+                interactions = analyze_binding_interactions(pose, cleaned_pdb)
+                rec.interactions = interactions
+            except Exception as exc:
+                log.warning(f"  Interaction analysis failed: {exc}")
+                interactions = None
+        else:
+            interactions = None
+
+        rec.resistance_notes = profile_resistance_risk(
+            rec, work_dir,
+            pb2pa.get("pdbqt", ""),
+            pb2pa.get("active_center"),
+            ACTIVE_BOX_SIZE,
+            interactions=interactions,
+        )
+        interaction_summary = rec.resistance_notes
+
+        fmt = lambda v: f"{v:.2f} kcal/mol" if v is not None else "N/A"
+        print("\n" + "=" * 64)
+        print("  SINGLE-COMPOUND SCREEN SUMMARY")
+        print("=" * 64)
+        print(f"  Compound ID        : {rec.compound_id}")
+        print(f"  SMILES             : {rec.smiles}")
+        print(f"  Allosteric Energy  : {fmt(rec.pb2pa_allosteric_energy)}")
+        print(f"  Active Energy      : {fmt(rec.pb2pa_active_energy)}")
+        print(f"  Interaction Summary: {interaction_summary}")
+        print("=" * 64 + "\n")
+
+        sys.exit(0)
 
     # ── Phase 0: Redocking validation ──
     # The (expensive) redocking gate is always executed when USE_VINA=True.
@@ -2020,6 +2153,14 @@ if __name__ == "__main__":
             "all required Python packages are installed and on PATH."
         ),
     )
+    parser.add_argument(
+        "--smiles", type=str, default=None,
+        help=(
+            "Screen a single SMILES string instantly (e.g. "
+            "'CN1C(=O)C(N=C1C(=O)O)S...'). Skips library generation and prints a "
+            "one-compound docking summary, then exits. Requires prepared targets."
+        ),
+    )
     args = parser.parse_args()
 
     if args.check:
@@ -2027,4 +2168,4 @@ if __name__ == "__main__":
         sys.exit(0)
 
     main(target_count=args.count, force=args.force, library=args.library,
-         sdf=args.input_sdf)
+         sdf=args.input_sdf, smiles=args.smiles)
