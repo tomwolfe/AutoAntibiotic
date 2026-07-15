@@ -41,7 +41,6 @@ from rdkit.Chem import (
 )
 from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
 from rdkit.Chem.Draw import rdMolDraw2D
-from rdkit.DataStructs import TanimotoSimilarity
 from rdkit import RDLogger as rdklog
 
 # ── Bio.PDB ────────────────────────────────────────────────────────────────────
@@ -56,19 +55,14 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # ── Local utility modules ──────────────────────────────────────────────────────
 # Focused helper modules keep this orchestration file readable while hosting the
 # implementation details for ligand prep, docking, and filtering.
-from utils.ligand_prep import LigandPreparator, prepare_ligand_pdbqt
 from utils.docking import (
-    _run_vina_docking,
     dock_compound,
     _dock_compounds_parallel,
-    _dock_worker,
 )
 from utils.filtering import apply_filters
 
 # Structural helpers (native-ligand extraction, RMSD, centroids) live in their
-# own module to keep this orchestrator focused on flow control. They are
-# re-exported here so call sites and existing tests that reference
-# ``discovery_pipeline.<name>`` keep working unchanged.
+# own module to keep this orchestrator focused on flow control.
 from utils.structure_prep import (
     _extract_native_ligand_from_holo,
     _compute_rmsd_docked_vs_crystal,
@@ -77,20 +71,14 @@ from utils.structure_prep import (
 )
 
 # Library generation (scaffolds, controls, CompoundRecord) lives in its own
-# flat module so the orchestrator stays focused on flow control. Re-exported
-# here so existing call sites / tests that reference
-# ``discovery_pipeline.generate_candidate_library`` / ``CompoundRecord`` keep
-# working unchanged.
+# flat module so the orchestrator stays focused on flow control.
 from utils.library_gen import (
     generate_candidate_library,
-    NATURAL_PRODUCT_SCAFFOLDS,
-    CONTROL_SMILES,
     CompoundRecord,
-    _count_atoms,
 )
 
 # Reporting / artifact generation (CSV, images, interaction diagrams, PyMOL
-# script) lives in its own flat module. Re-exported here for backward compat.
+# script) lives in its own flat module.
 from utils.reporting import (
     generate_csv_report,
     generate_images,
@@ -100,8 +88,7 @@ from utils.reporting import (
 )
 
 # Configuration constants are centralised in config.constants to break the
-# former circular import between this module and the utils package. They are
-# re-exported here for backward compatibility with existing call sites/tests.
+# former circular import between this module and the utils package.
 from config.constants import (
     RANDOM_SEED,
     PDB_IDS,
@@ -140,8 +127,7 @@ except Exception:  # pragma: no cover - local/dev fallback
     __version__ = "3.1.0"
 
 # Configuration loading is isolated in config.loader so the orchestrator stays
-# focused on flow control. Re-exported here so call sites that reference
-# ``discovery_pipeline.load_config`` keep working unchanged.
+# focused on flow control.
 from config.loader import load_config
 
 
@@ -567,7 +553,7 @@ def clean_pdb_structure(
 
 
 # NOTE: compute_residue_centroid / _centroid_of_pdb_atoms now live in
-# utils.structure_prep and are re-exported above for backward compatibility.
+# utils.structure_prep and are imported above.
 
 
 def prepare_targets(
@@ -753,10 +739,9 @@ def prepare_targets(
 #  PHASE 2 — LIBRARY GENERATION & FILTERING
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# NOTE: The ``CompoundRecord`` dataclass, ``NATURAL_PRODUCT_SCAFFOLDS``,
-# ``CONTROL_SMILES`` and ``generate_candidate_library`` now live in
-# ``utils/library_gen.py`` and are re-exported at the top of this module for
-# backward compatibility. The orchestrator below only consumes them.
+# NOTE: The ``CompoundRecord`` dataclass and ``generate_candidate_library``
+# now live in ``utils/library_gen.py`` and are imported above. The
+# orchestrator below only consumes them.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1314,8 +1299,8 @@ def analyze_selectivity_and_resistance(
 # NOTE: ``generate_csv_report``, ``generate_images``,
 # ``generate_interaction_diagram``, ``generate_pymol_script`` and
 # ``_print_single_summary`` now live in ``utils/reporting.py`` and are
-# re-exported at the top of this module for backward compatibility. The
-# orchestrator below (main) only calls them.
+# imported at the top of this module. The orchestrator below (main) only
+# calls them.
 
 
 def screen_single_compound(

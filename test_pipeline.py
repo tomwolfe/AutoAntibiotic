@@ -18,26 +18,25 @@ import numpy as np
 import pytest
 
 from discovery_pipeline import (
-    apply_filters,
-    generate_candidate_library,
     check_dependencies,
     run_redocking_validation,
-    _run_vina_docking,
     compute_selectivity_index,
     analyze_binding_interactions,
     profile_resistance_risk,
-    LigandPreparator,
-    CompoundRecord,
-    OUTPUT_DIR,
-    TOP_N,
     ensure_output_dir,
     screen_library,
-    _dock_compounds_parallel,
-    TanimotoSimilarity,
     log,
 )
+from utils.filtering import apply_filters
+from utils.library_gen import generate_candidate_library, CompoundRecord
+from utils.docking import _run_vina_docking, _dock_compounds_parallel
+from utils.ligand_prep import LigandPreparator
+from utils.reporting import generate_csv_report
+from rdkit.DataStructs import TanimotoSimilarity
 from utils.structure_prep import compute_residue_centroid
 from config.constants import (
+    OUTPUT_DIR,
+    TOP_N,
     BETA_LACTAM_SMARTS,
     DIVERSITY_MIN_COUNT,
 )
@@ -393,7 +392,7 @@ class TestRedockingValidation:
             return_value="CCO",
         ):
             with patch(
-                "discovery_pipeline._run_vina_docking",
+                "utils.docking._run_vina_docking",
                 return_value=None,
             ):
                 result = run_redocking_validation(
@@ -423,7 +422,7 @@ class TestMockRedockingSkip:
             return_value="CCO",
         ):
             with patch(
-                "discovery_pipeline._run_vina_docking",
+                "utils.docking._run_vina_docking",
                 return_value=None,
             ):
                 result = run_redocking_validation(
@@ -855,7 +854,7 @@ class TestIntegrationPipeline:
 
         # Mock screen_library to return 5 records with valid docking scores
         def mock_screen_library(records, targets, work_dir, deps):
-            from discovery_pipeline import CompoundRecord
+            from utils.library_gen import CompoundRecord
             # Return top 5 records with allosteric energy scores
             top5 = []
             for i, rec in enumerate(records[:5]):
@@ -1031,7 +1030,8 @@ class TestMainRedockingGate:
 class TestConservedResiduesCentroid:
     def test_prepare_targets_warns_on_missing_conserved(self, tmp_path):
         """prepare_targets logs a warning when conserved residues are absent."""
-        from discovery_pipeline import prepare_targets, CONSERVED_RESIDUES
+        from discovery_pipeline import prepare_targets
+        from config.constants import CONSERVED_RESIDUES
         import discovery_pipeline as dp
 
         # PDB with active-site SER403 present but missing LYS406 / TYR446
@@ -1080,7 +1080,8 @@ class TestPrepareTargetsNoneCenter:
         leave PBP2a active_center as None instead of falling back to the
         allosteric center.
         """
-        from discovery_pipeline import prepare_targets, CONSERVED_RESIDUES, ACTIVE_SITE_RESIDUES
+        from discovery_pipeline import prepare_targets
+        from config.constants import CONSERVED_RESIDUES, ACTIVE_SITE_RESIDUES
         import discovery_pipeline as dp
 
         pdb = tmp_path / "p.pdb"
@@ -1173,7 +1174,6 @@ class TestCsvLowConfSuffix:
     def test_low_conf_appends_suffix(self, tmp_path):
         """Selectivity_Index gets ' (low-conf)' suffix when confidence != High."""
         import discovery_pipeline as dp
-        from discovery_pipeline import generate_csv_report
 
         output_dir = tmp_path / "output"
         output_dir.mkdir()
