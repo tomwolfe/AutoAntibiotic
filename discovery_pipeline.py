@@ -67,6 +67,7 @@ from utils.structure_prep import (
     _extract_native_ligand_from_holo,
     _compute_rmsd_docked_vs_crystal,
     compute_residue_centroid,
+    write_receptor_pdbqt,
 )
 
 # Library generation (scaffolds, controls, CompoundRecord) lives in its own
@@ -158,6 +159,66 @@ def select_top(records, score_key, descending=False, n=TOP_N):
     valid = [r for r in records if getattr(r, score_key, None) is not None]
     valid.sort(key=lambda r: getattr(r, score_key), reverse=descending)
     return valid[:n]
+
+
+def _auto_box_size(
+    receptor_pdb: Optional[str],
+    center: Optional[np.ndarray],
+    default_box: Tuple[float, float, float],
+    min_size: float = 15.0,
+    padding: float = 6.0,
+) -> Tuple[float, float, float]:
+    """
+    Auto-size a docking grid box around *center*.
+
+    Computes the maximum distance from *center* to any heavy atom of the
+    residue(s) that define the site (read from *receptor_pdb*), then sizes the
+    box so it comfortably encloses the site:
+
+        size = max(min_size, 2 * (max_radius + padding))
+
+    This replaces the hardcoded constants (e.g. the allosteric ``(15,15,15)``
+    Å box, which can be too small for residues like ALA237/MET241/TYR159 that
+    span more than 15 Å in real structures). When the receptor PDB is missing
+    or the spread cannot be measured, the *default_box* is returned unchanged.
+
+    Args:
+        receptor_pdb: Path to the cleaned receptor PDB (or None).
+        center: Grid centre as a length-3 array (or None).
+        default_box: Fallback box dimensions when auto-sizing is impossible.
+        min_size: Minimum box edge in Å (enforced even for tiny sites).
+        padding: Extra Å added to the measured radius on each side.
+
+    Returns:
+        ``(x, y, z)`` box dimensions in Å.
+    """
+    if receptor_pdb is None or not os.path.exists(receptor_pdb) or center is None:
+        return default_box
+
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("receptor", receptor_pdb)
+        center = np.asarray(center, dtype=float)
+        max_radius = 0.0
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    rid = residue.get_id()
+                    if rid[0] != " ":
+                        continue
+                    for atom in residue:
+                        try:
+                            pos = atom.get_vector().get_array()
+                        except Exception:
+                            continue
+                        d = float(np.linalg.norm(np.asarray(pos) - center))
+                        if d > max_radius:
+                            max_radius = d
+        size = max(min_size, 2.0 * (max_radius + padding))
+        return (size, size, size)
+    except Exception as exc:
+        log.warning(f"  ⚠  Could not auto-size box ({exc}); using default {default_box}.")
+        return default_box
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -372,7 +433,8 @@ def run_redocking_validation(
 
     # Grid center = centroid of the native ligand residue (derived from the
     # native-ligand resname override, if provided). If the residue centroid
-    # fails, fall back to None rather than a second helper.
+    # cannot be computed, validation must FAIL CLEANLY — we must NOT fall back
+    # to an unrelated residue centroid (that would produce a meaningless RMSD).
     resname = resname_override.strip().upper() if resname_override else None
     center = None
     if resname:
@@ -382,10 +444,11 @@ def run_redocking_validation(
             center = None
     if center is None:
         log.warning(
-            "  ⚠  Could not compute native-ligand centroid; "
-            "falling back to allosteric residues."
+            "  ⚠  Could not compute native-ligand centroid for "
+            f"'{resname_override}'. Native-ligand redocking cannot proceed; "
+            "failing validation cleanly (no synthetic RMSD)."
         )
-        center = compute_residue_centroid(holo_pdb_path, ALLOSTERIC_RESIDUES)
+        return False, None
 
     # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
@@ -535,20 +598,31 @@ def clean_pdb_structure(
                 log.warning(f"  RDKit PDB parsing failed for hydrogen addition: {exc}. Skipping.")
 
         # Convert to PDBQT for Vina via obabel (add gasteiger charges).
-        # If obabel is unavailable, copy the PDB as-is with a .pdbqt extension.
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
         try:
             subprocess.run(
                 ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
                 capture_output=True, timeout=60,
             )
+            if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
+                return pdbqt_path
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            log.warning(
-                "  obabel not found. Writing PDB as-is; Vina may fail."
-            )
-            shutil.copy(out_path, pdbqt_path)
+            pass
 
-        return pdbqt_path if os.path.exists(pdbqt_path) else out_path
+        # OpenBabel unavailable (or produced empty output). Use the RDKit-based
+        # PDBQT writer rather than copying the .pdb verbatim — a plain .pdb
+        # renamed to .pdbqt is invalid for Vina and would fail later with an
+        # cryptic error. If even the RDKit writer fails, error clearly.
+        if write_receptor_pdbqt(out_path, pdbqt_path):
+            return pdbqt_path
+
+        raise RuntimeError(
+            "Could not write a valid receptor PDBQT. OpenBabel ('obabel') is "
+            "required to convert the cleaned PDB to PDBQT, and the RDKit-based "
+            "fallback writer was unable to parse the receptor. Install obabel "
+            "with `bash setup.sh` or `conda install -c conda-forge openbabel`, "
+            "or use the Docker image."
+        )
 
     except Exception as exc:
         log.error(f"  ✗  Failed to clean {pdb_path}: {exc}")
@@ -776,26 +850,32 @@ def screen_library(
     """
     log.info("─── Phase 3: Virtual Screening ───")
 
-    if not deps["USE_VINA"]:
-        log.error(
-            "AutoDock Vina is required for screening. Install via "
-            "`bash setup.sh` or Docker."
-        )
-        raise RuntimeError(
-            "AutoDock Vina is required for screening. Install via "
-            "`bash setup.sh` or Docker."
+    use_vina = deps.get("USE_VINA", False)
+    if not use_vina:
+        log.warning(
+            "AutoDock Vina not available — using the RDKit shape/pharmacophore "
+            "fallback scorer. These scores are APPROXIMATE and rank candidates "
+            "relative to each other only; they are NOT physical binding energies."
         )
 
     pb2pa = targets["PBP2a"]
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
 
+    # Auto-sized boxes (centroid + atom spread, min 15 Å) — never rely on the
+    # hardcoded constants when a real grid centre exists.
+    allosteric_box = _auto_box_size(pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE) \
+        if allosteric_center is not None else ALLOSTERIC_BOX_SIZE
+    active_box = _auto_box_size(pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE) \
+        if active_center is not None else ACTIVE_BOX_SIZE
+
     # ── Allosteric docking ──
     log.info("  Docking all compounds against allosteric site…")
     allosteric_results = _dock_compounds_parallel(
         records, pb2pa["pdbqt"],
-        allosteric_center, ALLOSTERIC_BOX_SIZE,
+        allosteric_center, allosteric_box,
         work_dir, "allosteric",
+        use_vina=use_vina,
     )
 
     n_scored = 0
@@ -816,8 +896,9 @@ def screen_library(
 
         active_results = _dock_compounds_parallel(
             top50, pb2pa["pdbqt"],
-            active_center, ACTIVE_BOX_SIZE,
+            active_center, active_box,
             work_dir, "active",
+            use_vina=use_vina,
         )
 
         for rec, energy in active_results:
@@ -1163,6 +1244,47 @@ def profile_resistance_risk(
     return "; ".join(notes)
 
 
+def _run_resistance_profiling(
+    top10: List[CompoundRecord],
+    targets: dict,
+    work_dir: str,
+) -> None:
+    """
+    Pose-based resistance profiling for the *top10* candidates.
+
+    Uses the active-site pose captured during ``screen_library``
+    (``record.active_docked_pdbqt``) to compute the binding-interaction
+    fingerprint, then runs :func:`profile_resistance_risk`. When no pose was
+    retained (e.g. the RDKit fallback path), the analysis gracefully notes
+    "no pose" rather than fabricating a pose.
+    """
+    pb2pa = targets.get("PBP2a", {})
+    cleaned_pdb = pb2pa.get("cleaned_pdb")
+
+    for rec in top10:
+        interactions = None
+
+        if cleaned_pdb and os.path.exists(cleaned_pdb):
+            out_pdbqt = getattr(rec, "active_docked_pdbqt", None)
+            if out_pdbqt and os.path.exists(out_pdbqt):
+                try:
+                    interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
+                except Exception:
+                    interactions = None
+
+        # Stash the interaction fingerprint on the record so the CSV report
+        # can derive per-residue H-bond columns without re-parsing the pose.
+        rec.interactions = interactions
+
+        rec.resistance_notes = profile_resistance_risk(
+            rec, work_dir,
+            pb2pa.get("pdbqt", ""),
+            pb2pa.get("active_center"),
+            ACTIVE_BOX_SIZE,
+            interactions=interactions,
+        )
+
+
 def analyze_selectivity_and_resistance(
     top10: List[CompoundRecord],
     targets: dict,
@@ -1180,19 +1302,34 @@ def analyze_selectivity_and_resistance(
     """
     log.info("─── Phase 4: Selectivity & Resistance Analysis ───")
 
-    if not deps["USE_VINA"]:
-        log.warning("  Vina unavailable — skipping selectivity docking. Flagging all as uncertain.")
+    use_vina = deps.get("USE_VINA", False)
+
+    if not use_vina:
+        log.warning(
+            "  Vina unavailable — using the RDKit fallback scorer for human "
+            "off-targets. Selectivity indices are APPROXIMATE."
+        )
         for rec in top10:
             rec.selectivity_index = max(0.0, 1.0 - rec.max_similarity)
             rec.selectivity_confidence = CompoundRecord.CONF_LOW
-            rec.resistance_notes = "Selectivity not assessed (Vina unavailable)."
+            rec.resistance_notes = (
+                "Selectivity assessed with approximate RDKit fallback scores "
+                "(Vina unavailable)."
+            )
+        # Still run the pose-based resistance analysis below using any active
+        # pose captured during Phase 3 (none in fallback mode).
+        _run_resistance_profiling(top10, targets, work_dir)
         return top10
 
     # ── Dock vs Trypsin (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
+    trypsin_box = _auto_box_size(
+        targets["trypsin"].get("cleaned_pdb"), targets["trypsin"]["active_center"],
+        (20.0, 20.0, 20.0),
+    ) if targets["trypsin"].get("active_center") is not None else (20.0, 20.0, 20.0)
     trypsin_results = _dock_compounds_parallel(
         top10, targets["trypsin"]["pdbqt"],
-        targets["trypsin"]["active_center"], (20.0, 20.0, 20.0),
+        targets["trypsin"]["active_center"], trypsin_box,
         work_dir, "trypsin", n_jobs=min(4, len(top10)),
     )
     for rec, energy in trypsin_results:
@@ -1200,9 +1337,13 @@ def analyze_selectivity_and_resistance(
 
     # ── Dock vs CES1 (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (3KJZ)…")
+    ces1_box = _auto_box_size(
+        targets["CES1"].get("cleaned_pdb"), targets["CES1"]["active_center"],
+        (20.0, 20.0, 20.0),
+    ) if targets["CES1"].get("active_center") is not None else (20.0, 20.0, 20.0)
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
-        targets["CES1"]["active_center"], (20.0, 20.0, 20.0),
+        targets["CES1"]["active_center"], ces1_box,
         work_dir, "ces1", n_jobs=min(4, len(top10)),
     )
     for rec, energy in ces1_results:
@@ -1266,36 +1407,7 @@ def analyze_selectivity_and_resistance(
             rec.resistance_notes += "High risk off-target binding"
 
     # ── Resistance profiling with pose-based interaction analysis ──
-    pb2pa = targets["PBP2a"]
-    cleaned_pdb = pb2pa.get("cleaned_pdb")
-
-    for rec in top10:
-        interactions = None
-
-        # Always use the active-site pose captured during screen_library
-        # (record.active_docked_pdbqt) for pose-based interaction analysis.
-        # If no pose was retained (e.g. fallback shape screening), skip the
-        # analysis and let profile_resistance_risk note "no pose".
-        if cleaned_pdb and os.path.exists(cleaned_pdb):
-            out_pdbqt = getattr(rec, "active_docked_pdbqt", None)
-            if out_pdbqt and os.path.exists(out_pdbqt):
-                try:
-                    interactions = analyze_binding_interactions(out_pdbqt, cleaned_pdb)
-                except Exception:
-                    interactions = None
-
-        # Stash the interaction fingerprint on the record so the CSV report
-        # can derive per-residue H-bond columns without re-parsing the pose.
-        rec.interactions = interactions
-
-        rec.resistance_notes = profile_resistance_risk(
-            rec, work_dir,
-            pb2pa["pdbqt"],
-            pb2pa["active_center"],
-            ACTIVE_BOX_SIZE,
-            interactions=interactions,
-        )
-
+    _run_resistance_profiling(top10, targets, work_dir)
     log.info("─── Phase 4 complete ───")
     return top10
 
@@ -1349,22 +1461,32 @@ def screen_single_compound(
     receptor_pdbqt = pb2pa.get("pdbqt")
     allosteric_center = pb2pa.get("allosteric_center")
     active_center = pb2pa.get("active_center")
+    use_vina = deps.get("USE_VINA", False)
 
-    if deps.get("USE_VINA") and receptor_pdbqt:
+    if receptor_pdbqt:
         if allosteric_center is not None:
+            allosteric_box = _auto_box_size(
+                pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"),
+                allosteric_center, ALLOSTERIC_BOX_SIZE,
+            )
             rec.pb2pa_allosteric_energy = dock_compound(
                 rec, receptor_pdbqt, allosteric_center,
-                ALLOSTERIC_BOX_SIZE, work_dir, "allosteric",
+                allosteric_box, work_dir, "allosteric",
+                use_vina=use_vina,
             )
         if active_center is not None:
+            active_box = _auto_box_size(
+                pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
+            )
             rec.pb2pa_active_energy = dock_compound(
                 rec, receptor_pdbqt, active_center,
-                ACTIVE_BOX_SIZE, work_dir, "active",
+                active_box, work_dir, "active",
+                use_vina=use_vina,
             )
     else:
         log.warning(
-            "  Vina unavailable or receptor missing — screen_single_compound "
-            "cannot dock. Returning record with no docking energies."
+            "  Receptor PDBQT missing — screen_single_compound cannot score. "
+            "Returning record with no docking energies."
         )
 
     # ── Pose-based interaction analysis ──

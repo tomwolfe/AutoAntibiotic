@@ -17,6 +17,8 @@ Create a `config.yaml` at the repo root:
 
 ```yaml
 mode: science
+# REQUIRED for redocking validation against the real holo structure:
+native_ligand_resname: CEF
 ```
 
 Then run the full pipeline (downloads real PDBs, redocking validation, Vina):

@@ -129,11 +129,12 @@ that all components (RDKit, Biopython, the CLI, reporting) are wired together
 correctly. It completes in seconds and produces a candidate report without any
 network access or heavy computation. Use it as a smoke test after installing.
 
-> New to the project? When no `config.yaml` is present, the pipeline
-> **defaults to `mode: ci`**, so a bare `autoantibiotic --count 10` behaves
-> the same as the CI command above. Explicitly create a `config.yaml` with
-> `mode: science` (see [Configuration](#configuration)) to perform real,
-> computationally intensive runs.
+> New to the project? The shipped `config.yaml` uses `mode: ci`, and when no
+> `config.yaml` is present the pipeline also **defaults to `mode: ci`**, so a
+> bare `autoantibiotic --count 10` behaves the same as the CI command above.
+> Explicitly create/switch a `config.yaml` to `mode: science` (see
+> [Configuration](#configuration)) — and provide `native_ligand_resname` plus
+> real PDBs and Vina — to perform real, computationally intensive runs.
 
 To screen a small curated set (e.g. known ligands plus decoys), pass a CSV
 library:
@@ -164,12 +165,34 @@ print(rec.compound_id, rec.pb2pa_allosteric_energy, rec.pb2pa_active_energy)
 
 ## Real Run (Science Mode)
 
+> **Important:** The shipped `config.yaml` uses `mode: ci` so a bare
+> `autoantibiotic --count 10` never requires Vina. To do real work you must
+> *explicitly* enable science mode and meet its prerequisites (see below).
+> This is different from an earlier version of this README that claimed
+> `mode: science` was the default — that was wrong and would silently leave
+> science runs with "Validation Unavailable".
+
 For genuine scientific screening against the real PBP2a structure, create a
 `config.yaml` at the repository root that selects science mode:
 
 ```yaml
 mode: science
+# REQUIRED for redocking validation against the real holo structure:
+native_ligand_resname: CEF
 ```
+
+Science mode prerequisites (all required, otherwise the run aborts or is
+untrustworthy):
+
+1. **Real PDB structures** — place/download real `6TKO`, `3QPD`, `1UTN`, `3KJZ`
+   (the bundled `tests/data/*.pdb` are minimal mocks and are rejected by
+   science mode).
+2. **`native_ligand_resname`** set to the exact co-crystallised ligand residue
+   name (e.g. `CEF`). Without it, redocking validation cannot run and the
+   protocol reports `Validation Unavailable`.
+3. **AutoDock Vina** on `PATH` (docking + redocking). Install via `bash
+   setup.sh` or the Docker image. If Vina is missing, science-mode runs abort
+   (override with `AUTOANTIBIOTIC_FORCE=1` only if you accept invalid results).
 
 Then run the full pipeline (this downloads/uses real PDB structures, performs
 native-ligand redocking validation, and runs Vina docking):

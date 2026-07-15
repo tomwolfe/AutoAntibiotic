@@ -21,11 +21,24 @@ For genuine scientific screening you must:
    directory or let the pipeline fetch them. Never feed the bundled mock PDBs
    to science mode — they are non-physical and will produce meaningless
    docking/redocking results.
-2. **Install AutoDock Vina.** Docking and native-ligand redocking validation
-   require Vina. Install it with one command via `bash setup.sh` (creates the
-   `autoantibiotic` conda env) or run everything inside the Docker image, which
-   bundles Vina and OpenBabel. If Vina is missing, science-mode runs hard-fail
-   (override with `AUTOANTIBIOTIC_FORCE=1` only if you accept invalid results).
+ 2. **Install AutoDock Vina.** Docking and native-ligand redocking validation
+    require Vina. Install it with one command via `bash setup.sh` (creates the
+    `autoantibiotic` conda env) or run everything inside the Docker image, which
+    bundles Vina and OpenBabel. If Vina is missing, science-mode runs hard-fail
+    (override with `AUTOANTIBIOTIC_FORCE=1` only if you accept invalid results).
+
+   > **Offline CI / `--smiles` runs without Vina:** when `USE_VINA=False` the
+   > pipeline no longer aborts on `screen_library` / `screen_single_compound`.
+   > Instead it produces *approximate* scores with a built-in RDKit
+   > shape/pharmacophore scoring fallback (lower accuracy — do **not** treat
+   > these as real binding energies; they only rank candidates relative to each
+   > other). Redocking validation still requires Vina and is skipped otherwise.
+
+ 3. **Set `native_ligand_resname`.** Provide the exact co-crystallised ligand
+    residue name (e.g. `native_ligand_resname: CEF`). Without it, redocking
+    validation cannot run and the protocol reports `Validation Unavailable` —
+    i.e. the science run produces *no* physical RMSD and should be interpreted
+    with caution.
 
 ## Trust signal
 

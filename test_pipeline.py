@@ -31,7 +31,7 @@ from utils.filtering import apply_filters
 from utils.library_gen import generate_candidate_library, CompoundRecord
 from utils.docking import _run_vina_docking, _dock_compounds_parallel
 from utils.ligand_prep import LigandPreparator
-from utils.reporting import generate_csv_report
+from utils.reporting import generate_csv_report, generate_pymol_script
 from rdkit.DataStructs import TanimotoSimilarity
 from utils.structure_prep import compute_residue_centroid
 from config.constants import (
@@ -1436,6 +1436,73 @@ class TestNativeLigandResnameOverride:
             str(holo), str(smi), str(pdbqt)
         )
         assert result is None
+
+
+# ── Test: PyMOL script generation ─────────────────────────────────────────
+
+class TestGeneratePyMOLScript:
+    def _make_records(self, tmp_path):
+        recs = []
+        for i in range(2):
+            pdbqt = tmp_path / f"pose_{i}.pdbqt"
+            pdbqt.write_text(
+                "ATOM      1  C   LIG A   1      11.200  11.500  10.000  1.00  0.00           C\n"
+                "END\n"
+            )
+            rec = CompoundRecord(
+                compound_id=f"AA-{i:04d}",
+                smiles="c1ccccc1",
+                mol=Chem.MolFromSmiles("c1ccccc1"),
+            )
+            rec.active_docked_pdbqt = str(pdbqt)
+            recs.append(rec)
+        return recs
+
+    def test_returns_pml_path(self, tmp_path):
+        """generate_pymol_script returns the path to the written .pml file."""
+        recs = self._make_records(tmp_path)
+        receptor_pdb = tmp_path / "receptor.pdb"
+        receptor_pdb.write_text(
+            "ATOM      1  OG  SER A 403      11.000  11.500  10.000  1.00  0.00           O\n"
+            "END\n"
+        )
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        targets = {"PBP2a": {"cleaned_pdb": str(receptor_pdb)}}
+        pml = generate_pymol_script(recs, targets, str(out_dir))
+        assert pml.endswith(".pml")
+        assert os.path.exists(pml), "visualization.pml should be written"
+
+    def test_script_loads_receptor_and_poses(self, tmp_path):
+        """The generated .pml loads the receptor and each ligand pose."""
+        recs = self._make_records(tmp_path)
+        receptor_pdb = tmp_path / "receptor.pdb"
+        receptor_pdb.write_text(
+            "ATOM      1  OG  SER A 403      11.000  11.500  10.000  1.00  0.00           O\n"
+            "END\n"
+        )
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        targets = {"PBP2a": {"cleaned_pdb": str(receptor_pdb)}}
+        pml = generate_pymol_script(recs, targets, str(out_dir))
+        content = Path(pml).read_text()
+        assert "load" in content
+        assert "PBP2a" in content
+        # Both ligand poses should be loaded.
+        assert content.count("load") >= 3  # receptor + 2 poses
+
+    def test_script_skips_missing_pose(self, tmp_path):
+        """Records without an active-site pose are skipped in the .pml."""
+        recs = self._make_records(tmp_path)
+        recs[1].active_docked_pdbqt = None  # no pose
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        targets = {"PBP2a": {"cleaned_pdb": None}}
+        pml = generate_pymol_script(recs, targets, str(out_dir))
+        content = Path(pml).read_text()
+        # Only the receptor-less header + 1 pose load expected.
+        assert "Ligand_1" in content
+        assert "Ligand_2" not in content
 
 
 if __name__ == "__main__":

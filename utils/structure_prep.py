@@ -227,3 +227,146 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
 
     centroid = np.mean(ca_coords, axis=0)
     return centroid
+
+
+# Vina atom types are single/short tokens; we map the PDB element column to a
+# valid Vina atom type so the receptor PDBQT we write is actually consumable.
+_RECEPTOR_PDBQT_ATOM_TYPE = {
+    "C": "C",
+    "N": "N",
+    "O": "O",
+    "S": "S",
+    "P": "P",
+    "F": "F",
+    "CL": "Cl",
+    "BR": "Br",
+    "I": "I",
+    "H": "H",
+    "NA": "Na",
+    "MG": "Mg",
+    "ZN": "Zn",
+    "FE": "Fe",
+    "CA": "Ca",
+    "MN": "Mn",
+}
+
+
+def write_receptor_pdbqt(pdb_path: str, pdbqt_path: str) -> bool:
+    """
+    Write a receptor PDBQT file from a cleaned receptor PDB using RDKit/Bio.PDB.
+
+    This is the OpenBabel-independent fallback used by
+    :func:`discovery_pipeline.clean_pdb_structure` when ``obabel`` is not on
+    ``PATH``. It produces a *real* PDBQT file (Gasteiger charges + Vina atom
+    types + the rigid ``ATOM`` records Vina expects) rather than copying the
+    PDB verbatim, which Vina would reject as an invalid PDBQT.
+
+    Returns ``True`` on success, ``False`` if the receptor cannot be parsed.
+    """
+    # Prefer RDKit so we can assign Gasteiger charges (required by Vina). RDKit
+    # parses standard crystallographic PDBs; if it fails (e.g. a minimal mock
+    # PDB), fall back to Bio.PDB coordinate/element extraction with charge 0.0.
+    mol = Chem.MolFromPDBFile(pdb_path, removeHs=False)
+    gasteiger = {}
+    if mol is not None:
+        try:
+            from rdkit.Chem import AllChem
+
+            mol = Chem.AddHs(mol, addCoords=True)
+            AllChem.ComputeGasteigerCharges(mol)
+            for atom in mol.GetAtoms():
+                try:
+                    c = float(atom.GetProp("_GasteigerCharge"))
+                except Exception:
+                    c = 0.0
+                if not np.isfinite(c):
+                    c = 0.0
+                gasteiger[atom.GetIdx()] = c
+        except Exception as exc:
+            log.warning(f"  ⚠  Gasteiger charge assignment failed: {exc}")
+
+    lines = ["REMARK  AutoAntibiotic RDKit/Bio.PDB-generated receptor PDBQT (no obabel)"]
+    serial = 1
+
+    if mol is not None and gasteiger:
+        conf = mol.GetConformer()
+        for atom in mol.GetAtoms():
+            pos = conf.GetAtomPosition(atom.GetIdx())
+            elem = atom.GetSymbol().upper()
+            atom_type = _RECEPTOR_PDBQT_ATOM_TYPE.get(elem, elem)
+            charge = gasteiger.get(atom.GetIdx(), 0.0)
+            pdb_atom = atom.GetPDBResidueInfo()
+            if pdb_atom is not None:
+                res_name = pdb_atom.GetResidueName().strip() or "RECP"
+                chain = pdb_atom.GetChainId() or "A"
+                res_seq = pdb_atom.GetResidueNumber() or 1
+                atom_name = pdb_atom.GetName().strip() or f"{elem:>2s}"
+            else:
+                res_name, chain, res_seq, atom_name = "RECP", "A", 1, f"{elem:>2s}"
+            line = (
+                "ATOM  "
+                + f"{serial:5d} "
+                + f"{atom_name[:4]:<4s}"
+                + f"{res_name[:3]:<3s} "
+                + f"{chain:1s}"
+                + f"{res_seq:4d}"
+                + "    "
+                + f"{pos.x:8.3f}{pos.y:8.3f}{pos.z:8.3f}"
+                + f"   {charge:7.4f} "
+                + f"{atom_type:<2s}"
+            )
+            lines.append(line)
+            serial += 1
+        lines.append("TER")
+        lines.append("END")
+        with open(pdbqt_path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        log.info(f"  Receptor PDBQT written via RDKit fallback: {pdbqt_path}")
+        return True
+
+    # ── Bio.PDB fallback (handles mock/minimal PDBs RDKit won't parse) ──
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("receptor", pdb_path)
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    for atom in residue:
+                        try:
+                            coord = atom.get_vector().get_array()
+                        except Exception:
+                            continue
+                        elem = atom.element.strip().upper() if atom.element else ""
+                        if not elem:
+                            # Infer element from atom name's first alpha char.
+                            for ch in atom.get_name():
+                                if ch.isalpha():
+                                    elem = ch.upper()
+                                    break
+                        atom_type = _RECEPTOR_PDBQT_ATOM_TYPE.get(elem, elem or "C")
+                        res_name = residue.get_resname().strip()[:3] or "RECP"
+                        res_seq = residue.get_id()[1] if len(residue.get_id()) > 1 else 1
+                        atom_name = atom.get_name().strip() or f"{elem:>2s}"
+                        line = (
+                            "ATOM  "
+                            + f"{serial:5d} "
+                            + f"{atom_name[:4]:<4s}"
+                            + f"{res_name[:3]:<3s} "
+                            + f"{chain.get_id() if hasattr(chain, 'get_id') else 'A':1s}"
+                            + f"{res_seq:4d}"
+                            + "    "
+                            + f"{coord[0]:8.3f}{coord[1]:8.3f}{coord[2]:8.3f}"
+                            + f"   {0.0:7.4f} "
+                            + f"{atom_type:<2s}"
+                        )
+                        lines.append(line)
+                        serial += 1
+        lines.append("TER")
+        lines.append("END")
+        with open(pdbqt_path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        log.info(f"  Receptor PDBQT written via Bio.PDB fallback: {pdbqt_path}")
+        return True
+    except Exception as exc:
+        log.warning(f"  ⚠  Bio.PDB receptor PDBQT fallback failed: {exc}")
+        return False

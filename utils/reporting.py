@@ -232,7 +232,7 @@ def generate_images(
                 continue
             rec.mol = mol
 
-        img_path = OUTPUT_DIR / f"top{i + 1}_{rec.compound_id}.png"
+        img_path = output_dir / f"top{i + 1}_{rec.compound_id}.png"
         try:
             drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
             drawer.DrawMolecule(rec.mol)
