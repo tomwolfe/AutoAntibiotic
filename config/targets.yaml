@@ -16,6 +16,11 @@ targets:
   CONSERVED_RESIDUES: ["SER403", "LYS406", "TYR446"]
   TRYPSIN_CATALYTIC_RESIDUES: ["HIS57", "ASP102", "SER195"]
   CES1_CATALYTIC_RESIDUES: ["SER221", "HIS468", "GLU354"]
+  # Human off-target panel (added for a wider selectivity screen). Residue
+  # lists are plausible catalytic/active-site sites used to centre the docking
+  # grid. Edit here to re-target without touching source code.
+  ALBUMIN_CATALYTIC_RESIDUES: ["HIS242", "LYS199"]
+  CYP3A4_CATALYTIC_RESIDUES: ["HIS368", "ARG105"]
 
 # ── Protocol trust RMSD thresholds (Å) ────────────────────────────────────────
 # Redocking RMSD cutoffs used by config.constants.protocol_trust and the

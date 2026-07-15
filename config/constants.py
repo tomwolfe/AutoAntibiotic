@@ -25,11 +25,23 @@ log = logging.getLogger("AutoAntibiotic")
 RANDOM_SEED = 42
 
 # PDB identifiers
+# PBP2a conformer set used for consensus rigid docking (science mode). The
+# holo (6TKO) and apo (3QPD) structures are already fetched by the pipeline;
+# 1ZOO is an additional public PBP2a PDB trivially addable via this list
+# (no new download infrastructure). The first entry is treated as the primary
+# receptor for backwards compatibility.
+PBP2A_CONFORMER_IDS = ["3QPD", "6TKO", "1ZOO"]
 PDB_IDS = {
     "PBP2a_apo": "3QPD",
     "PBP2a_holo": "6TKO",
+    "PBP2a_conformer_1ZOO": "1ZOO",
     "trypsin": "1UTN",
     "CES1": "3KJZ",
+    # Wider human off-target panel (Task 3). 1AO6 = human serum albumin,
+    # 1W0E = human CYP3A4. Both are added to the fetch list so they download
+    # alongside the other targets (no mock-free static files required).
+    "HUMAN_ALBUMIN": "1AO6",
+    "CYP3A4": "1W0E",
 }
 
 # Reference antibiotics for similarity filtering (SMILES)
@@ -55,6 +67,8 @@ _ACTIVE_SITE_RESIDUES_DEFAULT = ["SER403"]
 _CONSERVED_RESIDUES_DEFAULT = ["SER403", "LYS406", "TYR446"]
 _TRYPSIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS57", "ASP102", "SER195"]
 _CES1_CATALYTIC_RESIDUES_DEFAULT = ["SER221", "HIS468", "GLU354"]
+_ALBUMIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS242", "LYS199"]
+_CYP3A4_CATALYTIC_RESIDUES_DEFAULT = ["HIS368", "ARG105"]
 
 # Names of the target residue lists that can be overridden via targets.yaml.
 _TARGET_RESIDUE_KEYS = (
@@ -63,6 +77,8 @@ _TARGET_RESIDUE_KEYS = (
     "CONSERVED_RESIDUES",
     "TRYPSIN_CATALYTIC_RESIDUES",
     "CES1_CATALYTIC_RESIDUES",
+    "ALBUMIN_CATALYTIC_RESIDUES",
+    "CYP3A4_CATALYTIC_RESIDUES",
 )
 
 TARGETS_FILE = Path(__file__).resolve().parent / "targets.yaml"
@@ -123,6 +139,8 @@ def _load_target_residues() -> Dict[str, List[str]]:
         "CONSERVED_RESIDUES": _CONSERVED_RESIDUES_DEFAULT,
         "TRYPSIN_CATALYTIC_RESIDUES": _TRYPSIN_CATALYTIC_RESIDUES_DEFAULT,
         "CES1_CATALYTIC_RESIDUES": _CES1_CATALYTIC_RESIDUES_DEFAULT,
+        "ALBUMIN_CATALYTIC_RESIDUES": _ALBUMIN_CATALYTIC_RESIDUES_DEFAULT,
+        "CYP3A4_CATALYTIC_RESIDUES": _CYP3A4_CATALYTIC_RESIDUES_DEFAULT,
     }
     try:
         import yaml
@@ -147,6 +165,8 @@ ACTIVE_SITE_RESIDUES = _loaded_target_residues["ACTIVE_SITE_RESIDUES"]
 CONSERVED_RESIDUES = _loaded_target_residues["CONSERVED_RESIDUES"]
 TRYPSIN_CATALYTIC_RESIDUES = _loaded_target_residues["TRYPSIN_CATALYTIC_RESIDUES"]
 CES1_CATALYTIC_RESIDUES = _loaded_target_residues["CES1_CATALYTIC_RESIDUES"]
+ALBUMIN_CATALYTIC_RESIDUES = _loaded_target_residues["ALBUMIN_CATALYTIC_RESIDUES"]
+CYP3A4_CATALYTIC_RESIDUES = _loaded_target_residues["CYP3A4_CATALYTIC_RESIDUES"]
 
 # Grid box defaults (Angstroms)
 ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)

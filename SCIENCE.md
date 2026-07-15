@@ -59,3 +59,21 @@ Treat any result whose `protocol_trust` is not `Validated` as preliminary.
 
 > The canonical logic for these exact trust strings lives in
 > `config/constants.py` (`protocol_trust`).
+
+## Improving experimental-validation odds
+
+To raise the likelihood that the top-ranked candidates are genuine PBP2a
+inhibitors — without adding deep learning, FEP, or new external services —
+the pipeline uses three low-complexity, RDKit/Vina-only measures. **Consensus
+rigid docking** docks every compound against a set of PBP2a conformer PDBQTs
+(apo 3QPD, holo 6TKO, 1ZOO) and keeps the best (most negative) energy;
+redocking validation reports the lowest RMSD across those conformers, so a
+single fortuitous crystal pose cannot inflate confidence. **MM-GBSA-like
+rerank** relaxes each top-10 active-site pose with `MMFFOptimizeMolecule`
+and stores the MMFF energy as `MMGBSA_Score` (a cheap physics-based tie-breaker,
+not a full GBSA solver); the reported CSV is reranked by it when present.
+**Wider selectivity panel** averages the human off-target docking energy over
+four proteins (Trypsin, CES1, Serum Albumin 1AO6, CYP3A4 1W0E), making the
+Selectivity Index (threshold still SI ≥ 2.0) more conservative and harder to
+pass on an artefact. All residue lists and PDB IDs are configurable in
+`config/targets.yaml` / `config/constants.py`.

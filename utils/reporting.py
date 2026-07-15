@@ -135,6 +135,18 @@ def generate_csv_report(
 
     is_mock = (mode == "ci")
 
+    # ── Optional MM-GBSA-like rerank ──
+    # If any record carries a rerank score (record.mmgbca_score), sort the
+    # displayed candidates by it (lower = better) so the reported order
+    # reflects the physics-based rerank rather than raw Vina ordering.
+    if any(getattr(rec, "mmgbca_score", None) is not None for rec in top10):
+        top10 = sorted(
+            top10, key=lambda r: getattr(r, "mmgbca_score", float("inf"))
+            if getattr(r, "mmgbca_score", None) is not None
+            else float("inf")
+        )
+        log.info("  Reranked top candidates by MM-GBSA-like (MMFF) score.")
+
     rows = []
     for rec in top10:
         # Per-residue H-bond flags derived from the interaction fingerprint
@@ -179,6 +191,20 @@ def generate_csv_report(
             ),
             "Human_CES1_Energy": (
                 f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
+                else "N/A"
+            ),
+            "Human_Albumin_Energy": (
+                f"{getattr(rec, 'human_albumin_energy', None):.2f}"
+                if getattr(rec, "human_albumin_energy", None) is not None
+                else "N/A"
+            ),
+            "Human_CYP3A4_Energy": (
+                f"{getattr(rec, 'human_cyp3a4_energy', None):.2f}"
+                if getattr(rec, "human_cyp3a4_energy", None) is not None
+                else "N/A"
+            ),
+            "MMGBSA_Score": (
+                f"{rec.mmgbca_score:.2f}" if rec.mmgbca_score is not None
                 else "N/A"
             ),
             "Selectivity_Index": (

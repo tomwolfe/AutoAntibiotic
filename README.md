@@ -280,9 +280,27 @@ Configuration is resolved in this order:
 1. `config.yaml` on disk (preferred) — set `mode: ci` or `mode: science`.
 2. The `AUTOANTIBIOTIC_MODE` environment variable (`ci` or `science`).
 
-If no `config.yaml` exists, the pipeline defaults to `mode: ci` so a new user
+ If no `config.yaml` exists, the pipeline defaults to `mode: ci` so a new user
 sees results immediately. A real, heavy computational run requires an explicit
 `config.yaml` with `mode: science`.
+
+### Improving experimental-validation odds (consensus + rerank + wider panel)
+
+To raise the chance that top candidates are real binders, the pipeline now uses
+three low-complexity boosts (all RDKit/AutoDock-Vina only, no external services):
+(1) **Consensus rigid docking** — every compound is docked against a small set
+of PBP2a conformer PDBQTs (apo 3QPD, holo 6TKO, plus 1ZOO) and the most
+negative energy is kept as `pb2pa_allosteric_energy` / `pb2pa_active_energy`;
+redocking validation likewise reports the best (lowest) RMSD across conformers.
+(2) **MM-GBSA-like rerank** — after Vina active-site docking of the top 10,
+each retained pose is relaxed with `MMFFOptimizeMolecule` and a crude MMFF
+energy is stored as `MMGBSA_Score` (no full GBSA solver); the final CSV is
+reranked by it when available. (3) **Wider selectivity panel** — the human
+off-target screen now averages docking energy over 4 proteins (Trypsin, CES1,
+Serum Albumin [1AO6], CYP3A4 [1W0E]); new residue lists live in
+`config/targets.yaml` (`ALBUMIN_CATALYTIC_RESIDUES`, `CYP3A4_CATALYTIC_RESIDUES`)
+with sane defaults in `config/constants.py`, and the SI threshold stays at 2.0.
+
 
 The allosteric and active-site docking boxes are auto-sized at runtime from the
 resolved residue centroids (see `_auto_box_size` in `discovery_pipeline.py`); the

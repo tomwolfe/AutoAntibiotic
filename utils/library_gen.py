@@ -92,6 +92,10 @@ class CompoundRecord:
     # without re-parsing the docked pose.
     interactions: Optional[dict] = None
 
+    # MM-GBSA-like rerank score (crude MMFF energy of the relaxed active-site
+    # pose). Populated by utils.docking.rerank_mmff; None when unavailable.
+    mmgbca_score: Optional[float] = None
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SCAFFOLDS & CONTROLS

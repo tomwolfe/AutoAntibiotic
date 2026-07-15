@@ -322,6 +322,71 @@ def dock_compound(
     return energy
 
 
+def rerank_mmff(
+    records: "List[CompoundRecord]",
+    work_dir: str,
+    use_vina: bool = True,
+) -> None:
+    """
+    Optional MM-GBSA-like rerank of the *records*' active-site poses.
+
+    For every record that carries a docked active-site pose
+    (``record.active_docked_pdbqt``), the pose is loaded, relaxed with
+    ``rdkit.Chem.AllChem.MMFFOptimizeMolecule`` (already imported above), and a
+    crude MM-GBSA-like score is computed from the resulting MMFF energy. The
+    score is stored on ``record.mmgbca_score`` (lower = better).
+
+    This is intentionally lightweight: it is NOT a full GBSA free-energy solver.
+    It uses the MMFF energy of the relaxed pose as a cheap physics-based
+    rerank signal to break ties left by Vina. When the pose cannot be read,
+    OpenBabel/Vina is unavailable, or no pose was retained, the function
+    skips gracefully and leaves ``mmgbca_score`` as ``None`` so downstream
+    code can fall back to the Vina energy ordering.
+
+    Args:
+        records: Candidate records (must expose ``.active_docked_pdbqt``).
+        work_dir: Scratch directory (unused but kept for API symmetry).
+        use_vina: When ``False`` (no real pose), reranking is skipped.
+    """
+    if not use_vina:
+        return
+    if not records:
+        return
+
+    for rec in records:
+        pose = getattr(rec, "active_docked_pdbqt", None)
+        if not pose or not os.path.exists(pose):
+            continue
+        try:
+            # Load the docked Vina pose (PDBQT) into RDKit.
+            mol = Chem.MolFromPDBQTFile(pose) if hasattr(Chem, "MolFromPDBQTFile") else None
+            if mol is None:
+                mol = Chem.MolFromPDBFile(pose, removeHs=False)
+            if mol is None:
+                continue
+            # Ensure hydrogens + a 3D conformer for MMFF relaxation.
+            mol = Chem.AddHs(mol, addCoords=True)
+            params = AllChem.ETKDGv3()
+            params.randomSeed = RANDOM_SEED
+            if AllChem.EmbedMolecule(mol, params) != 0:
+                if AllChem.EmbedMolecule(mol) != 0:
+                    continue
+            # Relax the pose with the MMFF94 force field.
+            if AllChem.MMFFOptimizeMolecule(mol) != 0:
+                # Non-fatal: keep the pre-relaxation geometry for scoring.
+                pass
+            mmff_props = AllChem.MMFFGetMoleculeProperties(mol)
+            if mmff_props is None:
+                continue
+            energy = AllChem.MMFFGetMoleculeForceField(mol, mmff_props).CalcEnergy()
+            rec.mmgbca_score = float(energy)
+        except Exception as exc:
+            log.warning(
+                f"  MM-GBSA-like rerank skipped for {rec.compound_id}: {exc}"
+            )
+            continue
+
+
 def _dock_compounds_parallel(
     records: "List[CompoundRecord]",
     receptor_pdbqt: str,

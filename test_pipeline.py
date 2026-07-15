@@ -28,6 +28,8 @@ from discovery_pipeline import (
     fetch_structure,
     _find_downloaded_pdb,
     _redocking_box_size,
+    _consensus_dock,
+    analyze_selectivity_and_resistance,
     log,
 )
 from utils.filtering import apply_filters
@@ -1599,6 +1601,154 @@ class TestGeneratePyMOLScript:
         # Only the receptor-less header + 1 pose load expected.
         assert "Ligand_1" in content
         assert "Ligand_2" not in content
+
+
+# ── Test: Task 1 — Consensus rigid docking returns best energy ───────
+
+class TestConsensusDocking:
+    def test_returns_best_energy_across_conformers(self, tmp_path):
+        """_consensus_dock keeps the most negative energy over all conformers."""
+        records = [
+            CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                           mol=Chem.MolFromSmiles("c1ccccc1")),
+            CompoundRecord(compound_id="AA-0002", smiles="Cc1ccccc1",
+                           mol=Chem.MolFromSmiles("Cc1ccccc1")),
+        ]
+
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, use_vina=True):
+            # Two conformers: conformer 0 gives -5.0, conformer 1 gives -9.0
+            # for every record. Best (most negative) must be -9.0.
+            conf_idx = int(tag.rsplit("_c", 1)[-1])
+            e = -5.0 if conf_idx == 0 else -9.0
+            return [(r, e) for r in recs]
+
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            results = _consensus_dock(
+                records,
+                ["r0.pdbqt", "r1.pdbqt"],
+                np.zeros(3), (20.0, 20.0, 20.0),
+                str(tmp_path), "allosteric", use_vina=True,
+            )
+        by_id = {r.compound_id: e for r, e in results}
+        assert by_id["AA-0001"] == -9.0, "Expected best of -5.0/-9.0 = -9.0"
+        assert by_id["AA-0002"] == -9.0
+
+    def test_single_conformer_fallback(self, tmp_path):
+        """With one receptor, _consensus_dock returns that single energy."""
+        records = [CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                                 mol=Chem.MolFromSmiles("c1ccccc1"))]
+
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, use_vina=True):
+            return [(r, -6.0) for r in recs]
+
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            results = _consensus_dock(
+                records, ["r0.pdbqt"], np.zeros(3),
+                (20.0, 20.0, 20.0), str(tmp_path), "active", use_vina=True,
+            )
+        assert results[0][1] == -6.0
+
+
+# ── Test: Task 2 — MM-GBSA-like rerank populates mmgbca_score ───────
+
+class TestMMGBSARerank:
+    def test_rerank_populates_score_from_pose(self, tmp_path):
+        """rerank_mmff relaxes an active-site pose and sets mmgbca_score (float)."""
+        from rdkit.Chem import AllChem
+        from utils.docking import rerank_mmff
+
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, randomSeed=42)
+        AllChem.MMFFOptimizeMolecule(mol)
+        pose = tmp_path / "pose.pdbqt"
+        Chem.MolToPDBFile(mol, str(pose))
+
+        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                             mol=Chem.MolFromSmiles("c1ccccc1"))
+        rec.active_docked_pdbqt = str(pose)
+
+        rerank_mmff([rec], work_dir=str(tmp_path), use_vina=True)
+        assert rec.mmgbca_score is not None, "mmgbca_score should be populated"
+        assert isinstance(rec.mmgbca_score, float)
+
+    def test_rerank_skips_without_pose(self, tmp_path):
+        """rerank_mmff leaves mmgbca_score None when no pose is present."""
+        from utils.docking import rerank_mmff
+
+        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                             mol=Chem.MolFromSmiles("c1ccccc1"))
+        rerank_mmff([rec], work_dir=str(tmp_path), use_vina=True)
+        assert rec.mmgbca_score is None
+
+    def test_rerank_skips_when_vina_unavailable(self, tmp_path):
+        """rerank_mmff is a no-op (no real pose) when use_vina is False."""
+        from rdkit.Chem import AllChem
+        from utils.docking import rerank_mmff
+
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, randomSeed=42)
+        AllChem.MMFFOptimizeMolecule(mol)
+        pose = tmp_path / "pose.pdbqt"
+        Chem.MolToPDBFile(mol, str(pose))
+
+        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                             mol=Chem.MolFromSmiles("c1ccccc1"))
+        rec.active_docked_pdbqt = str(pose)
+        rerank_mmff([rec], work_dir=str(tmp_path), use_vina=False)
+        assert rec.mmgbca_score is None
+
+
+# ── Test: Task 3 — Selectivity uses all 4 human targets ─────────────
+
+class TestWiderSelectivityPanel:
+    def test_selectivity_averages_four_targets(self, tmp_path):
+        """
+        analyze_selectivity_and_resistance docks the top-10 against the 4-protein
+        human panel (trypsin, CES1, albumin, CYP3A4) and computes SI from the
+        averaged (best) human energy. With fixed per-target dock energies we verify
+        the human_min used is the min across all 4 supplied energies.
+        """
+        records = [
+            CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
+                           mol=Chem.MolFromSmiles("c1ccccc1"))
+            for i in range(3)
+        ]
+        for i, rec in enumerate(records):
+            rec.pb2pa_active_energy = -10.0 - i  # PBP2a active-site energy
+
+        targets = {
+            "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
+            "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
+            "albumin": {"pdbqt": "a.pdbqt", "active_center": np.zeros(3)},
+            "cyp3a4": {"pdbqt": "y.pdbqt", "active_center": np.zeros(3)},
+        }
+
+        # Fixed human energies per tag: trypsin=-4, ces1=-3, albumin=-2, cyp3a4=-1
+        fixed = {
+            "trypsin": -4.0, "ces1": -3.0,
+            "albumin": -2.0, "cyp3a4": -1.0,
+        }
+
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
+                          dock_func=None, use_vina=True):
+            e = fixed[tag]
+            return [(r, e) for r in recs]
+
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            out = analyze_selectivity_and_resistance(
+                records, targets, str(tmp_path),
+                {"vina": True, "USE_VINA": True},
+            )
+
+        # human_min should be the best (most negative) across all 4 = -4.0.
+        # SI = |PBP2a| / |human_min| = 10.0 / 4.0 = 2.5.
+        assert out[0].human_albumin_energy == -2.0
+        assert out[0].human_cyp3a4_energy == -1.0
+        assert out[0].selectivity_index == pytest.approx(2.5)
+        # 4 human targets → High confidence.
+        assert out[0].selectivity_confidence == "High"
 
 
 if __name__ == "__main__":

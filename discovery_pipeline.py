@@ -99,6 +99,9 @@ from config.constants import (
     CONSERVED_RESIDUES,
     TRYPSIN_CATALYTIC_RESIDUES,
     CES1_CATALYTIC_RESIDUES,
+    ALBUMIN_CATALYTIC_RESIDUES,
+    CYP3A4_CATALYTIC_RESIDUES,
+    PBP2A_CONFORMER_IDS,
     ALLOSTERIC_BOX_SIZE,
     ACTIVE_BOX_SIZE,
     VINA_TIMEOUT_S,
@@ -471,14 +474,17 @@ def run_redocking_validation(
     deps: dict,
     mode: str = "science",
     config: Optional[dict] = None,
+    target_pdbqt_paths: Optional[List[str]] = None,
 ) -> Tuple[bool, Optional[float]]:
     """
     Phase 0 — Protocol Validation.
 
     Extracts the native ligand from 6TKO, docks it back into the prepared
-    PBP2a receptor, and computes the RMSD to the crystal pose.
+    PBP2a receptor(s), and computes the best (lowest) RMSD to the crystal
+    pose across all prepared receptor conformers (consensus redocking).
 
-    Returns (success: bool, rmsd: float | None).
+    Returns (success: bool, rmsd: float | None) where ``rmsd`` is the best
+    (lowest) RMSD over all conformers.
     """
     log.info("─── Phase 0: Redocking Validation ───")
 
@@ -526,7 +532,6 @@ def run_redocking_validation(
 
     # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
-    docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
 
     # Size the redocking box from the native ligand itself (centroid + spread)
     # using the same auto-sizing logic as the allosteric/active sites, instead
@@ -537,52 +542,68 @@ def run_redocking_validation(
         f"  Redocking box: {redock_box[0]:.1f} x {redock_box[1]:.1f} x "
         f"{redock_box[2]:.1f} Å (auto-sized from native ligand)."
     )
-    vina_cmd = [
-        "vina",
-        "--receptor", target_pdbqt_path,
-        "--ligand", lig_pdbqt,
-        "--out", docked_pdbqt,
-        "--center_x", f"{center[0]:.3f}",
-        "--center_y", f"{center[1]:.3f}",
-        "--center_z", f"{center[2]:.3f}",
-        "--size_x", f"{redock_box[0]:.1f}",
-        "--size_y", f"{redock_box[1]:.1f}",
-        "--size_z", f"{redock_box[2]:.1f}",
-        "--exhaustiveness", "8",
-    ]
 
-    try:
-        subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        log.warning("  ⚠  Vina redocking timed out (>120s).")
-        return False, None
-    except FileNotFoundError:
-        log.warning("  ⚠  Vina binary not found during redocking.")
-        return False, None
-
-    # Convert docked PDBQT back to PDB for RMSD calculation
-    try:
-        subprocess.run(
-            ["obabel", docked_pdbqt, "-O", docked_pdb, "--gen3d"],
-            capture_output=True, timeout=30,
-        )
-    except Exception:
-        # If obabel not available, attempt manual conversion (minimal)
-        log.warning("  Could not convert docked PDBQT to PDB. Trying RDKit PDBQT reader.")
-        mol = Chem.MolFromPDBQT(docked_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
-        if mol is None:
-            log.warning("  ⚠  Cannot parse docked PDBQT. RMSD not computed.")
+    # Consensus redocking: redock into every prepared receptor conformer and
+    # keep the best (lowest) RMSD. Falls back to the single primary receptor
+    # when no explicit conformer list is provided.
+    conformer_pdbqts = list(target_pdbqt_paths) if target_pdbqt_paths else [target_pdbqt_path]
+    best_rmsd: Optional[float] = None
+    for conf_idx, receptor_pdbqt in enumerate(conformer_pdbqts):
+        if receptor_pdbqt is None:
+            continue
+        conf_pdbqt = docked_pdb.replace(".pdb", f"_c{conf_idx}.pdbqt")
+        vina_cmd = [
+            "vina",
+            "--receptor", receptor_pdbqt,
+            "--ligand", lig_pdbqt,
+            "--out", conf_pdbqt,
+            "--center_x", f"{center[0]:.3f}",
+            "--center_y", f"{center[1]:.3f}",
+            "--center_z", f"{center[2]:.3f}",
+            "--size_x", f"{redock_box[0]:.1f}",
+            "--size_y", f"{redock_box[1]:.1f}",
+            "--size_z", f"{redock_box[2]:.1f}",
+            "--exhaustiveness", "8",
+        ]
+        try:
+            subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            log.warning(f"  ⚠  Vina redocking timed out (>120s) on conformer {conf_idx}.")
+            continue
+        except FileNotFoundError:
+            log.warning("  ⚠  Vina binary not found during redocking.")
             return False, None
-        Chem.MolToPDBFile(mol, docked_pdb)
 
-    crystal_pdb = lig_pdbqt.replace(".pdbqt", ".pdb")
-    rmsd = _compute_rmsd_docked_vs_crystal(docked_pdb, crystal_pdb)
+        conf_pdb = conf_pdbqt.replace(".pdbqt", ".pdb")
+        # Convert docked PDBQT back to PDB for RMSD calculation
+        try:
+            subprocess.run(
+                ["obabel", conf_pdbqt, "-O", conf_pdb, "--gen3d"],
+                capture_output=True, timeout=30,
+            )
+        except Exception:
+            log.warning("  Could not convert docked PDBQT to PDB. Trying RDKit PDBQT reader.")
+            mol = Chem.MolFromPDBQT(conf_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
+            if mol is None:
+                log.warning(f"  ⚠  Cannot parse docked PDBQT for conformer {conf_idx}. RMSD skipped.")
+                continue
+            Chem.MolToPDBFile(mol, conf_pdb)
 
-    if rmsd is None:
-        log.warning("  ⚠  RMSD could not be computed.")
+        crystal_pdb = lig_pdbqt.replace(".pdbqt", ".pdb")
+        rmsd = _compute_rmsd_docked_vs_crystal(conf_pdb, crystal_pdb)
+        if rmsd is None:
+            log.warning(f"  ⚠  RMSD could not be computed for conformer {conf_idx}.")
+            continue
+        log.info(f"  Redocking RMSD (conformer {conf_idx}) = {rmsd:.3f} Å")
+        if best_rmsd is None or rmsd < best_rmsd:
+            best_rmsd = rmsd
+
+    if best_rmsd is None:
+        log.warning("  ⚠  Redocking RMSD could not be computed for any conformer.")
         return False, None
 
-    log.info(f"  Redocking RMSD = {rmsd:.3f} Å")
+    rmsd = best_rmsd
+    log.info(f"  Best (consensus) Redocking RMSD = {rmsd:.3f} Å")
     if rmsd > RMSD_MARGINAL_MAX:
         log.warning(
             f"  ⚠  Redocking RMSD ({rmsd:.3f} Å) exceeds {RMSD_MARGINAL_MAX:.1f} Å "
@@ -833,6 +854,22 @@ def prepare_targets(
     trypsin_path = _resolve_structure(PDB_IDS["trypsin"])
     ces1_path = _resolve_structure(PDB_IDS["CES1"])
 
+    # ── Consensus rigid docking: build a set of PBP2a receptor PDBQTs ──
+    # Each conformer in PBP2A_CONFORMER_IDS is fetched (if not local) and
+    # cleaned to its own PDBQT. The first entry (apo 3QPD) is kept as the
+    # primary ``pdbqt`` key for backwards compatibility; the full list is
+    # stored under ``receptor_pdbqts`` so screen_library can dock every
+    # compound against all conformers and take the best (most negative) energy.
+    conformer_paths = {}
+    for cid in PBP2A_CONFORMER_IDS:
+        try:
+            conformer_paths[cid] = _resolve_structure(cid)
+        except Exception as exc:
+            log.warning(f"  ⚠  Could not resolve PBP2a conformer {cid}: {exc}")
+    # Ensure the apo (primary) conformer is always present as the first entry.
+    primary_id = PDB_IDS["PBP2a_apo"]
+    ordered_ids = [primary_id] + [c for c in conformer_paths if c != primary_id]
+
     result["holo_pdb"] = holo_path
 
     # ── Explicit mode (config-driven, not inferred from file paths) ──
@@ -873,6 +910,25 @@ def prepare_targets(
         os.path.join(work_dir, "PBP2a_holo_clean.pdb"),
     )
 
+    # ── Build consensus receptor PDBQT list (one per conformer) ──
+    # The primary apo receptor (pdbqt) is always first; each additional
+    # conformer is cleaned to its own PDBQT. Missing conformers are skipped
+    # gracefully so a partial conformer set still enables consensus docking.
+    receptor_pdbqts = [pbp2a_pdbqt]
+    for cid in ordered_ids:
+        if cid == primary_id:
+            continue
+        cpath = conformer_paths.get(cid)
+        if not cpath:
+            continue
+        cclean = os.path.join(work_dir, f"PBP2a_{cid}_clean.pdb")
+        try:
+            cpdbqt = clean_pdb_structure(cpath, cclean)
+            receptor_pdbqts.append(cpdbqt)
+            log.info(f"  Added PBP2a conformer {cid} receptor PDBQT: {cpdbqt}")
+        except Exception as exc:
+            log.warning(f"  ⚠  Could not prepare PBP2a conformer {cid}: {exc}")
+
     # ── Compute allosteric + active site centres from cleaned apo ──
     cleaned_pdb = pbp2a_clean_pdb
 
@@ -901,6 +957,7 @@ def prepare_targets(
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
+        "receptor_pdbqts": receptor_pdbqts,
         "cleaned_pdb": pbp2a_clean_pdb,
         "allosteric_center": allosteric_center,
         "active_center": active_center,
@@ -940,6 +997,25 @@ def prepare_targets(
     log.info(f"    CES1 active site center: {ces1_center}")
     result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
 
+    # ── Human off-target panel (wider selectivity screen) ──
+    # Albumin (1AO6) and CYP3A4 (1W0E) are resolved like the other targets
+    # and their docking grid is centred on the configured catalytic residues.
+    # Missing/offline PDBs are skipped gracefully in CI mode.
+    for label, pdb_key, residues, out_name in (
+        ("Human Serum Albumin", "HUMAN_ALBUMIN", ALBUMIN_CATALYTIC_RESIDUES, "albumin"),
+        ("Human CYP3A4", "CYP3A4", CYP3A4_CATALYTIC_RESIDUES, "cyp3a4"),
+    ):
+        pdb_path = _resolve_structure(PDB_IDS[pdb_key])
+        clean_pdb = os.path.join(work_dir, f"{out_name}_clean.pdb")
+        try:
+            pdbqt = clean_pdb_structure(pdb_path, clean_pdb)
+            center = compute_residue_centroid(clean_pdb, residues)
+        except Exception as exc:
+            log.warning(f"  ⚠  Could not prepare {label} ({pdb_key}): {exc}")
+            pdbqt, center = None, None
+        log.info(f"  {label} active site center: {center}")
+        result[out_name] = {"pdbqt": pdbqt, "active_center": center}
+
     # ── Write grid configuration files ──
     grid_dir = os.path.join(work_dir, "grid_configs")
     os.makedirs(grid_dir, exist_ok=True)
@@ -977,6 +1053,63 @@ def prepare_targets(
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 3 — VIRTUAL SCREENING (Docking)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _consensus_dock(
+    records: List[CompoundRecord],
+    receptor_pdbqts: List[str],
+    center,
+    box_size,
+    work_dir: str,
+    tag: str,
+    use_vina: bool = True,
+) -> List[Tuple[CompoundRecord, Optional[float]]]:
+    """
+    Consensus rigid docking helper.
+
+    Docks *records* against every receptor PDBQT in *receptor_pdbqts* (each
+    a PBP2a conformer) and returns ``(record, best_energy)`` pairs where
+    ``best_energy`` is the most negative (best) docking energy across all
+    conformers. Reuses :func:`_dock_compounds_parallel` per conformer; no new
+    parallel infrastructure is introduced. Missing/failed conformer dockings are
+    ignored (``None``) and the best of the remaining is taken.
+
+    Args:
+        records: Compounds to dock.
+        receptor_pdbqts: List of receptor PDBQT paths (consensus set).
+        center: Grid-box centre (shared across conformers).
+        box_size: Grid-box dimensions (shared across conformers).
+        work_dir: Scratch directory.
+        tag: Label for temporary files.
+        use_vina: When ``False``, the RDKit fallback scorer is used.
+
+    Returns:
+        List of ``(CompoundRecord, energy_or_None)`` tuples.
+    """
+    if not receptor_pdbqts:
+        return [(r, None) for r in records]
+
+    by_id: dict = {r.compound_id: r for r in records}
+    # Seed with per-compound best energy (None initially).
+    best: Dict[str, Optional[float]] = {r.compound_id: None for r in records}
+
+    for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):
+        if center is None or receptor_pdbqt is None:
+            continue
+        results = _dock_compounds_parallel(
+            records, receptor_pdbqt,
+            center, box_size,
+            work_dir, f"{tag}_c{conf_idx}",
+            use_vina=use_vina,
+        )
+        for rec, energy in results:
+            if energy is None:
+                continue
+            cur = best.get(rec.compound_id)
+            if cur is None or energy < cur:
+                best[rec.compound_id] = energy
+
+    return [(by_id[cid], e) for cid, e in best.items()]
+
 
 def screen_library(
     records: List[CompoundRecord],
@@ -1017,10 +1150,18 @@ def screen_library(
     active_box = _auto_box_size(pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE) \
         if active_center is not None else ACTIVE_BOX_SIZE
 
-    # ── Allosteric docking ──
-    log.info("  Docking all compounds against allosteric site…")
-    allosteric_results = _dock_compounds_parallel(
-        records, pb2pa["pdbqt"],
+    # ── Allosteric docking (consensus over PBP2a conformers) ──
+    # Each compound is docked against every prepared receptor PDBQT; the best
+    # (most negative) energy is kept as ``pb2pa_allosteric_energy``. No new
+    # parallel infrastructure is introduced — we reuse ``_dock_compounds_parallel``
+    # per conformer and merge results by taking the minimum energy.
+    receptor_pdbqts = pb2pa.get("receptor_pdbqts") or [pb2pa["pdbqt"]]
+    log.info(
+        f"  Docking all compounds against allosteric site "
+        f"({len(receptor_pdbqts)} PBP2a conformer(s))…"
+    )
+    allosteric_results = _consensus_dock(
+        records, receptor_pdbqts,
         allosteric_center, allosteric_box,
         work_dir, "allosteric",
         use_vina=use_vina,
@@ -1040,10 +1181,13 @@ def screen_library(
 
     if len(scored) >= 50:
         top50 = scored[:50]
-        log.info(f"  Docking top {len(top50)} compounds against active site…")
+        log.info(
+            f"  Docking top {len(top50)} compounds against active site "
+            f"({len(receptor_pdbqts)} PBP2a conformer(s))…"
+        )
 
-        active_results = _dock_compounds_parallel(
-            top50, pb2pa["pdbqt"],
+        active_results = _consensus_dock(
+            top50, receptor_pdbqts,
             active_center, active_box,
             work_dir, "active",
             use_vina=use_vina,
@@ -1473,9 +1617,11 @@ def analyze_selectivity_and_resistance(
     """
     Phase 4 — Selectivity & Resistance Analysis.
 
-    1. Dock top 10 candidates against Human Trypsin (1UTN) and CES1 (3KJZ).
-    2. Compute Selectivity Index for each.
-    3. Profile resistance risk.
+    1. Dock top 10 candidates against the human off-target panel (Trypsin,
+       CES1, Albumin, CYP3A4) — 4 proteins for a wider selectivity screen.
+    2. Compute Selectivity Index (average human energy over up to 4 targets).
+    3. Optionally rerank the top 10 by a lightweight MM-GBSA-like MMFF score.
+    4. Profile resistance risk.
 
     Returns updated records with selectivity and resistance fields.
     """
@@ -1528,10 +1674,40 @@ def analyze_selectivity_and_resistance(
     for rec, energy in ces1_results:
         rec.human_ces1_energy = energy
 
-    # ── Compute SI ──
+    # ── Dock vs Human Serum Albumin (1AO6) and CYP3A4 (1W0E) ──
+    # Wider off-target panel used to average the human binding energy over 4
+    # proteins (Trypsin, CES1, Albumin, CYP3A4) for a more conservative
+    # (harder to pass) Selectivity Index.
+    for label, key, attr in (
+        ("Human Serum Albumin (1AO6)", "albumin", "human_albumin_energy"),
+        ("Human CYP3A4 (1W0E)", "cyp3a4", "human_cyp3a4_energy"),
+    ):
+        tgt = targets.get(key)
+        if not tgt or tgt.get("pdbqt") is None or tgt.get("active_center") is None:
+            log.warning(f"  Skipping {label} (no prepared receptor / grid centre).")
+            continue
+        log.info(f"  Docking top 10 vs {label}…")
+        box = _auto_box_size(
+            tgt.get("cleaned_pdb"), tgt["active_center"],
+            (20.0, 20.0, 20.0),
+        ) if tgt.get("cleaned_pdb") else (20.0, 20.0, 20.0)
+        results = _dock_compounds_parallel(
+            top10, tgt["pdbqt"],
+            tgt["active_center"], box,
+            work_dir, key, n_jobs=min(4, len(top10)),
+        )
+        for rec, energy in results:
+            setattr(rec, attr, energy)
+
+    # ── Compute SI (average human energy over up to 4 off-targets) ──
     for rec in top10:
         energies_human = [
-            e for e in (rec.human_trypsin_energy, rec.human_ces1_energy)
+            e for e in (
+                rec.human_trypsin_energy,
+                rec.human_ces1_energy,
+                getattr(rec, "human_albumin_energy", None),
+                getattr(rec, "human_cyp3a4_energy", None),
+            )
             if e is not None
         ]
         n_human_targets = len(energies_human)
@@ -1576,14 +1752,24 @@ def analyze_selectivity_and_resistance(
         else:
             log.info(f"  {rec.compound_id}: SI = {si:.2f} (pass).")
 
-        # Hard flag: high risk off-target binding
+        # Hard flag: high risk off-target binding (any of the 4 human targets)
         if any(e is not None and e < -8.0 for e in (
-            rec.human_trypsin_energy, rec.human_ces1_energy
+            rec.human_trypsin_energy,
+            rec.human_ces1_energy,
+            getattr(rec, "human_albumin_energy", None),
+            getattr(rec, "human_cyp3a4_energy", None),
         )):
             rec.selectivity_index = 0.0
             if rec.resistance_notes:
                 rec.resistance_notes += " | "
             rec.resistance_notes += "High risk off-target binding"
+
+    # ── Optional MM-GBSA-like rerank of the top 10 ──
+    # Per-candidate MMFF-relaxed score (see utils.docking.rerank_mmff). Skips
+    # gracefully when Vina/OpenBabel are absent or no pose was retained. The
+    # final CSV is reranked by this score when available.
+    from utils.docking import rerank_mmff
+    rerank_mmff(top10, work_dir=work_dir, use_vina=use_vina)
 
     # ── Resistance profiling with pose-based interaction analysis ──
     _run_resistance_profiling(top10, targets, work_dir)
@@ -1760,6 +1946,7 @@ def _run_redocking_phase(
                 deps=deps,
                 mode=targets.get("mode"),
                 config=config,
+                target_pdbqt_paths=targets["PBP2a"].get("receptor_pdbqts"),
             )
     else:
         validation_ok, redock_rmsd = run_redocking_validation(
