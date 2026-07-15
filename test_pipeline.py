@@ -1125,6 +1125,78 @@ class TestMainRedockingGate:
             "CSV should be written when AUTOANTIBIOTIC_FORCE is set"
 
 
+# ── Test: New experimental-validation-defaults (Task changes) ─────────────
+
+class TestExperimentalValidationDefaults:
+    def test_science_aborts_on_failed_redocking_without_force(self, tmp_path):
+        """main() aborts (raises SystemExit) in science mode when validation fails
+        and AUTOANTIBIOTIC_FORCE is unset; redocking RMSD > 1.5 Å is required."""
+        import discovery_pipeline as dp
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        def mock_gen(target_count=3, input_csv=None, input_sdf=None):
+            return [CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
+                                   mol=Chem.MolFromSmiles("c1ccccc1")) for i in range(3)]
+
+        mock_targets = {
+            "mode": "science",
+            "holo_pdb": "/dev/null",
+            "PBP2a": {
+                "pdbqt": "/dev/null",
+                "allosteric_center": np.array([0.0, 0.0, 0.0]),
+                "active_center": np.array([0.0, 0.0, 0.0]),
+            },
+        }
+
+        with patch("discovery_pipeline.check_dependencies",
+                   return_value={"vina": True, "USE_VINA": True}):
+            with patch("discovery_pipeline.prepare_targets",
+                       return_value=mock_targets):
+                with patch("discovery_pipeline.run_redocking_validation",
+                           return_value=(False, None)):
+                    with patch.dict(os.environ, {}, clear=False):
+                        os.environ.pop("AUTOANTIBIOTIC_FORCE", None)
+                        with patch("discovery_pipeline.generate_candidate_library",
+                                   side_effect=mock_gen):
+                            with patch("discovery_pipeline.apply_filters",
+                                       side_effect=lambda r: list(r)):
+                                with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                    with patch("discovery_pipeline.CSV_REPORT",
+                                                output_dir / "top_candidates.csv"):
+                                        with patch("discovery_pipeline.TOP_N", 10):
+                                            with pytest.raises(SystemExit):
+                                                from discovery_pipeline import main
+                                                main(target_count=3)
+
+    def test_mutation_scan_mutants_length_is_five(self):
+        """MUTATION_SCAN_MUTANTS now includes the two clinical mutants (5 total)."""
+        from config.constants import MUTATION_SCAN_MUTANTS, MUTATION_SCAN
+        assert len(MUTATION_SCAN_MUTANTS) == 5
+        assert MUTATION_SCAN is True
+        assert MUTATION_SCAN_MUTANTS == [
+            "S403A", "K406A", "Y446A", "N146K", "G262S"
+        ]
+
+    def test_filter_rejects_qed_0_65(self):
+        """apply_filters rejects a compound whose QED is below the 0.7 gate."""
+        # Benzene has a very low QED (~0.0); pin the calculated QED to 0.65 by
+        # patching the QED module so the test is robust regardless of RDKit
+        # version behaviour, and disable the similarity ADMET pre-checks.
+        smiles = "c1ccccc1"
+        mol = Chem.MolFromSmiles(smiles)
+        record = CompoundRecord(compound_id="TEST_QED065", smiles=smiles, mol=mol)
+
+        with patch("utils.filtering.QED.qed", return_value=0.65):
+            # Make the similarity filter pass (low max_sim) and force a valid
+            # Lipinski result so the only failing gate is the QED cutoff.
+            with patch("utils.filtering.TanimotoSimilarity", return_value=0.0):
+                with patch("utils.filtering.DIVERSITY_MIN_COUNT", 10**9):
+                    filtered = apply_filters([record])
+        assert len(filtered) == 0, "QED=0.65 must be rejected by the >0.7 gate"
+
+
 # ── Test: CONSERVED_RESIDUES warning ──────────────────────────────────────
 
 class TestConservedResiduesCentroid:

@@ -319,7 +319,19 @@ resistance notes so low-resistance-emergence candidates are favoured. (6)
 **Library diversification** — BRICS recombination is biased by decomposing known
 binders (ceftaroline, meropenem; override via `seed_smiles`), and an external
 library CSV pointed to by `AUTOANTIBIOTIC_LIB_CSV` (columns `smiles,compound_id`)
-is merged in before filtering, reusing the existing CSV loader.
+is merged in before filtering, reusing the existing CSV loader. Set
+`AUTOANTIBIOTIC_LIB_CSV` to a CSV containing known non-β-lactam PBP2a binders
+(e.g. ceftaroline analogs, glycopeptides) to bias BRICS generation via
+`seed_smiles`. (7) **Protocol-trust gate** — in `science` mode the run now
+*aborts* unless redocking RMSD ≤ 1.5 Å (`protocol_trust == "Validated"`); set
+`AUTOANTIBIOTIC_FORCE=1` to override. (8) **Tighter filters** — the ADMET gate
+requires `QED > 0.7` (was 0.6) and the strict similarity cutoff is `0.3` (was
+0.4; relaxed stays 0.5). (9) **More clinical mutants** — the mutation scan now
+covers `["S403A","K406A","Y446A","N146K","G262S"]`. (10) **More thorough docking**
+— Vina `--exhaustiveness` is `16` (was 8) and the `--flex` residues
+`["SER403","LYS406","TYR446"]` (FLEX_RESIDUES) stay active. (11) **Post-report
+key-H-bond filter** — any final candidate lacking both a Ser403 and Lys406
+catalytic H-bond is dropped (unless fewer than `TOP_N` would remain).
 
 
 The allosteric and active-site docking boxes are auto-sized at runtime from the

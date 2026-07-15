@@ -2278,6 +2278,20 @@ def _run_redocking_phase(
             "  Redocking validation not applicable (mock PDB / skipped)."
         )
     elif not validation_ok:
+        # In science mode a failed redocking gate (RMSD > 1.5 Å → "Validated"
+        # not achieved) is now a HARD gate unless AUTOANTIBIOTIC_FORCE=1 is set.
+        if (
+            targets.get("mode") == "science"
+            and deps["USE_VINA"] is True
+            and not os.environ.get("AUTOANTIBIOTIC_FORCE") == "1"
+        ):
+            log.error(
+                "  ✗  Redocking validation FAILED in science mode (protocol_trust "
+                "is not \"Validated\"; redocking RMSD > 1.5 Å required). Aborting "
+                "the run. Re-run with AUTOANTIBIOTIC_FORCE=1 to override, or fix "
+                "the docking protocol so the native ligand redocks within 1.5 Å."
+            )
+            sys.exit(1)
         log.error(
             "  ✗  Redocking validation failed — docking results should be "
             "interpreted with caution."

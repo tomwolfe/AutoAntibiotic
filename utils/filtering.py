@@ -42,7 +42,7 @@ def apply_filters(
     Filter chain:
         1. Structural exclusion (β-lactam SMARTS).
         2. Similarity filter vs reference antibiotics (Morgan FP, Tc < threshold).
-        3. ADMET: Lipinski Rule of 5 + QED > 0.6.
+            3. ADMET: Lipinski Rule of 5 + QED > 0.7.
         4. PAINS alerts via RDKit FilterCatalog.
         5. Diversity check: if < 100 pass, relax similarity to 0.5.
 
@@ -131,7 +131,7 @@ def apply_filters(
             if not lipinski_ok:
                 skipped_admet += 1
                 continue
-            if qed <= 0.6:
+            if qed <= 0.7:
                 skipped_admet += 1
                 continue
 
@@ -152,7 +152,7 @@ def apply_filters(
 
         log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
         log.info(f"  Similarity filter (Tc < {threshold}): {skipped_similarity} removed.")
-        log.info(f"  ADMET filter (Lipinski + QED > 0.6): {skipped_admet} removed.")
+        log.info(f"  ADMET filter (Lipinski + QED > 0.7): {skipped_admet} removed.")
         log.info(f"  PAINS filter: {skipped_pains} removed.")
         log.info(f"  Brenk alerts: {skipped_brenk} removed.")
         log.info(f"  Passed filters: {len(passed)} compounds.")

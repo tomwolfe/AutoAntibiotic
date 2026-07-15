@@ -191,7 +191,7 @@ VINA_TIMEOUT_S = 120
 N_JOBS = max(1, mp.cpu_count() - 1)
 
 # Similarity
-SIMILARITY_THRESHOLD = 0.4
+SIMILARITY_THRESHOLD = 0.3
 SIMILARITY_THRESHOLD_RELAXED = 0.5
 DIVERSITY_MIN_COUNT = 100
 
@@ -216,7 +216,7 @@ MUTATION_SCAN = True
 
 # Mutants scanned and their single-residue substitutions of the conserved
 # catalytic network.
-MUTATION_SCAN_MUTANTS = ["S403A", "K406A", "Y446A"]
+MUTATION_SCAN_MUTANTS = ["S403A", "K406A", "Y446A", "N146K", "G262S"]
 
 # Morgan fingerprint parameters used for clustering the pre-top-N pool.
 FP_RADIUS = 2

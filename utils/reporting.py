@@ -319,6 +319,40 @@ def rerank_and_diversify(
         )
         return ranked[:top_n]
 
+    # (1b) Post-report key-catalytic-H-bond gate. Drop any candidate that
+    # engages NEITHER Ser403 NOR Lys406 in its active-site pose (no key
+    # catalytic H-bond), unless doing so would leave fewer than top_n
+    # candidates. We read the interaction fingerprint stashed on the record
+    # during Phase 4 (min distance to the conserved residues; a contact is
+    # flagged when the ligand approaches within 3.5 Å of Ser403 / 3.8 Å of
+    # Lys406). Candidates lacking an interaction fingerprint are kept (the
+    # distance is unverified, not proven absent).
+    def _has_key_hbond(rec: CompoundRecord) -> bool:
+        inter = getattr(rec, "interactions", None)
+        if inter is None:
+            return True  # unverified — keep
+        ser = inter.get("min_dist_Ser403", float("inf"))
+        lys = inter.get("min_dist_Lys406", float("inf"))
+        return (np.isfinite(ser) and ser < 3.5) or (np.isfinite(lys) and lys < 3.8)
+
+    hbond_passing = [r for r in passing if _has_key_hbond(r)]
+    dropped_hbond = len(passing) - len(hbond_passing)
+    if dropped_hbond:
+        if len(hbond_passing) >= top_n:
+            log.info(
+                f"  Post-report interaction filter dropped {dropped_hbond} "
+                f"candidate(s) with no key Ser403/Lys406 H-bond (fewer than "
+                f"{top_n} would remain otherwise; kept all)."
+            )
+            passing = hbond_passing
+        else:
+            log.info(
+                f"  Post-report interaction filter would drop {dropped_hbond} "
+                f"candidate(s) with no key Ser403/Lys406 H-bond, but only "
+                f"{len(hbond_passing)} would remain (< {top_n}). Keeping all "
+                f"passing candidates to preserve report size."
+            )
+
     # (2) Diverse selection by Morgan Tanimoto.
     selected: List[CompoundRecord] = []
     selected_fps = []

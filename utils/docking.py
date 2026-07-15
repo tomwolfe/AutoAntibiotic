@@ -80,7 +80,7 @@ def _run_vina_docking(
         "--size_x", f"{box_size[0]:.1f}",
         "--size_y", f"{box_size[1]:.1f}",
         "--size_z", f"{box_size[2]:.1f}",
-        "--exhaustiveness", "8",
+        "--exhaustiveness", "16",
         "--num_modes", "3",
     ]
     if flex_pdbqt is not None:
