@@ -204,8 +204,10 @@ def generate_candidate_library(
     log.info(f"  Generated {len(frag_mols)} unique fragments (>=8 heavy atoms).")
 
     if len(frag_mols) < 2:
-        log.warning("  Too few fragments for meaningful recombination. Falling back to scaffold enumeration.")
-        # Fallback: use the scaffolds directly plus random variations
+        log.warning(
+            "  Too few fragments for recombination (<2). Returning "
+            "controls and source scaffolds without novel analogs."
+        )
         candidates = []
         for mol in scaffold_mols:
             smi = Chem.MolToSmiles(mol)
@@ -214,7 +216,6 @@ def generate_candidate_library(
                 smiles=smi,
                 mol=mol,
             ))
-        # Add controls
         for name, smi in CONTROL_SMILES.items():
             mol = Chem.MolFromSmiles(smi)
             candidates.append(CompoundRecord(
@@ -222,7 +223,6 @@ def generate_candidate_library(
                 smiles=smi,
                 mol=mol,
             ))
-        log.info(f"  Fallback library: {len(candidates)} entries.")
         return candidates
 
     # Recombine fragments to create novel analogs via BRICSBuild over all fragments

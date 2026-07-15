@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 import json
 import logging
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -24,27 +23,11 @@ from rdkit.Chem.Draw import rdMolDraw2D
 
 from Bio.PDB import PDBParser
 
+from config.constants import OUTPUT_DIR, CSV_REPORT
+
 # A module-level logger sharing the pipeline's "AutoAntibiotic" logger name so
 # that handlers configured in discovery_pipeline capture these messages too.
 log = logging.getLogger("AutoAntibiotic")
-
-
-def _output_const(name: str):
-    """
-    Resolve a pipeline output constant (``OUTPUT_DIR`` / ``CSV_REPORT``) from the
-    live ``discovery_pipeline`` module.
-
-    The orchestrator (and the test-suite) may monkey-patch these module-level
-    attributes to redirect output (e.g. into a temp directory). Reading them
-    lazily from ``sys.modules`` at call time keeps this submodule decoupled
-    from ``discovery_pipeline``'s import order while still honouring such
-    overrides.
-    """
-    dp = sys.modules.get("discovery_pipeline")
-    if dp is None:  # pragma: no cover - only during isolated unit import
-        from config.constants import OUTPUT_DIR, CSV_REPORT
-        return {"OUTPUT_DIR": OUTPUT_DIR, "CSV_REPORT": CSV_REPORT}[name]
-    return getattr(dp, name)
 
 
 def _key_residue_coords(receptor_pdb: str) -> Dict[str, List[np.ndarray]]:
@@ -126,6 +109,8 @@ def generate_csv_report(
     holo_pdb_path: Optional[str] = None,
     mode: str = "science",
     redock_rmsd: Optional[float] = None,
+    csv_report: Optional[Union[str, Path]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
 ) -> str:
     """
     Phase 5.1 — Write top_candidates.csv with all required columns.
@@ -140,9 +125,13 @@ def generate_csv_report(
     Returns path to CSV.
     """
     log.info("─── Phase 5: Reporting ───")
-    OUTPUT_DIR = _output_const("OUTPUT_DIR")
-    CSV_REPORT = _output_const("CSV_REPORT")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if output_dir is None:
+        output_dir = OUTPUT_DIR
+    if csv_report is None:
+        csv_report = CSV_REPORT
+    output_dir = Path(output_dir)
+    csv_report = Path(csv_report)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     is_mock = (mode == "ci")
 
@@ -224,25 +213,30 @@ def generate_csv_report(
         })
 
     df = pd.DataFrame(rows)
-    df.to_csv(CSV_REPORT, index=False)
-    log.info(f"  CSV report saved: {CSV_REPORT}")
+    df.to_csv(csv_report, index=False)
+    log.info(f"  CSV report saved: {csv_report}")
 
-    json_path = Path(str(CSV_REPORT)).with_suffix(".json")
+    json_path = Path(str(csv_report)).with_suffix(".json")
     with open(json_path, "w") as fh:
         json.dump(rows, fh, indent=2)
     log.info(f"  JSON candidates saved: {json_path}")
 
-    return str(CSV_REPORT)
+    return str(csv_report)
 
 
-def generate_images(top3: List[CompoundRecord]) -> List[str]:
+def generate_images(
+    top3: List[CompoundRecord],
+    output_dir: Optional[Union[str, Path]] = None,
+) -> List[str]:
     """
     Phase 5.2 — Save 2D structure PNGs for the top 3 candidates.
 
     Returns list of file paths.
     """
     paths = []
-    OUTPUT_DIR = _output_const("OUTPUT_DIR")
+    if output_dir is None:
+        output_dir = OUTPUT_DIR
+    output_dir = Path(output_dir)
     for i, rec in enumerate(top3):
         if rec.mol is None:
             mol = Chem.MolFromSmiles(rec.smiles)

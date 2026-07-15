@@ -23,7 +23,7 @@ COPY pyproject.toml ./
 # Create the dedicated environment and install the external binaries that are
 # not pip-installable (vina, openbabel) plus the package itself.
 RUN conda create -y -n autoantibiotic python=3.10 && \
-    conda install -y -n autoantibiotic -c conda-forge vina openbabel && \
+    conda install -y -n autoantibiotic -c conda-forge vina=1.2.5 openbabel=3.1.1 && \
     /opt/conda/envs/autoantibiotic/bin/pip install --no-cache-dir .[docking] && \
     conda clean -afy
 

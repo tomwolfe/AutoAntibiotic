@@ -621,6 +621,22 @@ def prepare_targets(
         log.info("Science mode: real scientific validation expected.")
     result["mode"] = mode
 
+    # ── Real-PDB guard: science mode must never silently use mock PDBs ──
+    if mode == "science":
+        for label, path in (
+            ("holo", holo_path),
+            ("apo", apo_path),
+            ("trypsin", trypsin_path),
+            ("CES1", ces1_path),
+        ):
+            if "tests/data" in os.path.abspath(path):
+                log.error(
+                    f"Refusing to run science mode with mock PDB for "
+                    f"'{label}' ({path}). Place real PDBs under pdb_dir "
+                    "(set mode: ci for offline mock runs)."
+                )
+                sys.exit(1)
+
     # ── Clean PBP2a (use holo for grid calc, but we need the protein only) ──
     log.info("  Cleaning PBP2a (apo)…")
     pbp2a_clean_pdb = os.path.join(work_dir, "PBP2a_clean.pdb")
@@ -1674,10 +1690,12 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         holo_pdb_path=targets.get("holo_pdb"),
         mode=targets.get("mode"),
         redock_rmsd=redock_rmsd,
+        csv_report=CSV_REPORT,
+        output_dir=OUTPUT_DIR,
     )
 
     top3 = top10[:3]
-    generate_images(top3)
+    generate_images(top3, output_dir=OUTPUT_DIR)
 
     # Phase 5.2b — 2D interaction diagrams for the top 3 candidates. These give
     # medicinal chemists a visual proof of the binding mode (ligand atoms that

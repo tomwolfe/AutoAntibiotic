@@ -51,92 +51,43 @@ def _extract_native_ligand_from_holo(
 
     Returns the SMILES string, or None on failure.
     """
-    KNOWN_ANTIBIOTIC_NAMES = {
-        "LIG", "INH", "METHI", "VANCO", "CEFTA", "MEROP",
-        "NAT", "BPN",  # common residue names for antibiotic ligands
-    }
-
-    def _is_likely_ligand(resname: str) -> bool:
-        """Return True if resname is not a common buffer/ion/water."""
-        skip_names = {"SO4", "PO4", "ACT", "EDO", "GOL", "EG0", "E2O",
-                      "CL", "NA", "MG", "ZN", "CA", "FE", "FE2", "HOH",
-                      "WAT", "SOL", "ACN", "DMS", "DMF", "N2G", "MPD"}
-        upper = resname.upper()
-        if upper in skip_names:
-            return False
-        if any(upper.startswith(prefix) for prefix in ("LIG", "INH", "BPN", "NAT",
-                                                         "CEF", "MER", "VAN")):
-            return True
-        return False
+    if resname_override is None:
+        log.warning(
+            "  ⚠  Native ligand extraction requires an explicit "
+            "native_ligand_resname (config.yaml) for science redocking. "
+            "Skipping auto-detection — returning None."
+        )
+        return None
 
     try:
         parser = PDBParser(QUIET=True)
         struct = parser.get_structure("6TKO", holo_pdb_path)
 
-        # ── Optional explicit resname override (Task 3) ─────────────────────
-        if resname_override is not None:
-            override = resname_override.strip().upper()
-            lig_res = None
-            chain_id = None
-            for model in struct:
-                for chain in model:
-                    for residue in chain:
-                        if residue.get_resname().strip().upper() == override:
-                            lig_res = residue
-                            chain_id = chain.get_id()
-                            break
-                    if lig_res is not None:
+        # ── Explicit resname override (required) ─────────────────────────────
+        override = resname_override.strip().upper()
+        lig_res = None
+        chain_id = None
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    if residue.get_resname().strip().upper() == override:
+                        lig_res = residue
+                        chain_id = chain.get_id()
                         break
                 if lig_res is not None:
                     break
-            if lig_res is None:
-                log.warning(
-                    f"  ⚠  resname_override '{resname_override}' not found in "
-                    f"{holo_pdb_path}."
-                )
-                return None
-            log.info(
-                f"  Native ligand (resname override '{resname_override}'): "
-                f"chain {chain_id}, residue {lig_res.get_resname()}"
+            if lig_res is not None:
+                break
+        if lig_res is None:
+            log.warning(
+                f"  ⚠  resname_override '{resname_override}' not found in "
+                f"{holo_pdb_path}."
             )
-        else:
-            ligand_residues = []
-            for model in struct:
-                for chain in model:
-                    for residue in chain:
-                        if residue.get_id()[0] in ("H_", "W", "H_M"):
-                            continue
-                        if residue.get_id()[0] == " ":
-                            continue
-                        resname = residue.get_resname().strip()
-                        if resname in ("HOH", "WAT", "SOL"):
-                            continue
-                        ligand_residues.append((chain.get_id(), residue))
-
-            if not ligand_residues:
-                log.warning("  ⚠  No hetero-ligand found in 6TKO.")
-                return None
-
-            # Filter out buffers/ions, prefer known antibiotic names
-            filtered = []
-            for chain_id, res in ligand_residues:
-                resname = res.get_resname().strip().upper()
-                if _is_likely_ligand(resname):
-                    filtered.append((chain_id, res))
-
-            if not filtered:
-                log.warning("  ⚠  No known antibiotic/ligand residue found. Falling back to first HETATM.")
-                filtered = ligand_residues  # fallback to original list
-
-            if len(filtered) > 1:
-                # Prefer the one with the highest heavy atom count
-                best = max(filtered, key=lambda x: x[1].get_num_atoms())
-                chain_id, lig_res = best
-                log.info(f"  Selected ligand (most heavy atoms): chain {chain_id}, "
-                         f"residue {lig_res.get_resname()} ({lig_res.get_num_atoms()} atoms)")
-            else:
-                chain_id, lig_res = filtered[0]
-                log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
+            return None
+        log.info(
+            f"  Native ligand (resname override '{resname_override}'): "
+            f"chain {chain_id}, residue {lig_res.get_resname()}"
+        )
 
         # Write ligand as a separate PDB file
         pdbio = PDBIO()

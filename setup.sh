@@ -71,7 +71,7 @@ fi
 
 # ── 3. Install the external binaries (vina + openbabel) ─────────────────────
 echo "  • Installing AutoDock Vina + OpenBabel from conda-forge…"
-"$CONDA_BIN" install -y -n "$ENV_NAME" -c conda-forge vina openbabel
+"$CONDA_BIN" install -y -n "$ENV_NAME" -c conda-forge vina=1.2.5 openbabel=3.1.1
 
 # ── 4. Install the Python package ───────────────────────────────────────────
 # Resolve the repository root (directory containing this script) so the

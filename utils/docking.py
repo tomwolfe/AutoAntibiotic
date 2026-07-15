@@ -21,6 +21,7 @@ import numpy as np
 
 from rdkit import Chem
 from .ligand_prep import prepare_ligand_pdbqt
+from .library_gen import CompoundRecord
 from config.constants import VINA_TIMEOUT_S, N_JOBS, RANDOM_SEED
 
 # Shared logger: same name as the one configured in discovery_pipeline.
@@ -181,6 +182,12 @@ def _dock_compounds_parallel(
     """
     Dock a list of compounds in parallel, returning ``(record, energy)`` pairs.
 
+    Only ``(compound_id, smiles)`` is pickled for each worker, so the heavy
+    :class:`~rdkit.Chem.Mol` objects stored on the records are never shipped to
+    the worker processes — this keeps memory bounded for large libraries. The
+    Mol is reconstructed inside the worker via ``Chem.MolFromSmiles`` and the
+    result is mapped back to the original :class:`CompoundRecord` by id.
+
     Each compound is docked by *dock_func* (defaults to :func:`dock_compound`).
     If a worker raises, the specific error is logged together with the
     ``CompoundRecord.compound_id`` and the record is returned with
@@ -190,13 +197,8 @@ def _dock_compounds_parallel(
     in-process, which keeps behaviour deterministic and avoids the overhead
     of spawning worker processes.
 
-    Note (memory): for very large libraries the :class:`CompoundRecord.mol`
-    objects are pickled for each worker. If profiling shows a bottleneck,
-    callers may pass lightweight ``(compound_id, smiles)`` payloads and
-    reconstruct the :class:`~rdkit.Chem.Mol` inside *dock_func*.
-
     Args:
-        records: Compounds to dock (must expose ``.mol`` / ``.smiles``).
+        records: Compounds to dock (must expose ``.compound_id`` / ``.smiles``).
         receptor_pdbqt: Path to receptor PDBQT.
         center: Grid-box centre as a length-3 array.
         box_size: Grid-box dimensions ``(x, y, z)``.
@@ -215,15 +217,20 @@ def _dock_compounds_parallel(
     if dock_func is None:
         dock_func = dock_compound
 
+    # Lightweight payloads: pickling only (id, smiles) avoids shipping the Mol.
+    payloads = [(rec.compound_id, rec.smiles) for rec in records]
+    by_id = {rec.compound_id: rec for rec in records}
+
     results: List[Tuple["CompoundRecord", Optional[float]]] = []
     total = len(records)
 
     # In-process execution keeps small batches deterministic and testable.
     if n_jobs <= 1:
-        for i, rec in enumerate(records):
-            results.append(_dock_worker(
-                rec, dock_func, receptor_pdbqt, center, box_size, work_dir, tag,
-            ))
+        for i, payload in enumerate(payloads):
+            rec, energy = _dock_worker(
+                payload, dock_func, receptor_pdbqt, center, box_size, work_dir, tag,
+            )
+            results.append((by_id[rec.compound_id], energy))
             if (i + 1) % 25 == 0:
                 log.info(f"    Docked {i + 1} / {total} ({tag})")
         return results
@@ -231,19 +238,21 @@ def _dock_compounds_parallel(
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
         futures = {
             pool.submit(
-                _dock_worker, rec, dock_func,
+                _dock_worker, payload, dock_func,
                 receptor_pdbqt, center, box_size, work_dir, tag,
-            ): rec
-            for rec in records
+            ): payload[0]
+            for payload in payloads
         }
         for i, future in enumerate(as_completed(futures)):
-            rec = futures[future]  # original record
+            cid = futures[future]  # original compound id
+            rec = by_id[cid]
             try:
                 result = future.result(timeout=60)
-                results.append(result)
+                # result[0] is the reconstructed record; map back to original.
+                results.append((rec, result[1]))
             except Exception as exc:
                 log.warning(
-                    f"    Docking failed for {rec.compound_id} ({tag}): {exc}. "
+                    f"    Docking failed for {cid} ({tag}): {exc}. "
                     "Returning (record, None) and continuing."
                 )
                 results.append((rec, None))
@@ -254,7 +263,7 @@ def _dock_compounds_parallel(
 
 
 def _dock_worker(
-    rec: "CompoundRecord",
+    payload: Tuple[str, str],
     dock_func: Callable,
     receptor_pdbqt: str,
     center: np.ndarray,
@@ -265,16 +274,20 @@ def _dock_worker(
     """
     Module-level docking wrapper so it can be pickled by ``ProcessPoolExecutor``.
 
-    Runs *dock_func* for a single record and returns ``(record, energy)``.
-    On any failure the error is logged with the ``CompoundRecord.compound_id``
-    and ``(record, None)`` is returned so the pipeline keeps going.
+    *payload* is ``(compound_id, smiles)``; the Mol is reconstructed here from
+    SMILES. A fresh :class:`CompoundRecord` is built, docked by *dock_func*,
+    and ``(record, energy)`` is returned. On any failure the error is logged
+    with the ``compound_id`` and ``(record, None)`` is returned so the
+    pipeline keeps going.
     """
+    compound_id, smiles = payload
+    rec = CompoundRecord(compound_id=compound_id, smiles=smiles)
     try:
         energy = dock_func(rec, receptor_pdbqt, center, box_size, work_dir, tag)
         return rec, energy
     except Exception as exc:
         log.warning(
-            f"    Docking failed for {rec.compound_id} ({tag}): {exc}. "
+            f"    Docking failed for {compound_id} ({tag}): {exc}. "
             "Returning (record, None) and continuing."
         )
         return rec, None

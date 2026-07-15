@@ -276,16 +276,15 @@ pipeline falls back to the original hardcoded defaults, so it keeps working.
 
 ### Native ligand override (`native_ligand_resname`)
 
-During redocking validation the pipeline auto-detects the co-crystallised
-ligand in the holo PDB. In complex structures this can select the wrong
-molecule. Force the correct residue by name:
+Native-ligand auto-detection has been removed. For science redocking you MUST
+provide the exact co-crystallised ligand residue name; it is required:
 
 ```yaml
 native_ligand_resname: CEF
 ```
 
-When set, auto-detection is skipped and the residue with that name (e.g. `CEF`)
-is selected directly. Leave it absent for automatic detection.
+If left absent, native-ligand extraction is skipped and redocking validation
+cannot run in science mode. In CI mode this is not needed (redocking is skipped).
 
 ---
 

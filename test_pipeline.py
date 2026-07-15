@@ -1167,6 +1167,30 @@ class TestOfflinePDBLoad:
             "Local tests/data/3QPD.pdb should be the apo structure passed to cleaning"
         )
 
+    def test_science_mode_rejects_mock_pdb(self, tmp_path):
+        """prepare_targets must sys.exit(1) in science mode when a mock PDB
+        under tests/data is resolved."""
+        import discovery_pipeline as dp
+
+        tests_data = Path(__file__).parent / "tests" / "data"
+        local_3qpd = str(tests_data / "3QPD.pdb")
+        assert os.path.exists(local_3qpd), "tests/data/3QPD.pdb must be present"
+
+        with patch.object(dp, "load_config", return_value={"mode": "science"}):
+            with patch.object(dp, "fetch_structure",
+                              return_value=local_3qpd):
+                with patch.object(dp.log, "error") as mock_err:
+                    with pytest.raises(SystemExit) as exc:
+                        dp.prepare_targets(
+                            str(tmp_path), str(tmp_path),
+                            {"vina": False, "USE_VINA": False},
+                        )
+                    assert exc.value.code == 1
+        assert any(
+            "mock pdb" in str(c.args[0]).lower()
+            for c in mock_err.call_args_list
+        ), "Expected an error about refusing science mode with a mock PDB"
+
 
 # ── Test: CSV low-conf suffix ──────────────────────────────────────────────
 
@@ -1184,9 +1208,11 @@ class TestCsvLowConfSuffix:
             CompoundRecord(compound_id="AA-0002", smiles="c1ccccc1",
                            selectivity_index=1.2, selectivity_confidence="Low"),
         ]
-        with patch.object(dp, "OUTPUT_DIR", output_dir):
-            with patch.object(dp, "CSV_REPORT", output_dir / "top_candidates.csv"):
-                generate_csv_report(recs)
+        generate_csv_report(
+            recs,
+            output_dir=output_dir,
+            csv_report=output_dir / "top_candidates.csv",
+        )
 
         import csv
         with open(output_dir / "top_candidates.csv") as f:
@@ -1390,6 +1416,20 @@ class TestNativeLigandResnameOverride:
 
         result = _extract_native_ligand_from_holo(
             str(holo), str(smi), str(pdbqt), resname_override="NOPE"
+        )
+        assert result is None
+
+    def test_missing_override_returns_none(self, tmp_path):
+        """When resname_override is None, extraction is skipped and returns None."""
+        from utils.structure_prep import _extract_native_ligand_from_holo
+
+        holo = tmp_path / "holo.pdb"
+        self._write_holo_pdb(holo)
+        smi = tmp_path / "lig.smi"
+        pdbqt = tmp_path / "lig.pdbqt"
+
+        result = _extract_native_ligand_from_holo(
+            str(holo), str(smi), str(pdbqt)
         )
         assert result is None
 
