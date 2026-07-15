@@ -1,0 +1,111 @@
+"""
+Ligand preparation utilities
+=============================
+
+Convert RDKit molecules to AutoDock Vina's PDBQT format. Extraction of this
+logic from ``discovery_pipeline.py`` keeps the main orchestration file focused
+on the high-level phases while the implementation details live here.
+
+Strategy used by :class:`LigandPreparator`:
+    1. Try ``meeko`` (preferred — handles partial charges, rotatable bonds).
+    2. If meeko is unavailable or fails, fall back to ``obabel`` via subprocess.
+    3. If both fail, raise a clear ``RuntimeError`` with install instructions.
+"""
+
+import logging
+import subprocess
+
+from rdkit import Chem
+
+# Shared logger: same name as the one configured in discovery_pipeline, so all
+# log records route through the same handlers (stream + pipeline.log).
+log = logging.getLogger("AutoAntibiotic")
+
+
+class LigandPreparator:
+    """
+    Encapsulates the logic for converting an RDKit Mol to PDBQT format.
+
+    Strategy:
+        1. Try meeko (preferred — handles partial charges, rotatable bonds).
+        2. If meeko is unavailable or fails, fall back to obabel via subprocess.
+        3. If both fail, raise a clear RuntimeError with installation instructions.
+    """
+
+    def prepare(self, mol: Chem.Mol) -> str:
+        """
+        Convert an RDKit Mol to a PDBQT string.
+
+        Args:
+            mol: Input molecule (should have 3D coordinates).
+
+        Returns:
+            PDBQT-formatted string.
+
+        Raises:
+            RuntimeError: If neither meeko nor obabel can produce PDBQT.
+        """
+        meeko_error = None
+        try:
+            from meeko import MoleculePreparation, PDBQTWriterLegacy
+            preparator = MoleculePreparation()
+            mol_setups = preparator.prepare(mol)
+            if not mol_setups:
+                raise RuntimeError("Meeko returned an empty setup for the input molecule")
+            pdbqt_str = PDBQTWriterLegacy.write_string(mol_setups[0])[0]
+            if pdbqt_str:
+                return pdbqt_str
+            raise RuntimeError("Meeko produced an empty PDBQT string for the input molecule")
+        except (ImportError, AttributeError, RuntimeError) as exc:
+            meeko_error = str(exc)
+            log.warning(f"Meeko failed: {exc}")
+
+        obabel_error = None
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".pdbqt", delete=True) as tmp:
+                subprocess.run(
+                    ["obabel", "-g", "min", "-O", tmp.name],
+                    input=Chem.MolToMolBlock(mol).encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                )
+                pdbqt_str = tmp.read().decode("utf-8", errors="ignore")
+                if pdbqt_str:
+                    return pdbqt_str
+                raise ValueError("obabel returned empty output")
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError) as exc:
+            obabel_error = str(exc)
+            log.warning(f"obabel fallback failed: {exc}")
+
+        raise RuntimeError(
+            "Cannot convert Mol to PDBQT. Ensure meeko is installed "
+            "(pip install meeko) or OpenBabel is available on PATH. "
+            "Alternatively, set USE_VINA=False to skip PDBQT-dependent steps."
+            f" meeko error: {meeko_error}; obabel error: {obabel_error}"
+        )
+
+
+def prepare_ligand_pdbqt(
+    mol: Chem.Mol,
+    output_path: str,
+) -> bool:
+    """
+    Convert an RDKit Mol to PDBQT via LigandPreparator.
+
+    Args:
+        mol: Input molecule.
+        output_path: Destination .pdbqt path.
+
+    Returns:
+        True on success.
+    """
+    try:
+        preparator = LigandPreparator()
+        pdbqt_str = preparator.prepare(mol)
+        with open(output_path, "w") as f:
+            f.write(pdbqt_str)
+        return True
+    except Exception as exc:
+        log.warning(f"  Ligand preparation failed: {exc}")
+        return False
