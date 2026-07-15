@@ -25,11 +25,14 @@ from discovery_pipeline import (
     profile_resistance_risk,
     ensure_output_dir,
     screen_library,
+    fetch_structure,
+    _find_downloaded_pdb,
+    _redocking_box_size,
     log,
 )
 from utils.filtering import apply_filters
 from utils.library_gen import generate_candidate_library, CompoundRecord
-from utils.docking import _run_vina_docking, _dock_compounds_parallel
+from utils.docking import _run_vina_docking, _dock_compounds_parallel, format_fallback_score
 from utils.ligand_prep import LigandPreparator
 from utils.reporting import generate_csv_report, generate_pymol_script
 from rdkit.DataStructs import TanimotoSimilarity
@@ -39,6 +42,9 @@ from config.constants import (
     TOP_N,
     BETA_LACTAM_SMARTS,
     DIVERSITY_MIN_COUNT,
+    RMSD_VALIDATED_MAX,
+    RMSD_MARGINAL_MAX,
+    protocol_trust,
 )
 from tests.helpers import create_minimal_pdb
 from rdkit import Chem
@@ -432,6 +438,98 @@ class TestMockRedockingSkip:
                     deps=deps,
                 )
         assert result == (False, None), f"Expected (False, None), got {result}"
+
+
+# ── Test: Redocking box auto-size ─────────────────────────────────────────
+
+class TestRedockingBoxSize:
+    def test_autosizes_from_ligand(self):
+        """_redocking_box_size sizes the box from a native-ligand PDBQT atom spread."""
+        mol = Chem.MolFromSmiles("CCCCC")
+        from rdkit.Chem import AllChem
+        AllChem.EmbedMolecule(mol)
+        pdbqt = Chem.MolToPDBBlock(mol)
+        path = None
+        import tempfile as _tf
+        d = _tf.mkdtemp()
+        try:
+            path = os.path.join(d, "lig.pdbqt")
+            with open(path, "w") as fh:
+                fh.write(pdbqt)
+            center = np.array([0.0, 0.0, 0.0])
+            box = _redocking_box_size(path, center)
+            assert len(box) == 3
+            # All edges equal (cubic) and at least the 15 Å minimum.
+            assert box[0] == box[1] == box[2]
+            assert box[0] >= 15.0
+        finally:
+            import shutil as _sh
+            _sh.rmtree(d, ignore_errors=True)
+
+    def test_falls_back_on_missing_file(self):
+        """A missing ligand file yields the default 25 Å box."""
+        box = _redocking_box_size("/no/such/file.pdbqt", np.array([0.0, 0.0, 0.0]))
+        assert box == (25.0, 25.0, 25.0)
+
+
+# ── Test: fetch_structure rename fallback ─────────────────────────────────
+
+class TestFetchStructureRename:
+    def test_find_downloaded_pdb_matches_ent(self, tmp_path):
+        """_find_downloaded_pdb finds a pdb{pdb_id}.ent file in the dir."""
+        p = tmp_path / "pdb3qpd.ent"
+        p.write_text("HEADER\n")
+        found = _find_downloaded_pdb(str(tmp_path), "3QPD")
+        assert found is not None
+        assert found.endswith("pdb3qpd.ent")
+
+    def test_find_downloaded_pdb_recursive_subdir(self, tmp_path):
+        """_find_downloaded_pdb scans one level of nested subdirs too."""
+        sub = tmp_path / "pdb003" / "qpd"
+        sub.mkdir(parents=True)
+        (sub / "3qpd.pdb").write_text("HEADER\n")
+        found = _find_downloaded_pdb(str(tmp_path), "3QPD")
+        assert found is not None
+        assert "3qpd.pdb" in found
+
+    def test_find_downloaded_pdb_no_match(self, tmp_path):
+        """_find_downloaded_pdb returns None when nothing contains the pdb_id."""
+        (tmp_path / "unrelated.txt").write_text("x")
+        assert _find_downloaded_pdb(str(tmp_path), "3QPD") is None
+
+
+# ── Test: Config-driven protocol-trust thresholds ────────────────────────
+
+class TestProtocolTrustThresholds:
+    def test_defaults_are_sane(self):
+        """Loaded thresholds match the documented 1.5 / 2.0 Å defaults."""
+        assert RMSD_VALIDATED_MAX == 1.5
+        assert RMSD_MARGINAL_MAX == 2.0
+
+    def test_thresholds_drive_badges(self):
+        """protocol_trust badges respect the loaded RMSD cutoffs."""
+        assert protocol_trust("science", 1.0) == "Validated"
+        assert protocol_trust("science", 1.8) == "Validated (Marginal)"
+        assert protocol_trust("science", 2.5).startswith("CAUTION: High RMSD")
+        assert protocol_trust("ci", 0.5) == "CI Mode (Skipped)"
+
+
+# ── Test: RDKit fallback score labeling ──────────────────────────────────
+
+class TestFallbackScoreLabeling:
+    def test_format_fallback_score_prefixes_value(self):
+        """format_fallback_score prefixes the value with '(fallback)' and a disclaimer."""
+        s = format_fallback_score(-3.21)
+        assert s.startswith("(fallback)")
+        assert "kcal/mol" in s
+        assert "-3.21" in s
+
+    def test_format_fallback_score_handles_none(self):
+        """A None score yields a clear non-kcal/mol placeholder."""
+        s = format_fallback_score(None)
+        assert s.startswith("(fallback)")
+        assert "N/A" in s
+
 
 # ── Test: Error Handling ───────────────────────────────────────────────────
 

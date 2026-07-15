@@ -107,6 +107,8 @@ from config.constants import (
     SIMILARITY_THRESHOLD_RELAXED,
     DIVERSITY_MIN_COUNT,
     SELECTIVITY_INDEX_THRESHOLD,
+    RMSD_VALIDATED_MAX,
+    RMSD_MARGINAL_MAX,
     OUTPUT_DIR,
     CSV_REPORT,
     TOP_N,
@@ -245,6 +247,51 @@ def _auto_box_size(
         return (size, size, size)
     except Exception as exc:
         log.warning(f"  ⚠  Could not auto-size box ({exc}); using default {default_box}.")
+        return default_box
+
+
+def _redocking_box_size(
+    ligand_pdbqt: str,
+    center: np.ndarray,
+    min_size: float = 15.0,
+    padding: float = 6.0,
+    default_box: Tuple[float, float, float] = (25.0, 25.0, 25.0),
+) -> Tuple[float, float, float]:
+    """
+    Size the native-ligand redocking box from the ligand coordinates.
+
+    Reads the heavy-atom positions from *ligand_pdbqt*, measures the max
+    distance from *center* (the native-ligand centroid) to any atom, and sizes
+    the box so it comfortably encloses the ligand:
+
+        size = max(min_size, 2 * (max_radius + padding))
+
+    This mirrors :func:`_auto_box_size` (used for the allosteric/active sites)
+    so the redocking grid is tight around the crystallographic ligand rather
+    than a hardcoded 25 Å cube. Falls back to *default_box* when the ligand
+    cannot be parsed.
+    """
+    if ligand_pdbqt is None or not os.path.exists(ligand_pdbqt) or center is None:
+        return default_box
+    try:
+        mol = Chem.MolFromPDBQT(ligand_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
+        if mol is None:
+            return default_box
+        conf = mol.GetConformer()
+        coords = conf.GetPositions()
+        if coords.size == 0:
+            return default_box
+        center = np.asarray(center, dtype=float)
+        max_radius = float(
+            np.linalg.norm(coords - center, axis=1).max()
+        )
+        size = max(min_size, 2.0 * (max_radius + padding))
+        return (size, size, size)
+    except Exception as exc:
+        log.warning(
+            f"  ⚠  Could not auto-size redocking box ({exc}); "
+            f"using default {default_box}."
+        )
         return default_box
 
 
@@ -480,6 +527,16 @@ def run_redocking_validation(
     # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
     docked_pdbqt = docked_pdb.replace(".pdb", ".pdbqt")
+
+    # Size the redocking box from the native ligand itself (centroid + spread)
+    # using the same auto-sizing logic as the allosteric/active sites, instead
+    # of a fixed 25 Å cube. This keeps the box tight around the crystallographic
+    # ligand so the redocked pose is measured on a comparable grid.
+    redock_box = _redocking_box_size(lig_pdbqt, center)
+    log.info(
+        f"  Redocking box: {redock_box[0]:.1f} x {redock_box[1]:.1f} x "
+        f"{redock_box[2]:.1f} Å (auto-sized from native ligand)."
+    )
     vina_cmd = [
         "vina",
         "--receptor", target_pdbqt_path,
@@ -488,7 +545,9 @@ def run_redocking_validation(
         "--center_x", f"{center[0]:.3f}",
         "--center_y", f"{center[1]:.3f}",
         "--center_z", f"{center[2]:.3f}",
-        "--size_x", "25", "--size_y", "25", "--size_z", "25",
+        "--size_x", f"{redock_box[0]:.1f}",
+        "--size_y", f"{redock_box[1]:.1f}",
+        "--size_z", f"{redock_box[2]:.1f}",
         "--exhaustiveness", "8",
     ]
 
@@ -524,20 +583,23 @@ def run_redocking_validation(
         return False, None
 
     log.info(f"  Redocking RMSD = {rmsd:.3f} Å")
-    if rmsd > 2.0:
+    if rmsd > RMSD_MARGINAL_MAX:
         log.warning(
-            f"  ⚠  Redocking RMSD ({rmsd:.3f} Å) exceeds 2.0 Å threshold. "
-            "The docking protocol may not accurately reproduce known binding modes. "
-            "Proceeding with pipeline — interpret results with caution."
+            f"  ⚠  Redocking RMSD ({rmsd:.3f} Å) exceeds {RMSD_MARGINAL_MAX:.1f} Å "
+            "threshold. The docking protocol may not accurately reproduce known "
+            "binding modes. Proceeding with pipeline — interpret results with caution."
         )
     else:
-        log.info(f"  ✓  Redocking validated (RMSD = {rmsd:.3f} Å ≤ 2.0 Å).")
+        log.info(
+            f"  ✓  Redocking validated (RMSD = {rmsd:.3f} Å ≤ "
+            f"{RMSD_MARGINAL_MAX:.1f} Å)."
+        )
 
-    # ``validation_ok`` reflects the 2.0 Å pass/fail gate, but we always return
-    # the exact measured ``rmsd`` float (even when it exceeds the threshold) so
-    # downstream reporters can display the raw value and emit nuanced trust
-    # signals rather than a binary pass/fail.
-    validation_ok = rmsd <= 2.0 if rmsd is not None else False
+    # ``validation_ok`` reflects the RMSD_MARGINAL_MAX Å pass/fail gate, but we
+    # always return the exact measured ``rmsd`` float (even when it exceeds the
+    # threshold) so downstream reporters can display the raw value and emit
+    # nuanced trust signals rather than a binary pass/fail.
+    validation_ok = rmsd <= RMSD_MARGINAL_MAX if rmsd is not None else False
     return validation_ok, rmsd
 
 
@@ -563,20 +625,69 @@ def fetch_structure(pdb_id: str, out_dir: str) -> str:
         pdbl.retrieve_pdb_file(
             pdb_id, pdir=out_dir, file_format="pdb",
         )
-        # PDBList may save as pdb{pdb_id}.ent; rename
-        raw = os.path.join(out_dir, f"pdb{pdb_id.lower()}.ent")
-        if os.path.exists(raw):
-            os.rename(raw, target_path)
-        # Handle alternative naming
-        alt = os.path.join(out_dir, f"{pdb_id}.pdb")
-        if os.path.exists(alt) and alt != target_path:
-            pass  # already correct name
+        # PDBList's ``retrieve_pdb_file`` naming varies by Biopython version:
+        # it may save as ``pdb{pdb_id_lower}.ent``, as ``{pdb_id}.pdb``, or even
+        # under a nested ``pdbXXX`` subdirectory. Rather than assume a single
+        # filename, scan the download dir for any file whose name contains the
+        # pdb_id and rename the first match safely to ``{pdb_id}.pdb``.
+        found = _find_downloaded_pdb(out_dir, pdb_id)
+        if found is not None and found != target_path:
+            # Avoid clobbering an existing correct file; only rename when the
+            # source is a different path.
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            os.rename(found, target_path)
+        if not os.path.exists(target_path):
+            # Last resort: if nothing matched, surface the directory contents
+            # so the failure is never silent.
+            entries = sorted(os.listdir(out_dir))
+            log.error(
+                f"  ✗  Download of {pdb_id} produced no recognisable PDB file. "
+                f"Contents of {out_dir}: {entries}"
+            )
+            raise FileNotFoundError(
+                f"PDB download for {pdb_id} did not yield a usable structure file."
+            )
         log.info(f"  ✓  Downloaded {pdb_id} → {target_path}")
     except Exception as exc:
         log.error(f"  ✗  Failed to download {pdb_id}: {exc}")
         raise
 
     return target_path
+
+
+def _find_downloaded_pdb(out_dir: str, pdb_id: str) -> Optional[str]:
+    """
+    Locate the just-downloaded PDB file for *pdb_id* in *out_dir*.
+
+    Biopython's ``PDBList.retrieve_pdb_file`` is inconsistent about the exact
+    output name (``pdb{pdb_id_lower}.ent``, ``{pdb_id}.pdb``, or a nested
+    ``pdbXXX`` subfolder). This helper scans *out_dir* (recursively, one level
+    deep) for any file whose name contains the *pdb_id* (case-insensitive) and
+    returns the first such path, or ``None`` if nothing matches.
+
+    Does NOT return an already-correct ``{pdb_id}.pdb`` at the top level — that
+    is the caller's target path and is handled separately.
+    """
+    pid = pdb_id.lower()
+    candidates = []
+    for root, _dirs, files in os.walk(out_dir):
+        for fname in files:
+            low = fname.lower()
+            # Match files like pdb3qpd.ent, 3qpd.pdb, 3qpd.ent, etc. but never
+            # an already-named target file at the root.
+            if pid in low and (
+                low.endswith(".ent")
+                or low.endswith(".pdb")
+                or low.endswith(".cif")
+            ):
+                candidates.append(os.path.join(root, fname))
+    if not candidates:
+        return None
+    # Prefer a strictly-named file (e.g. ``pdb3qpd.ent``) over an incidental
+    # substring match; otherwise just take the first hit.
+    candidates.sort(key=lambda p: (not os.path.basename(p).lower().startswith(f"pdb{pid}"), p))
+    return candidates[0]
 
 
 def clean_pdb_structure(

@@ -16,3 +16,14 @@ targets:
   CONSERVED_RESIDUES: ["SER403", "LYS406", "TYR446"]
   TRYPSIN_CATALYTIC_RESIDUES: ["HIS57", "ASP102", "SER195"]
   CES1_CATALYTIC_RESIDUES: ["SER221", "HIS468", "GLU354"]
+
+# ── Protocol trust RMSD thresholds (Å) ────────────────────────────────────────
+# Redocking RMSD cutoffs used by config.constants.protocol_trust and the
+# redocking validation gate. Previously hardcoded (1.5 / 2.0). Sane defaults
+# are applied if this block is missing or cannot be parsed.
+thresholds:
+  # RMSD at or below which the docking protocol is considered "Validated".
+  rmsd_validated_max: 1.5
+  # RMSD above rmsd_validated_max but at/below this is "Validated (Marginal)".
+  # Above this is flagged "CAUTION: High RMSD".
+  rmsd_marginal_max: 2.0

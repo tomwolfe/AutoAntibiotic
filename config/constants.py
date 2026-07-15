@@ -68,6 +68,47 @@ _TARGET_RESIDUE_KEYS = (
 TARGETS_FILE = Path(__file__).resolve().parent / "targets.yaml"
 
 
+# Sane default RMSD cutoffs (Angstrom) for the protocol-trust logic. These are
+# overridden by the ``thresholds:`` block in ``config/targets.yaml`` when present.
+_RMSD_VALIDATED_MAX_DEFAULT = 1.5
+_RMSD_MARGINAL_MAX_DEFAULT = 2.0
+
+
+def _load_thresholds() -> Dict[str, float]:
+    """
+    Load protocol-trust RMSD cutoffs from ``config/targets.yaml``.
+
+    Returns ``{"rmsd_validated_max": ..., "rmsd_marginal_max": ...}``, falling
+    back to the hardcoded ``*_DEFAULT`` values whenever the YAML file is
+    missing, unreadable, pyyaml is unavailable, or the ``thresholds`` block is
+    absent. Only finite positive floats are accepted; anything else keeps the
+    default so the contract (and the trust badge strings) remain stable.
+    """
+    defaults = {
+        "rmsd_validated_max": _RMSD_VALIDATED_MAX_DEFAULT,
+        "rmsd_marginal_max": _RMSD_MARGINAL_MAX_DEFAULT,
+    }
+    try:
+        import yaml
+
+        if TARGETS_FILE.exists():
+            with open(TARGETS_FILE) as fh:
+                data = yaml.safe_load(fh) or {}
+            thr = data.get("thresholds", {}) if isinstance(data, dict) else {}
+            for key in ("rmsd_validated_max", "rmsd_marginal_max"):
+                val = thr.get(key)
+                if isinstance(val, (int, float)) and float(val) > 0:
+                    defaults[key] = float(val)
+    except Exception:
+        pass
+    return defaults
+
+
+_loaded_thresholds = _load_thresholds()
+RMSD_VALIDATED_MAX = _loaded_thresholds["rmsd_validated_max"]
+RMSD_MARGINAL_MAX = _loaded_thresholds["rmsd_marginal_max"]
+
+
 def _load_target_residues() -> Dict[str, List[str]]:
     """
     Load target residue lists from ``config/targets.yaml``.
@@ -145,16 +186,20 @@ def protocol_trust(mode: str, redock_rmsd: Optional[float]) -> str:
     ``utils.reporting.generate_csv_report``:
 
         - CI mode (no real RMSD)                 → "CI Mode (Skipped)"
-        - redock_rmsd > 2.0 Å                    → "CAUTION: High RMSD (<val> Å)"
-        - 1.5 Å < redock_rmsd <= 2.0 Å          → "Validated (Marginal)"
-        - redock_rmsd <= 1.5 Å (good protocol)  → "Validated"
+        - redock_rmsd > RMSD_MARGINAL_MAX Å      → "CAUTION: High RMSD (<val> Å)"
+        - RMSD_VALIDATED_MAX < redock_rmsd <= RMSD_MARGINAL_MAX → "Validated (Marginal)"
+        - redock_rmsd <= RMSD_VALIDATED_MAX Å    → "Validated"
         - science mode but no measured RMSD     → "Validation Unavailable"
+
+    The cutoffs (``RMSD_VALIDATED_MAX``, ``RMSD_MARGINAL_MAX``) are loaded from
+    ``config/targets.yaml`` (``thresholds:``) with sane defaults so the badge
+    strings and their contract are unaffected by YAML absence.
     """
     if mode == "ci":
         return "CI Mode (Skipped)"
-    if redock_rmsd is not None and redock_rmsd > 2.0:
+    if redock_rmsd is not None and redock_rmsd > RMSD_MARGINAL_MAX:
         return f"CAUTION: High RMSD ({redock_rmsd:.3f} Å)"
-    if redock_rmsd is not None and 1.5 < redock_rmsd <= 2.0:
+    if redock_rmsd is not None and RMSD_VALIDATED_MAX < redock_rmsd <= RMSD_MARGINAL_MAX:
         return "Validated (Marginal)"
     if redock_rmsd is not None:
         return "Validated"

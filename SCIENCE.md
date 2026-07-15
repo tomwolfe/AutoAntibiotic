@@ -32,7 +32,8 @@ For genuine scientific screening you must:
    > Instead it produces *approximate* scores with a built-in RDKit
    > shape/pharmacophore scoring fallback (lower accuracy — do **not** treat
    > these as real binding energies; they only rank candidates relative to each
-   > other). Redocking validation still requires Vina and is skipped otherwise.
+   > other, and are reported with a `"(fallback)"` prefix / warning). Redocking
+   > validation still requires Vina and is skipped otherwise.
 
  3. **Set `native_ligand_resname`.** Provide the exact co-crystallised ligand
     residue name (e.g. `native_ligand_resname: CEF`). Without it, redocking
@@ -46,10 +47,13 @@ The candidate CSV (`output/top_candidates.csv`) carries a single
 `protocol_trust` column:
 
 - `CI Mode (Skipped)` — mock run, not scientifically valid.
-- `Validated` — redocking RMSD ≤ 1.5 Å.
-- `Validated (Marginal)` — 1.5 Å < RMSD ≤ 2.0 Å.
+- `Validated` — redocking RMSD ≤ 1.5 Å (`RMSD_VALIDATED_MAX`).
+- `Validated (Marginal)` — 1.5 Å < RMSD ≤ 2.0 Å (`RMSD_MARGINAL_MAX`).
 - `CAUTION: High RMSD` — RMSD > 2.0 Å; interpret with care.
 - `Validation Unavailable` — science mode but no RMSD was measured.
+
+> The 1.5 Å / 2.0 Å cutoffs are configurable in `config/targets.yaml`
+> (`thresholds:`), loaded by `config/constants.py` with the defaults above.
 
 Treat any result whose `protocol_trust` is not `Validated` as preliminary.
 

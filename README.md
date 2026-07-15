@@ -259,7 +259,14 @@ are particularly important for triaging candidates:
 | Column                | Meaning                                                                                                                       |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | **`Selectivity_Index`** | Ratio of the candidate's predicted mammalian-cell toxicity to its anti-PBP2a potency. **Higher is better** — a large value means the compound is predicted to hit the bacterial target while sparing human cells. |
-| **`protocol_trust`**     | A single trust badge for the docking protocol: `CI Mode (Skipped)`, `Validated`, `Validated (Marginal)`, `CAUTION: High RMSD`, or `Validation Unavailable`. In CI mode no physical RMSD is computed and results are not for scientific use. The canonical logic for these exact strings lives in `config/constants.py` (`protocol_trust`). |
+| **`protocol_trust`**     | A single trust badge for the docking protocol: `CI Mode (Skipped)`, `Validated`, `Validated (Marginal)`, `CAUTION: High RMSD`, or `Validation Unavailable`. In CI mode no physical RMSD is computed and results are not for scientific use. The canonical logic for these exact strings lives in `config/constants.py` (`protocol_trust`). The RMSD cutoffs (1.5 Å / 2.0 Å) are configurable in `config/targets.yaml` (`thresholds:`). |
+
+> **Offline RDKit fallback scores:** when Vina is unavailable (`USE_VINA=False`),
+> docking returns heuristic RDKit shape/pharmacophore scores rather than Vina
+> kcal/mol binding energies. These are **qualitative only** and are labelled with
+> a `"(fallback)"` prefix (e.g. `(fallback) -3.21 (not kcal/mol)`) wherever they
+> are reported, and a warning is always logged when the fallback is used. Do not
+> interpret them as physical binding energies.
 
 Additional artifacts (top-candidate images, a `pipeline.log`, and the
 validation JSON) are written under `output/` as well.
@@ -280,7 +287,10 @@ sees results immediately. A real, heavy computational run requires an explicit
 The allosteric and active-site docking boxes are auto-sized at runtime from the
 resolved residue centroids (see `_auto_box_size` in `discovery_pipeline.py`); the
 hardcoded `ALLOSTERIC_BOX_SIZE` / `ACTIVE_BOX_SIZE` in `config/constants.py` are
-only a fallback used when a site centre cannot be computed.
+only a fallback used when a site centre cannot be computed. The science-mode
+native-ligand redocking box is likewise auto-sized from the native ligand's
+centroid + atomic spread via `_redocking_box_size` (instead of a fixed 25 Å cube),
+falling back to 25 Å only if the ligand cannot be parsed.
 
 ### Target-specific residue configuration (`config/targets.yaml`)
 
@@ -301,6 +311,12 @@ targets:
 `config/constants.py` loads these at runtime; you may override any subset. If
 `config/targets.yaml` is missing, unreadable, or `pyyaml` is unavailable, the
 pipeline falls back to the original hardcoded defaults, so it keeps working.
+
+The same file also holds the protocol-trust RMSD cutoffs under a top-level
+`thresholds:` key (defaults `rmsd_validated_max: 1.5` and
+`rmsd_marginal_max: 2.0` Å). Override them to retune the `protocol_trust` gate
+without touching source code; sane defaults keep the contract stable if the file
+is absent.
 
 ### Native ligand override (`native_ligand_resname`)
 

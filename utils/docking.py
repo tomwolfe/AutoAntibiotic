@@ -145,10 +145,25 @@ def _rdkit_fallback_score(
 
     Returns ``(score, None)`` where ``score`` is a synthetic negative number,
     or ``None`` if the molecule cannot be embedded/scored.
+
+    Because these synthetic numbers can look like binding energies, a warning
+    is always logged whenever the fallback is used so that downstream callers
+    (and anyone reading logs) are never misled into treating them as Vina
+    kcal/mol. Reports should additionally prefix any fallback score with
+    ``"(fallback)"`` — see :func:`format_fallback_score`.
     """
     if mol is None:
+        log.warning(
+            "  ⚠  RDKit fallback scorer used (Vina unavailable). Scores are "
+            "HEURISTIC ONLY and must NOT be read as kcal/mol binding energies."
+        )
         return None
     try:
+        log.warning(
+            "  ⚠  Using RDKit shape/pharmacophore FALLBACK score (Vina "
+            "unavailable). This is a heuristic proxy, NOT a kcal/mol binding "
+            "energy. Prefix any reported value with \"(fallback)\"."
+        )
         m = Chem.AddHs(mol)
         # Embed into a 3D conformation; if embedding fails, fall back to a
         # single-shot 2D->3D attempt with random coords.
@@ -203,6 +218,26 @@ def _rdkit_fallback_score(
     except Exception as exc:
         log.warning(f"  RDKit fallback scoring failed: {exc}")
         return None
+
+
+def format_fallback_score(score: Optional[float]) -> str:
+    """
+    Format a fallback score for human-readable reports.
+
+    Returns a string prefixed with ``"(fallback)"`` (and a clear "not kcal/mol"
+    note) so that synthetic heuristic scores are never mistaken for Vina
+    binding energies. When *score* is ``None`` (scoring failed) an explicit
+    placeholder is returned.
+
+    Args:
+        score: The synthetic fallback score (negative float) or ``None``.
+
+    Returns:
+        Human-readable string such as ``"(fallback) -3.21 (not kcal/mol)"``.
+    """
+    if score is None:
+        return "(fallback) N/A (not kcal/mol)"
+    return f"(fallback) {score:.3f} (not kcal/mol)"
 
 
 def dock_compound(

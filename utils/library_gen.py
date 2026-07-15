@@ -15,7 +15,10 @@ and without creating a circular import with ``discovery_pipeline``.
 from __future__ import annotations
 
 import os
+import json
+import hashlib
 import logging
+import tempfile
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -25,6 +28,12 @@ from rdkit import Chem
 from rdkit.Chem import BRICS
 
 from config.constants import RANDOM_SEED
+
+# When ``target_count`` is at/above this threshold, decomposed fragments are
+# cached to a temp JSON so repeated runs (e.g. re-tuning parameters) avoid
+# re-decomposing the same scaffolds. Small runs skip the cache entirely to keep
+# things fast and dependency-free.
+BRICS_CACHE_MIN_TARGET = 200
 
 # A module-level logger sharing the pipeline's "AutoAntibiotic" logger name so
 # that handlers configured in discovery_pipeline capture these messages too.
@@ -120,6 +129,41 @@ def _count_atoms(mol: Chem.Mol) -> int:
     return mol.GetNumHeavyAtoms()
 
 
+def _brics_cache_path(scaffold_smiles: List[str]) -> str:
+    """
+    Stable temp-file path for a BRICS fragment cache keyed on the scaffold set.
+
+    The cache is keyed on a hash of the canonical scaffold SMILES list so the
+    same input scaffolds reuse the same cache file across runs. Returns the
+    path under the system temp dir; callers must handle read/write failures
+    gracefully (the cache is strictly an optimisation).
+    """
+    digest = hashlib.sha256("\n".join(sorted(scaffold_smiles)).encode()).hexdigest()[:16]
+    return os.path.join(tempfile.gettempdir(), f"autobiotic_brics_{digest}.json")
+
+
+def _load_brics_cache(cache_path: str) -> Optional[List[str]]:
+    """Load cached fragment SMILES from *cache_path*, or None on any failure."""
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path) as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and isinstance(data.get("fragments"), list):
+                return [str(s) for s in data["fragments"]]
+    except Exception:
+        pass
+    return None
+
+
+def _save_brics_cache(cache_path: str, fragments: List[str]) -> None:
+    """Persist *fragments* to *cache_path* (best-effort; failures are ignored)."""
+    try:
+        with open(cache_path, "w") as fh:
+            json.dump({"fragments": list(fragments)}, fh)
+    except Exception:
+        pass
+
+
 def generate_candidate_library(
     target_count: int = 500,
     seed: int = RANDOM_SEED,
@@ -193,17 +237,28 @@ def generate_candidate_library(
 
     log.info(f"  Loaded {len(scaffold_mols)} valid scaffolds.")
 
-    # BRICS decompose all scaffolds
-    all_fragments = set()
-    for mol in scaffold_mols:
-        try:
-            fragments = BRICS.BRICSDecompose(mol, minFragmentSize=8)
-            for frag_smi in fragments:
-                frag_mol = Chem.MolFromSmiles(frag_smi)
-                if frag_mol is not None and _count_atoms(frag_mol) >= 8:
-                    all_fragments.add(frag_smi)
-        except Exception:
-            continue
+    # BRICS decompose all scaffolds. For large target libraries the decomposition
+    # is cached to a temp JSON (keyed on the scaffold set) so repeated runs skip
+    # the expensive BRICSDecompose step. Small runs skip caching entirely.
+    cache_enabled = target_count >= BRICS_CACHE_MIN_TARGET
+    cache_path = _brics_cache_path(all_scaffolds) if cache_enabled else None
+    cached = _load_brics_cache(cache_path) if cache_path else None
+    if cached is not None:
+        all_fragments = set(cached)
+        log.info(f"  Reused {len(all_fragments)} cached BRICS fragments from {cache_path}.")
+    else:
+        all_fragments = set()
+        for mol in scaffold_mols:
+            try:
+                fragments = BRICS.BRICSDecompose(mol, minFragmentSize=8)
+                for frag_smi in fragments:
+                    frag_mol = Chem.MolFromSmiles(frag_smi)
+                    if frag_mol is not None and _count_atoms(frag_mol) >= 8:
+                        all_fragments.add(frag_smi)
+            except Exception:
+                continue
+        if cache_path is not None and all_fragments:
+            _save_brics_cache(cache_path, sorted(all_fragments))
 
     frag_mols = []
     for smi in all_fragments:
