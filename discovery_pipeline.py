@@ -145,6 +145,33 @@ logging.basicConfig(
 )
 log = logging.getLogger("AutoAntibiotic")
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CUSTOM EXCEPTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Library code (functions like ``prepare_targets``) raises these instead of
+# calling ``sys.exit`` so that callers — including unit tests and programmatic
+# API users — can catch them. The CLI entrypoint (``main`` / ``__main__``)
+# translates the ones that mean "abort" into ``sys.exit(1)``.
+
+class ScienceModeMockPDBError(RuntimeError):
+    """Raised when science mode would run against a bundled mock PDB.
+
+    Science mode requires real crystallographic structures; using the bundled
+    ``tests/data`` mocks would silently produce non-physical results. Callers
+    must treat this as a hard abort condition.
+    """
+
+
+class MissingGridCenterError(RuntimeError):
+    """Raised when a required docking grid center cannot be computed.
+
+    In science mode every target site must resolve to a concrete grid centre;
+    if any centre is missing the run cannot proceed and must abort.
+    """
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  UTILITY HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -566,6 +593,7 @@ def clean_pdb_structure(
     hydrogens is produced — Vina handles polar H assignment internally anyway.
     """
     try:
+        # ── Attempt 1: Bio.PDB clean (strip waters / hetero ligands) ──
         parser = PDBParser(QUIET=True)
         struct = parser.get_structure("target", pdb_path)
 
@@ -584,7 +612,9 @@ def clean_pdb_structure(
         io.set_structure(struct)
         io.save(out_path, CleanSelect())
 
-        # Add hydrogens via RDKit PDB → MOL → H-Added → PDB
+        # ── Attempt 2: RDKit hydrogen addition (PDB → MOL → H-Added → PDB) ──
+        # Best-effort: if RDKit cannot parse/add Hs, keep the H-free PDB and
+        # let Vina handle polar-H assignment internally.
         if add_hydrogens:
             try:
                 mol = Chem.MolFromPDBFile(out_path, removeHs=False)
@@ -597,7 +627,7 @@ def clean_pdb_structure(
             except Exception as exc:
                 log.warning(f"  RDKit PDB parsing failed for hydrogen addition: {exc}. Skipping.")
 
-        # Convert to PDBQT for Vina via obabel (add gasteiger charges).
+        # ── Attempt 3: obabel PDBQT conversion (gasteiger charges) ──
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
         try:
             subprocess.run(
@@ -609,19 +639,24 @@ def clean_pdb_structure(
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
+        # ── Attempt 4: RDKit PDBQT fallback (write_receptor_pdbqt) ──
         # OpenBabel unavailable (or produced empty output). Use the RDKit-based
         # PDBQT writer rather than copying the .pdb verbatim — a plain .pdb
         # renamed to .pdbqt is invalid for Vina and would fail later with an
-        # cryptic error. If even the RDKit writer fails, error clearly.
+        # cryptic error.
         if write_receptor_pdbqt(out_path, pdbqt_path):
             return pdbqt_path
 
+        # ── All four attempts failed ──
         raise RuntimeError(
-            "Could not write a valid receptor PDBQT. OpenBabel ('obabel') is "
-            "required to convert the cleaned PDB to PDBQT, and the RDKit-based "
-            "fallback writer was unable to parse the receptor. Install obabel "
-            "with `bash setup.sh` or `conda install -c conda-forge openbabel`, "
-            "or use the Docker image."
+            "Could not write a valid receptor PDBQT for "
+            f"{pdb_path!r}. Step 1 (Bio.PDB clean) succeeded but Step 2 "
+            "(RDKit hydrogen addition), Step 3 (obabel PDBQT conversion), and "
+            "Step 4 (RDKit write_receptor_pdbqt fallback) all failed. "
+            "OpenBabel ('obabel') is required to convert the cleaned PDB to "
+            "PDBQT, and the RDKit-based fallback writer was unable to parse the "
+            "receptor. Install obabel with `bash setup.sh` or "
+            "`conda install -c conda-forge openbabel`, or use the Docker image."
         )
 
     except Exception as exc:
@@ -705,12 +740,13 @@ def prepare_targets(
             ("CES1", ces1_path),
         ):
             if "tests/data" in os.path.abspath(path):
-                log.error(
+                msg = (
                     f"Refusing to run science mode with mock PDB for "
                     f"'{label}' ({path}). Place real PDBs under pdb_dir "
                     "(set mode: ci for offline mock runs)."
                 )
-                sys.exit(1)
+                log.error(msg)
+                raise ScienceModeMockPDBError(msg)
 
     # ── Clean PBP2a (use holo for grid calc, but we need the protein only) ──
     log.info("  Cleaning PBP2a (apo)…")
@@ -748,8 +784,9 @@ def prepare_targets(
 
     for site, center in (("allosteric", allosteric_center), ("active", active_center)):
         if center is None and mode == "science":
-            log.error(f"{site} center missing in science mode – aborting")
-            sys.exit(1)
+            msg = f"{site} center missing in science mode – aborting"
+            log.error(msg)
+            raise MissingGridCenterError(msg)
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
@@ -1114,124 +1151,9 @@ def profile_resistance_risk(
 
     Returns a human-readable notes string.
     """
-    pose_notes = []
-    energy_notes = []
-
-    # Pose-based interactions are supplied by the caller (the active-site pose
-    # captured during screen_library via record.active_docked_pdbqt). We no
-    # longer re-dock here — if no pose is available we simply note that.
-    if interactions is None:
-        pose_notes.append("no pose — binding interactions not analysed.")
-    else:
-        # ── Quantitative resistance check from measured pose distances ──
-        # The interaction fingerprint already exposes the minimum ligand→residue
-        # distances (Å). We use these directly rather than the boolean contact
-        # flags so resistance risk scales with how tightly the conserved
-        # catalytic network is engaged.
-        ser = interactions.get("min_dist_Ser403", float("inf"))
-        lys = interactions.get("min_dist_Lys406", float("inf"))
-        tyr = interactions.get("min_dist_Tyr446", float("inf"))
-
-        # Residues absent from the cleaned receptor PDB are unverified: flag
-        # them explicitly (in natural language) rather than treating their
-        # (infinite) distance as a scientific measurement.
-        unverified = interactions.get("unverified_residues") or []
-        for resname in unverified:
-            pose_notes.append(
-                f"unverified residue ({resname}) — absent from cleaned PDB"
-            )
-
-        # ── Natural-language key-interaction summary ──
-        # Build human-readable sentences for the catalytic network so chemists
-        # immediately understand the binding mode rather than parsing raw
-        # distance flags. Track which key contacts are favourably engaged.
-        ser_ok = np.isfinite(ser) and ser < 3.5
-        lys_ok = np.isfinite(lys) and lys < 3.8
-
-        if np.isfinite(ser):
-            if ser_ok:
-                pose_notes.append(
-                    f"Forms strong H-bond with catalytic Ser403 ({ser:.1f} Å)."
-                )
-            elif ser < 5.0:
-                pose_notes.append(
-                    f"Weak contact with catalytic Ser403 ({ser:.1f} Å) — resistance risk."
-                )
-            else:
-                pose_notes.append(
-                    f"Loss of Ser403 engagement ({ser:.1f} Å) — high resistance risk."
-                )
-        elif "Ser403" not in unverified:
-            pose_notes.append(
-                "Ser403 distance undefined — high resistance risk."
-            )
-
-        if np.isfinite(lys):
-            if lys_ok:
-                pose_notes.append(
-                    f"Stabilized by Lys406 contact ({lys:.1f} Å)."
-                )
-            elif lys < 5.0:
-                pose_notes.append(
-                    f"Weak Lys406 contact ({lys:.1f} Å) — resistance risk."
-                )
-        elif "Lys406" not in unverified:
-            pose_notes.append(
-                "Lys406 distance undefined — resistance risk."
-            )
-
-        # If neither key catalytic residue is engaged (and neither is merely
-        # unverified due to a missing PDB residue), state this plainly.
-        unverified_key = [r for r in unverified if r in ("Ser403", "Lys406")]
-        if (not ser_ok) and (not lys_ok) and not unverified_key:
-            pose_notes.append(
-                "Lacks key interactions with catalytic Ser403 and Lys406."
-            )
-
-        if np.isfinite(tyr):
-            if tyr < 3.5:
-                pose_notes.append(
-                    f"Stabilising contact with Tyr446 ({tyr:.1f} Å)."
-                )
-            elif tyr < 5.0:
-                pose_notes.append(
-                    f"Weak Tyr446 contact ({tyr:.1f} Å) — resistance risk."
-                )
-
-        # Aggregate: if the closest conserved-residue contact exceeds 5 Å the
-        # compound avoids the catalytic network entirely and is flagged as a
-        # high-resistance-risk binder (mutations need only modestly perturb
-        # the active site to escape it).
-        best_conserved = min(ser, lys, tyr)
-        if np.isfinite(best_conserved) and best_conserved >= 5.0:
-            pose_notes.append(
-                f"Avoids conserved catalytic network (min d={best_conserved:.2f} Å) — high resistance risk"
-            )
-
-        # Allosteric binder note
-        if (
-            record.pb2pa_allosteric_energy is not None
-            and record.pb2pa_allosteric_energy < -7.0
-        ):
-            if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
-                pose_notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
-
-    # Energy-based heuristics
-    if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
-        energy_notes.append("Likely contacts catalytic Ser403 (active site, energy-based). Good.")
-
-    # Molecular weight heuristic
-    if record.mol is not None:
-        mw = Descriptors.MolWt(record.mol)
-        if mw > 400:
-            energy_notes.append("High MW (>400) — broad interaction surface, may contact multiple residues.")
-        n_rot = Descriptors.NumRotatableBonds(record.mol)
-        if n_rot < 5:
-            energy_notes.append("Rigid scaffold — reduced entropic penalty, may enhance binding specificity.")
-
-    # Resistance risk indicators
-    if record.qed_score > 0.8:
-        energy_notes.append("High drug-likeness (QED > 0.8) — good developability profile.")
+    pose_notes = _pose_based_resistance_notes(record, interactions)
+    energy_notes = _energy_based_resistance_notes(record)
+    energy_notes += _physicochemical_resistance_notes(record)
 
     if pose_notes and energy_notes:
         notes = pose_notes + energy_notes
@@ -1242,6 +1164,152 @@ def profile_resistance_risk(
         notes.append("No specific resistance flags identified.")
 
     return "; ".join(notes)
+
+
+def _pose_based_resistance_notes(
+    record: CompoundRecord,
+    interactions: Optional[Dict[str, Union[bool, float]]],
+) -> List[str]:
+    """Build pose-derived resistance notes from the supplied interaction fingerprint.
+
+    The interaction fingerprint is derived from the active-site pose captured
+    during ``screen_library`` (record.active_docked_pdbqt). We no longer re-dock
+    here — if *interactions* is None we simply note that the pose is absent.
+    """
+    notes: List[str] = []
+
+    # Pose-based interactions are supplied by the caller (the active-site pose
+    # captured during screen_library via record.active_docked_pdbqt). We no
+    # longer re-dock here — if no pose is available we simply note that.
+    if interactions is None:
+        notes.append("no pose — binding interactions not analysed.")
+        return notes
+
+    # ── Quantitative resistance check from measured pose distances ──
+    # The interaction fingerprint already exposes the minimum ligand→residue
+    # distances (Å). We use these directly rather than the boolean contact
+    # flags so resistance risk scales with how tightly the conserved
+    # catalytic network is engaged.
+    ser = interactions.get("min_dist_Ser403", float("inf"))
+    lys = interactions.get("min_dist_Lys406", float("inf"))
+    tyr = interactions.get("min_dist_Tyr446", float("inf"))
+
+    # Residues absent from the cleaned receptor PDB are unverified: flag
+    # them explicitly (in natural language) rather than treating their
+    # (infinite) distance as a scientific measurement.
+    unverified = interactions.get("unverified_residues") or []
+    for resname in unverified:
+        notes.append(
+            f"unverified residue ({resname}) — absent from cleaned PDB"
+        )
+
+    # ── Natural-language key-interaction summary ──
+    # Build human-readable sentences for the catalytic network so chemists
+    # immediately understand the binding mode rather than parsing raw
+    # distance flags. Track which key contacts are favourably engaged.
+    ser_ok = np.isfinite(ser) and ser < 3.5
+    lys_ok = np.isfinite(lys) and lys < 3.8
+
+    if np.isfinite(ser):
+        if ser_ok:
+            notes.append(
+                f"Forms strong H-bond with catalytic Ser403 ({ser:.1f} Å)."
+            )
+        elif ser < 5.0:
+            notes.append(
+                f"Weak contact with catalytic Ser403 ({ser:.1f} Å) — resistance risk."
+            )
+        else:
+            notes.append(
+                f"Loss of Ser403 engagement ({ser:.1f} Å) — high resistance risk."
+            )
+    elif "Ser403" not in unverified:
+        notes.append(
+            "Ser403 distance undefined — high resistance risk."
+        )
+
+    if np.isfinite(lys):
+        if lys_ok:
+            notes.append(
+                f"Stabilized by Lys406 contact ({lys:.1f} Å)."
+            )
+        elif lys < 5.0:
+            notes.append(
+                f"Weak Lys406 contact ({lys:.1f} Å) — resistance risk."
+            )
+    elif "Lys406" not in unverified:
+        notes.append(
+            "Lys406 distance undefined — resistance risk."
+        )
+
+    # If neither key catalytic residue is engaged (and neither is merely
+    # unverified due to a missing PDB residue), state this plainly.
+    unverified_key = [r for r in unverified if r in ("Ser403", "Lys406")]
+    if (not ser_ok) and (not lys_ok) and not unverified_key:
+        notes.append(
+            "Lacks key interactions with catalytic Ser403 and Lys406."
+        )
+
+    if np.isfinite(tyr):
+        if tyr < 3.5:
+            notes.append(
+                f"Stabilising contact with Tyr446 ({tyr:.1f} Å)."
+            )
+        elif tyr < 5.0:
+            notes.append(
+                f"Weak Tyr446 contact ({tyr:.1f} Å) — resistance risk."
+            )
+
+    # Aggregate: if the closest conserved-residue contact exceeds 5 Å the
+    # compound avoids the catalytic network entirely and is flagged as a
+    # high-resistance-risk binder (mutations need only modestly perturb
+    # the active site to escape it).
+    best_conserved = min(ser, lys, tyr)
+    if np.isfinite(best_conserved) and best_conserved >= 5.0:
+        notes.append(
+            f"Avoids conserved catalytic network (min d={best_conserved:.2f} Å) — high resistance risk"
+        )
+
+    # Allosteric binder note
+    if (
+        record.pb2pa_allosteric_energy is not None
+        and record.pb2pa_allosteric_energy < -7.0
+    ):
+        if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
+            notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
+
+    return notes
+
+
+def _energy_based_resistance_notes(record: CompoundRecord) -> List[str]:
+    """Build resistance notes from docking-energy heuristics."""
+    notes: List[str] = []
+
+    # Energy-based heuristics
+    if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
+        notes.append("Likely contacts catalytic Ser403 (active site, energy-based). Good.")
+
+    # Resistance risk indicators
+    if record.qed_score > 0.8:
+        notes.append("High drug-likeness (QED > 0.8) — good developability profile.")
+
+    return notes
+
+
+def _physicochemical_resistance_notes(record: CompoundRecord) -> List[str]:
+    """Build resistance notes from physicochemical properties (MW, rigidity)."""
+    notes: List[str] = []
+
+    # Molecular weight / rigidity heuristic
+    if record.mol is not None:
+        mw = Descriptors.MolWt(record.mol)
+        if mw > 400:
+            notes.append("High MW (>400) — broad interaction surface, may contact multiple residues.")
+        n_rot = Descriptors.NumRotatableBonds(record.mol)
+        if n_rot < 5:
+            notes.append("Rigid scaffold — reduced entropic penalty, may enhance binding specificity.")
+
+    return notes
 
 
 def _run_resistance_profiling(
@@ -1546,89 +1614,17 @@ def print_summary(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
-          config: Optional[dict] = None, sdf: Optional[str] = None,
-          smiles: Optional[str] = None):
-    """Orchestrate the full discovery pipeline end-to-end.
+def _run_redocking_phase(
+    targets: Dict[str, Dict], work_dir: str, deps: dict,
+    config: Optional[dict], force: bool,
+) -> Tuple[Optional[bool], Optional[float], str]:
+    """Run (or reuse) the redocking validation gate and return its results.
 
-    Args:
-        target_count: Number of candidate compounds to generate (BRICS mode).
-        force: When True (and env AUTOANTIBIOTIC_FORCE=1 is set), reuse a
-            previously cached redocking validation instead of re-running it.
-            Otherwise the redocking validation is always executed when
-            USE_VINA=True.
-        library: Optional path to an external compound library CSV. When set,
-            BRICS generation is skipped and the CSV compounds are used.
-        config: Optional pre-loaded configuration dict (with a ``mode`` key).
-            If None, :func:`load_config` is invoked to read ``config.yaml``.
-        sdf: Optional path to an SDF file of pre-made molecules. When set,
-            RDKit's ``Chem.SDMolSupplier`` reads the structures and BRICS
-            generation is skipped entirely.
-        smiles: Optional SMILES string for single-compound screening. When
-            set, the full library pipeline (phases 2/4/5) is skipped and a
-            single compound is docked & summarised immediately.
+    Returns a ``(validation_ok, redock_rmsd, validation_json)`` tuple. The
+    validation is diagnostic, never a hard gate: on failure ``validation_ok``
+    is left ``False`` / ``None`` and the pipeline continues. A failed
+    validation in science mode is logged as a caution signal.
     """
-    ensure_output_dir()
-
-    # ── Configuration (explicit mode: ci | science) ──
-    if config is None:
-        config = load_config()
-    mode = config.get("mode", "ci")
-
-    # ── Dependency check ──
-    deps = check_dependencies()
-
-    # ── Credibility banner ──
-    if mode == "ci":
-        print(
-            "\033[1;33m"
-            "\n"
-            "  ⚠ CI/MOCK MODE — results are NOT for scientific use.\n"
-            "\033[0m",
-            flush=True,
-        )
-    elif mode == "science" and not deps["USE_VINA"]:
-        if os.environ.get("AUTOANTIBIOTIC_FORCE") != "1":
-            log.error(
-                "Science mode requires AutoDock Vina. Install via "
-                "`bash setup.sh` or Docker, or set AUTOANTIBIOTIC_FORCE=1 to "
-                "override."
-            )
-            sys.exit(1)
-
-    # ── Working directory for intermediate files ──
-    work_dir = str(OUTPUT_DIR / "workdir")
-    pdb_dir = str(OUTPUT_DIR / "pdb")
-    os.makedirs(work_dir, exist_ok=True)
-
-    # ── Phase1: Target preparation ──
-    targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
-
-    # ── Single-compound ("--smiles") mode ──
-    # Screen one molecule instantly and print a text summary. This bypasses the
-    # full library generation / selectivity / reporting phases entirely so a
-    # chemist can inspect a single candidate in seconds.
-    if smiles is not None:
-        log.info("─── Single-Compound Mode (--smiles) ───")
-        rec = screen_single_compound(smiles, targets, work_dir, deps)
-
-        pb2pa = targets.get("PBP2a", {})
-        rec.resistance_notes = profile_resistance_risk(
-            rec, work_dir,
-            pb2pa.get("pdbqt", ""),
-            pb2pa.get("active_center"),
-            ACTIVE_BOX_SIZE,
-            interactions=rec.interactions,
-        )
-
-        _print_single_summary(rec)
-
-        sys.exit(0)
-
-    # ── Phase 0: Redocking validation ──
-    # The (expensive) redocking gate is always executed when USE_VINA=True.
-    # The only way to skip it and reuse a prior cached validation is when the
-    # user explicitly passes --force AND env AUTOANTIBIOTIC_FORCE=1 is set.
     validation_json = os.path.join(work_dir, "validation_results.json")
 
     reuse_cache = (
@@ -1695,35 +1691,50 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
                 "(protocol_trust). Interpret all docking results with caution."
             )
 
-    # ── Release status badge (status.json) ──
-    # Surface the protocol-validation status at the repo root so downstream
-    # tooling / CI can read it at a glance. Reuse the cached validation JSON
-    # content when available; otherwise record the just-computed values.
-    if validation_ok is not None:
-        status_payload = {
-            "mode": mode,
-            "redock_rmsd": redock_rmsd,
-            "validated": bool(validation_ok),
-        }
-        if os.path.exists(validation_json):
-            try:
-                with open(validation_json) as fh:
-                    vdata = json.load(fh)
-                status_payload["redock_rmsd"] = vdata.get("redock_rmsd", redock_rmsd)
-                status_payload["validated"] = bool(vdata.get("validation_ok", validation_ok))
-            except Exception:
-                pass
-        try:
-            with open(REPO_ROOT / "status.json", "w") as fh:
-                json.dump(status_payload, fh, indent=2)
-            log.info(f"  Release status written: {REPO_ROOT / 'status.json'}")
-        except Exception as exc:
-            log.warning(f"  Could not write status.json: {exc}")
+    return validation_ok, redock_rmsd, validation_json
 
-    # ── Phase 2: Library generation & filtering ──
-    # Read pre-made molecules directly from an SDF file (RDKit) when provided,
-    # instead of generating a new library via BRICS. This makes the pipeline
-    # easy to integrate with external compound collections.
+
+def _write_status_badge(
+    mode: str,
+    redock_rmsd: Optional[float],
+    validation_ok: Optional[bool],
+    validation_json: str,
+) -> None:
+    """Write the protocol-validation status badge to ``status.json`` at repo root."""
+    if validation_ok is None:
+        return
+
+    status_payload = {
+        "mode": mode,
+        "redock_rmsd": redock_rmsd,
+        "validated": bool(validation_ok),
+    }
+    if os.path.exists(validation_json):
+        try:
+            with open(validation_json) as fh:
+                vdata = json.load(fh)
+            status_payload["redock_rmsd"] = vdata.get("redock_rmsd", redock_rmsd)
+            status_payload["validated"] = bool(vdata.get("validation_ok", validation_ok))
+        except Exception:
+            pass
+    try:
+        with open(REPO_ROOT / "status.json", "w") as fh:
+            json.dump(status_payload, fh, indent=2)
+        log.info(f"  Release status written: {REPO_ROOT / 'status.json'}")
+    except Exception as exc:
+        log.warning(f"  Could not write status.json: {exc}")
+
+
+def _generate_and_filter_library(
+    target_count: int, library: Optional[str], sdf: Optional[str],
+) -> Tuple[list, list, int, int]:
+    """Generate the candidate library and apply the filter chain.
+
+    Returns ``(all_records, filtered, n_total, n_filtered)``. If no compound
+    survives the strict+relaxed filter chain, falls back to the unfiltered
+    generated library so a report is still produced (these candidates carry no
+    ADMET/PAINS guarantees and are flagged accordingly downstream).
+    """
     all_records = generate_candidate_library(
         target_count=target_count, input_csv=library, input_sdf=sdf,
     )
@@ -1732,16 +1743,126 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     n_filtered = len(filtered)
 
     if n_filtered == 0:
-        # No compound survived the strict+relaxed filter chain. Rather than
-        # silently abort (which would yield no report at all), fall back to
-        # the unfiltered generated library so a candidate report is still
-        # produced. These candidates carry no ADMET/PAINS guarantees and are
-        # flagged accordingly downstream.
         log.warning(
             "  No compounds passed filters. Falling back to the unfiltered "
             "generated library so a report is still produced."
         )
         filtered = all_records
+
+    return all_records, filtered, n_total, n_filtered
+
+
+def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
+          config: Optional[dict] = None, sdf: Optional[str] = None,
+          smiles: Optional[str] = None):
+    """Orchestrate the full discovery pipeline end-to-end.
+
+    Args:
+        target_count: Number of candidate compounds to generate (BRICS mode).
+        force: When True (and env AUTOANTIBIOTIC_FORCE=1 is set), reuse a
+            previously cached redocking validation instead of re-running it.
+            Otherwise the redocking validation is always executed when
+            USE_VINA=True.
+        library: Optional path to an external compound library CSV. When set,
+            BRICS generation is skipped and the CSV compounds are used.
+        config: Optional pre-loaded configuration dict (with a ``mode`` key).
+            If None, :func:`load_config` is invoked to read ``config.yaml``.
+        sdf: Optional path to an SDF file of pre-made molecules. When set,
+            RDKit's ``Chem.SDMolSupplier`` reads the structures and BRICS
+            generation is skipped entirely.
+        smiles: Optional SMILES string for single-compound screening. When
+            set, the full library pipeline (phases 2/4/5) is skipped and a
+            single compound is docked & summarised immediately.
+    """
+    ensure_output_dir()
+
+    # ── Configuration (explicit mode: ci | science) ──
+    if config is None:
+        config = load_config()
+    mode = config.get("mode", "ci")
+
+    # ── Dependency check ──
+    deps = check_dependencies()
+
+    # ── Credibility banner ──
+    if mode == "ci":
+        print(
+            "\033[1;33m"
+            "\n"
+            "  ⚠ CI/MOCK MODE — results are NOT for scientific use.\n"
+            "\033[0m",
+            flush=True,
+        )
+    elif mode == "science" and not deps["USE_VINA"]:
+        if os.environ.get("AUTOANTIBIOTIC_FORCE") != "1":
+            log.error(
+                "Science mode requires AutoDock Vina. Install via "
+                "`bash setup.sh` or Docker, or set AUTOANTIBIOTIC_FORCE=1 to "
+                "override."
+            )
+            sys.exit(1)
+
+    # ── Working directory for intermediate files ──
+    work_dir = str(OUTPUT_DIR / "workdir")
+    pdb_dir = str(OUTPUT_DIR / "pdb")
+    os.makedirs(work_dir, exist_ok=True)
+
+    # ── Phase1: Target preparation ──
+    # Science-mode guard failures (mock PDB / missing grid centre) are raised
+    # as exceptions from prepare_targets; the CLI entrypoint converts them into
+    # a non-zero exit, but programmatic callers may catch them instead.
+    try:
+        targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
+    except (ScienceModeMockPDBError, MissingGridCenterError) as exc:
+        log.error(f"Target preparation aborted: {exc}")
+        sys.exit(1)
+
+    # ── Single-compound ("--smiles") mode ──
+    # Screen one molecule instantly and print a text summary. This bypasses the
+    # full library generation / selectivity / reporting phases entirely so a
+    # chemist can inspect a single candidate in seconds.
+    if smiles is not None:
+        log.info("─── Single-Compound Mode (--smiles) ───")
+        rec = screen_single_compound(smiles, targets, work_dir, deps)
+
+        pb2pa = targets.get("PBP2a", {})
+        rec.resistance_notes = profile_resistance_risk(
+            rec, work_dir,
+            pb2pa.get("pdbqt", ""),
+            pb2pa.get("active_center"),
+            ACTIVE_BOX_SIZE,
+            interactions=rec.interactions,
+        )
+
+        _print_single_summary(rec)
+
+        sys.exit(0)
+
+    # ── Phase 0: Redocking validation ──
+    # The (expensive) redocking gate is always executed when USE_VINA=True.
+    # The only way to skip it and reuse a prior cached validation is when the
+    # user explicitly passes --force AND env AUTOANTIBIOTIC_FORCE=1 is set.
+    validation_ok, redock_rmsd, validation_json = _run_redocking_phase(
+        targets=targets, work_dir=work_dir, deps=deps,
+        config=config, force=force,
+    )
+
+    # ── Release status badge (status.json) ──
+    # Surface the protocol-validation status at the repo root so downstream
+    # tooling / CI can read it at a glance. Reuse the cached validation JSON
+    # content when available; otherwise record the just-computed values.
+    _write_status_badge(
+        mode=mode, redock_rmsd=redock_rmsd, validation_ok=validation_ok,
+        validation_json=validation_json,
+    )
+
+    # ── Phase 2: Library generation & filtering ──
+    # Read pre-made molecules directly from an SDF file (RDKit) when provided,
+    # instead of generating a new library via BRICS. This makes the pipeline
+    # easy to integrate with external compound collections.
+    all_records, filtered, n_total, n_filtered = _generate_and_filter_library(
+        target_count=target_count, library=library, sdf=sdf,
+    )
 
     # ── Phase 3: Virtual screening ──
     top10 = screen_library(filtered, targets, work_dir, deps)

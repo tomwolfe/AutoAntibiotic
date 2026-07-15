@@ -1061,10 +1061,9 @@ class TestConservedResiduesCentroid:
             with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
                 with patch.object(dp, "compute_residue_centroid", side_effect=side_centroid):
                     with patch.object(dp.log, "warning") as mock_warn:
-                        with patch("sys.exit"):
-                            prepare_targets(str(tmp_path), str(tmp_path),
-                                            {"vina": False, "USE_VINA": False},
-                                            config={"mode": "ci"})
+                        prepare_targets(str(tmp_path), str(tmp_path),
+                                        {"vina": False, "USE_VINA": False},
+                                        config={"mode": "ci"})
                         assert any(
                             "Conserved residues" in str(c.args[0])
                             for c in mock_warn.call_args_list
@@ -1109,12 +1108,11 @@ class TestPrepareTargetsNoneCenter:
         with patch.object(dp, "fetch_structure", return_value=str(pdb)):
             with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
                 with patch.object(dp, "compute_residue_centroid", side_effect=side_centroid):
-                    with patch("sys.exit"):
-                        result = prepare_targets(
-                            str(tmp_path), str(tmp_path),
-                            {"vina": False, "USE_VINA": False},
-                            config={"mode": "ci"},
-                        )
+                    result = prepare_targets(
+                        str(tmp_path), str(tmp_path),
+                        {"vina": False, "USE_VINA": False},
+                        config={"mode": "ci"},
+                    )
 
         assert result["PBP2a"]["active_center"] is None, (
             "PBP2a active_center should be None when active-site centroid "
@@ -1171,9 +1169,10 @@ class TestOfflinePDBLoad:
         )
 
     def test_science_mode_rejects_mock_pdb(self, tmp_path):
-        """prepare_targets must sys.exit(1) in science mode when a mock PDB
-        under tests/data is resolved."""
+        """prepare_targets must raise ScienceModeMockPDBError in science mode
+        when a mock PDB under tests/data is resolved."""
         import discovery_pipeline as dp
+        from discovery_pipeline import ScienceModeMockPDBError
 
         tests_data = Path(__file__).parent / "tests" / "data"
         local_3qpd = str(tests_data / "3QPD.pdb")
@@ -1183,13 +1182,12 @@ class TestOfflinePDBLoad:
             with patch.object(dp, "fetch_structure",
                               return_value=local_3qpd):
                 with patch.object(dp.log, "error") as mock_err:
-                    with pytest.raises(SystemExit) as exc:
+                    with pytest.raises(ScienceModeMockPDBError):
                         dp.prepare_targets(
                             str(tmp_path), str(tmp_path),
                             {"vina": False, "USE_VINA": False},
                             config={"mode": "science"},
                         )
-                    assert exc.value.code == 1
         assert any(
             "mock pdb" in str(c.args[0]).lower()
             for c in mock_err.call_args_list
