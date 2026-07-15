@@ -1546,6 +1546,25 @@ def generate_csv_report(
         else:
             h_ser = h_lys = h_tyr = False
 
+        # ── Why_Won: a short human-readable rationale string combining the
+        # selectivity index, per-residue H-bond flags, and the docking
+        # energies already computed for this candidate (no new computation).
+        why_parts = []
+        if rec.selectivity_index is not None:
+            why_parts.append(f"SI={rec.selectivity_index:.1f}")
+        hbond_residues = [
+            name for name, flag in (
+                ("Ser403", h_ser), ("Lys406", h_lys), ("Tyr446", h_tyr)
+            ) if flag
+        ]
+        if hbond_residues:
+            why_parts.append("H-bonds " + ",".join(hbond_residues))
+        if rec.pb2pa_active_energy is not None:
+            why_parts.append(f"active E={rec.pb2pa_active_energy:.1f}")
+        if rec.pb2pa_allosteric_energy is not None:
+            why_parts.append(f"allosteric E={rec.pb2pa_allosteric_energy:.1f}")
+        why_won = "; ".join(why_parts) if why_parts else "N/A"
+
         # Redock RMSD: report the measured value in science mode, mark the
         # column SKIPPED in CI/mock mode, and N/A when no value is available.
         if is_mock:
@@ -1628,6 +1647,7 @@ def generate_csv_report(
             "H_Bond_Ser403": str(h_ser),
             "H_Bond_Lys406": str(h_lys),
             "H_Bond_Tyr446": str(h_tyr),
+            "Why_Won": why_won,
         })
 
     df = pd.DataFrame(rows)
@@ -1849,7 +1869,11 @@ def print_summary(
     log.info(f"  Docking engine:                {'Vina' if deps['USE_VINA'] else 'RDKit Shape (fallback)'}")
     log.info(f"  Redocking RMSD:                {redock_rmsd:.3f} Å" if redock_rmsd else "  Redocking RMSD:                N/A")
     log.info(f"  Redocking validated:           {validation_ok}")
+    if redock_rmsd is not None:
+        status = "Validated" if validation_ok else "CAUTION"
+        log.info(f"  Protocol validation: RMSD {redock_rmsd:.3f} Å ({status})")
     log.info(f"  CSV report:                    {CSV_REPORT}")
+    log.info(f"  Open {OUTPUT_DIR}/visualization.pml in PyMOL to inspect binding poses.")
     log.info("=" * 60)
 
 
@@ -2053,6 +2077,31 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
                 "validation status (Redock_Validated=False) will be written to "
                 "the CSV report. Interpret all docking results with caution."
             )
+
+    # ── Release status badge (status.json) ──
+    # Surface the protocol-validation status at the repo root so downstream
+    # tooling / CI can read it at a glance. Reuse the cached validation JSON
+    # content when available; otherwise record the just-computed values.
+    if validation_ok is not None:
+        status_payload = {
+            "mode": mode,
+            "redock_rmsd": redock_rmsd,
+            "validated": bool(validation_ok),
+        }
+        if os.path.exists(validation_json):
+            try:
+                with open(validation_json) as fh:
+                    vdata = json.load(fh)
+                status_payload["redock_rmsd"] = vdata.get("redock_rmsd", redock_rmsd)
+                status_payload["validated"] = bool(vdata.get("validation_ok", validation_ok))
+            except Exception:
+                pass
+        try:
+            with open(REPO_ROOT / "status.json", "w") as fh:
+                json.dump(status_payload, fh, indent=2)
+            log.info(f"  Release status written: {REPO_ROOT / 'status.json'}")
+        except Exception as exc:
+            log.warning(f"  Could not write status.json: {exc}")
 
     # ── Phase 2: Library generation & filtering ──
     if sdf is not None:

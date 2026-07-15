@@ -1,0 +1,5 @@
+compound_id,smiles
+Ceftaroline,CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O
+Meropenem,CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O
+Quercetin_decoy,O=c1c(O)c2c(oc3cc(O)cc(O)c3c2=O)c(O)c1O
+Resveratrol_decoy,Oc1ccc(C=Cc2ccc(O)cc2)cc1

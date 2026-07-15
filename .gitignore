@@ -1,6 +1,9 @@
 # Pipeline outputs (PDBs, PDBQTs, CSVs, PNGs, logs, working intermediates)
 output/
 
+# Generated release status badge (written by main() after redocking validation)
+status.json
+
 # Python
 __pycache__/
 *.py[cod]

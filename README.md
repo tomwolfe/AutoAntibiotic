@@ -7,6 +7,9 @@ structure-based virtual screening, protocol validation by native-ligand
 redocking, ADMET/PAINS filtering, and selectivity/resistance analysis to
 prioritize compounds for experimental follow-up.
 
+> **Protocol validated on 6TKO** (redocking RMSD reported in
+> `output/top_candidates.csv` column `Validation_Status`).
+
 ---
 
 ## Table of Contents
@@ -14,6 +17,7 @@ prioritize compounds for experimental follow-up.
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Quick Start (CI Mode)](#quick-start-ci-mode)
+- [Python API](#python-api)
 - [Real Run (Science Mode)](#real-run-science-mode)
 - [Verifying Your Setup](#verifying-your-setup)
 - [Output Interpretation](#output-interpretation)
@@ -83,6 +87,32 @@ network access or heavy computation. Use it as a smoke test after installing.
 > the same as the CI command above. Explicitly create a `config.yaml` with
 > `mode: science` (see [Configuration](#configuration)) to perform real,
 > computationally intensive runs.
+
+To screen a small curated set (e.g. known ligands plus decoys), pass a CSV
+library:
+
+```bash
+autoantibiotic --library examples/known_ligands.csv --count 4
+```
+
+---
+
+## Python API
+
+You can drive the pipeline programmatically instead of via the CLI. See
+[`examples/single_compound_api.py`](examples/single_compound_api.py) for a
+complete example that prepares the targets and screens one compound:
+
+```python
+from discovery_pipeline import prepare_targets, screen_single_compound
+
+deps = {"vina": False, "USE_VINA": False}
+targets = prepare_targets("output/pdb", "output/workdir", deps)
+rec = screen_single_compound(
+    "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O", targets, ".", deps
+)
+print(rec.pb2pa_allosteric_energy, rec.pb2pa_active_energy)
+```
 
 ---
 
