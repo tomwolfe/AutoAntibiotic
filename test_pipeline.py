@@ -434,74 +434,6 @@ class TestMockRedockingSkip:
                 )
         assert result == (False, None), f"Expected (False, None), got {result}"
 
-# ── Test 9: Fallback Scoring (TestFallbackScoring) ──────────────────────────
-
-class TestFallbackScoring:
-    def test_shape_scoring_fallback(self):
-        """
-        When USE_VINA is False (Vina unavailable), screen_library must:
-          - Still compute shape scores for every compound.
-          - Leave pb2pa_allosteric_energy as None (no Vina docking).
-        """
-        # Build 3 mock compound records
-        records = [
-            CompoundRecord(
-                compound_id='SHAPE_A',
-                smiles='CC1=CC=C(C=C1)',  # benzene
-                mol=Chem.MolFromSmiles('CC1=CC=C(C=C1)'),
-            ),
-            CompoundRecord(
-                compound_id='SHAPE_B',
-                smiles='CC(C)(C)C1=CC=C(C=C1)C(C)(C)C',  # xylene-like
-                mol=Chem.MolFromSmiles('CC(C)(C)C1=CC=C(C=C1)C(C)(C)C'),
-            ),
-            CompoundRecord(
-                compound_id='SHAPE_C',
-                smiles='C1=CC=C(C=C1)O',  # phenol
-                mol=Chem.MolFromSmiles('C1=CC=C(C=C1)O'),
-            ),
-        ]
-
-        # Mock deps to simulate Vina unavailable
-        mock_deps = {'vina': False, 'USE_VINA': False}
-
-        # Mock targets to return minimal structure
-        mock_targets = {
-            'PBP2a': {
-                'pdbqt': '/dev/null',
-                'cleaned_pdb': '/dev/null',
-                'allosteric_center': np.array([0.0, 0.0, 0.0]),
-                'active_center': np.array([0.0, 0.0, 0.0]),
-            },
-            'trypsin': {
-                'pdbqt': '/dev/null',
-                'active_center': np.array([0.0, 0.0, 0.0]),
-            },
-            'CES1': {
-                'pdbqt': '/dev/null',
-                'active_center': np.array([0.0, 0.0, 0.0]),
-            },
-            'holo_pdb': '/dev/null',
-        }
-
-        with tempfile.TemporaryDirectory() as work_dir:
-            result = screen_library(records, mock_targets, work_dir, mock_deps)
-
-        # All records must have non-None shape_score
-        for rec in result:
-            assert rec.shape_score is not None, \
-                f"shape_score is None for {rec.compound_id}"
-
-        # pb2pa_allosteric_energy must be None (Vina disabled)
-        for rec in result:
-            assert rec.pb2pa_allosteric_energy is None, \
-                f"pb2pa_allosteric_energy is not None: {rec.pb2pa_allosteric_energy}"
-
-        # Should return at least TOP_N (10) or all if fewer
-        assert len(result) >= min(len(records), TOP_N), \
-            f"Expected at least {min(len(records), TOP_N)} results, got {len(result)}"
-
-
 # ── Test: Error Handling ───────────────────────────────────────────────────
 
 class TestErrorHandling:
@@ -612,119 +544,15 @@ class TestApplyFiltersRelaxed:
         ), "Expected a similarity-threshold relaxation notice"
 
 
-# ── Test: Mini pipeline with shape fallback ───────────────────────────────
-
-class TestMiniPipelineShapeFallback:
-    def test_mini_pipeline_shape_fallback(self, tmp_path):
-        """
-        With USE_VINA=False, main() must run the RDKit Shape fallback,
-        load the real PDB files from tests/data (no mocks for PDB loading),
-        write top_candidates.csv with 3 rows, mark PBP2a_Allosteric_Energy as
-        'N/A', and include the new Shape_Score / Selectivity_Confidence
-        columns. The real prepare_targets must produce (3,) centroid arrays.
-        """
-        import csv
-        import discovery_pipeline as dp
-
-        work_dir = tmp_path / "work"
-        work_dir.mkdir()
-        pdb_dir = tmp_path / "pdb"
-        pdb_dir.mkdir()
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-
-        captured = {}
-
-        # Capture the real function before patching so the spy does not
-        # recurse into the mock.
-        real_prepare_targets = dp.prepare_targets
-
-        def spy_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
-            """Call the real prepare_targets (real PDB loading) and record it."""
-            result = real_prepare_targets(pdb_dir_arg, work_dir_arg, deps)
-            captured["targets"] = result
-            return result
-
-        def mock_generate(target_count=3, input_csv=None):
-            smis = ["c1ccccc1", "Cc1ccccc1", "c1ccc(O)cc1"]
-            recs = []
-            for i, s in enumerate(smis):
-                recs.append(CompoundRecord(
-                    compound_id=f"AA-{i:04d}",
-                    smiles=s,
-                    mol=Chem.MolFromSmiles(s),
-                ))
-            return recs
-
-        def mock_filters(records):
-            return list(records)
-
-        with patch("discovery_pipeline.check_dependencies",
-                   return_value={"vina": False, "USE_VINA": False}):
-            with patch("discovery_pipeline.prepare_targets", side_effect=spy_prepare):
-                with patch("discovery_pipeline.generate_candidate_library",
-                            side_effect=mock_generate):
-                    with patch("discovery_pipeline.apply_filters", side_effect=mock_filters):
-                        with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
-                            with patch("discovery_pipeline.CSV_REPORT",
-                                        output_dir / "top_candidates.csv"):
-                                with patch.dict(os.environ, {
-                                    "AUTOANTIBIOTIC_FORCE": "1",
-                                    "AUTOANTIBIOTIC_CI": "1",
-                                }):
-                                    from discovery_pipeline import main
-                                    main(target_count=3)
-
-        # ── Assert centroids produced from the real tests/data PDBs ──
-        targets = captured["targets"]
-
-        def _ok_centroid(c):
-            # A centre may be None when its residues are absent from the
-            # (mock) structure; otherwise it must be a (3,) numpy array.
-            return c is None or (
-                isinstance(c, np.ndarray) and c.shape == (3,)
-            )
-
-        assert _ok_centroid(targets["PBP2a"]["allosteric_center"]), (
-            f"Unexpected allosteric centroid: {targets['PBP2a']['allosteric_center']}"
-        )
-        assert _ok_centroid(targets["PBP2a"]["active_center"])
-        assert _ok_centroid(targets["trypsin"]["active_center"])
-        assert _ok_centroid(targets["CES1"]["active_center"])
-
-        csv_path = output_dir / "top_candidates.csv"
-        assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
-
-        with open(csv_path) as f:
-            rows = list(csv.DictReader(f))
-
-        assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
-
-        required_columns = {
-            "PBP2a_Allosteric_Energy",
-            "Shape_Score",
-            "Selectivity_Confidence",
-        }
-        assert required_columns.issubset(set(rows[0].keys())), (
-            f"CSV missing required columns: {required_columns - set(rows[0].keys())}"
-        )
-
-        for row in rows:
-            assert row["PBP2a_Allosteric_Energy"] == "N/A", row
-            assert any(
-                row["Selectivity_Confidence"].startswith(c)
-                for c in {"High", "Low", "None", "Unassessed"}
-            ), row
-
-
 # ── Test: Real PDB smoke test (science mode, real PDBs) ────────────────────
 
 class TestRealPDBSmoke:
     def test_real_pdb_smoke(self, tmp_path):
         """
-        With AUTOANTIBIOTIC_CI=0 (science mode) and real PDBs supplied via
-        prepare_targets spy, main() must run end-to-end, write
-        top_candidates.csv with 2 rows, using the mocked library/filters.
+        With science mode and real PDBs supplied via prepare_targets spy,
+        main() must run end-to-end, write top_candidates.csv with 2 rows,
+        using the mocked library/filters. Vina is absent, so AUTOANTIBIOTIC_FORCE=1
+        is set to allow the run without a validated docking protocol.
         """
         import csv
         import discovery_pipeline as dp
@@ -739,7 +567,7 @@ class TestRealPDBSmoke:
         # Provide local PDBs to fetch_structure via a neutral directory (path
         # must NOT contain "tests/data", otherwise prepare_targets would treat
         # them as mocks and switch to CI mode). This exercises the science-mode
-        # path (AUTOANTIBIOTIC_CI=0) without any network download.
+        # path without any network download.
         real_pdb_dir = tmp_path / "real_pdbs"
         real_pdb_dir.mkdir()
         for pdb_id in ["3QPD", "6TKO", "1UTN", "3KJZ"]:
@@ -772,24 +600,36 @@ class TestRealPDBSmoke:
         def mock_filters(records):
             return list(records)
 
+        def mock_screen_library(records, targets, work_dir, deps):
+            out = []
+            for i, rec in enumerate(records):
+                out.append(CompoundRecord(
+                    compound_id=rec.compound_id,
+                    smiles=rec.smiles,
+                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                ))
+            return out
+
         with patch("discovery_pipeline.check_dependencies",
                    return_value={"vina": False, "USE_VINA": False}):
             with patch("discovery_pipeline.prepare_targets", side_effect=spy_prepare):
                 with patch("discovery_pipeline.generate_candidate_library",
                             side_effect=mock_generate):
                     with patch("discovery_pipeline.apply_filters", side_effect=mock_filters):
-                        with patch("discovery_pipeline.fetch_structure",
-                                    side_effect=mock_fetch_structure):
-                            with patch("discovery_pipeline.run_redocking_validation",
-                                        return_value=(False, None)):
-                                with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
-                                    with patch("discovery_pipeline.CSV_REPORT",
-                                                output_dir / "top_candidates.csv"):
-                                        with patch.dict(os.environ, {
-                                            "AUTOANTIBIOTIC_CI": "0",
-                                        }):
-                                            from discovery_pipeline import main
-                                            main(target_count=2)
+                        with patch("discovery_pipeline.screen_library",
+                                    side_effect=mock_screen_library):
+                            with patch("discovery_pipeline.fetch_structure",
+                                        side_effect=mock_fetch_structure):
+                                with patch("discovery_pipeline.run_redocking_validation",
+                                            return_value=(False, None)):
+                                    with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                        with patch("discovery_pipeline.CSV_REPORT",
+                                                    output_dir / "top_candidates.csv"):
+                                            with patch.dict(os.environ, {
+                                                "AUTOANTIBIOTIC_FORCE": "1",
+                                            }):
+                                                from discovery_pipeline import main
+                                                main(target_count=2)
 
         csv_path = output_dir / "top_candidates.csv"
         assert csv_path.exists(), "top_candidates.csv should exist after pipeline run"
@@ -1099,23 +939,38 @@ class TestMainRedockingGate:
                 "active_center": np.array([0.0, 0.0, 0.0]),
             },
         }
+
+        def mock_screen_library(records, targets, work_dir, deps):
+            out = []
+            for i, rec in enumerate(records):
+                out.append(CompoundRecord(
+                    compound_id=rec.compound_id,
+                    smiles=rec.smiles,
+                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                ))
+            return out
+
         with patch("discovery_pipeline.check_dependencies",
                    return_value={"vina": False, "USE_VINA": False}):
             with patch("discovery_pipeline.prepare_targets",
-                       return_value=mock_targets):
+                        return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
-                           return_value=(False, None)):
-                    with patch.dict(os.environ, {}, clear=False):
-                        os.environ.pop("AUTOANTIBIOTIC_FORCE", None)
-                        with patch("discovery_pipeline.generate_candidate_library",
-                                   side_effect=mock_gen):
-                            with patch("discovery_pipeline.apply_filters",
-                                       side_effect=lambda r: list(r)):
-                                with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
-                                    with patch("discovery_pipeline.CSV_REPORT",
-                                               output_dir / "top_candidates.csv"):
-                                        from discovery_pipeline import main
-                                        main(target_count=3)
+                            return_value=(False, None)):
+                    with patch("discovery_pipeline.load_config",
+                                return_value={"mode": "ci"}):
+                        with patch("discovery_pipeline.screen_library",
+                                    side_effect=mock_screen_library):
+                            with patch.dict(os.environ, {}, clear=False):
+                                os.environ.pop("AUTOANTIBIOTIC_FORCE", None)
+                                with patch("discovery_pipeline.generate_candidate_library",
+                                            side_effect=mock_gen):
+                                    with patch("discovery_pipeline.apply_filters",
+                                                side_effect=lambda r: list(r)):
+                                        with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
+                                            with patch("discovery_pipeline.CSV_REPORT",
+                                                        output_dir / "top_candidates.csv"):
+                                                from discovery_pipeline import main
+                                                main(target_count=3)
 
         assert (output_dir / "top_candidates.csv").exists(), \
             "CSV should be written even when validation fails and FORCE is unset"
@@ -1137,20 +992,33 @@ class TestMainRedockingGate:
                 "active_center": np.array([0.0, 0.0, 0.0]),
             },
         }
+
+        def mock_screen_library(records, targets, work_dir, deps):
+            out = []
+            for i, rec in enumerate(records):
+                out.append(CompoundRecord(
+                    compound_id=rec.compound_id,
+                    smiles=rec.smiles,
+                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                ))
+            return out
+
         with patch("discovery_pipeline.check_dependencies",
                    return_value={"vina": False, "USE_VINA": False}):
             with patch("discovery_pipeline.prepare_targets",
-                       return_value=mock_targets):
+                        return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
-                           return_value=(False, None)):
-                    with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
-                        with patch("discovery_pipeline.generate_candidate_library",
-                                   side_effect=mock_gen):
+                            return_value=(False, None)):
+                    with patch("discovery_pipeline.screen_library",
+                                side_effect=mock_screen_library):
+                        with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
+                            with patch("discovery_pipeline.generate_candidate_library",
+                                        side_effect=mock_gen):
                                 with patch("discovery_pipeline.apply_filters",
-                                        side_effect=lambda r: list(r)):
+                                            side_effect=lambda r: list(r)):
                                     with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                                         with patch("discovery_pipeline.CSV_REPORT",
-                                               output_dir / "top_candidates.csv"):
+                                                    output_dir / "top_candidates.csv"):
                                             from discovery_pipeline import main
                                             main(target_count=3)
 
@@ -1283,7 +1151,8 @@ class TestOfflinePDBLoad:
             with patch.object(dp, "clean_pdb_structure", side_effect=side_clean):
                 with patch.object(dp, "compute_residue_centroid",
                                   return_value=np.zeros(3)):
-                    with patch.dict(os.environ, {"AUTOANTIBIOTIC_CI": "1"}):
+                    with patch.object(dp, "load_config",
+                                     return_value={"mode": "ci"}):
                         dp.prepare_targets(
                             str(tmp_path), str(tmp_path),
                             {"vina": False, "USE_VINA": False},
@@ -1523,165 +1392,6 @@ class TestNativeLigandResnameOverride:
             str(holo), str(smi), str(pdbqt), resname_override="NOPE"
         )
         assert result is None
-
-
-# ── Test: Task 1 — Quick Screen mode (--quick) ─────────────────────────────
-
-class TestQuickScreenMode:
-    def test_quick_smiles_skips_library_and_exits(self, tmp_path):
-        """
-        With quick=True and a SMILES string, main() must:
-          - serve prepared targets from the cache (via _get_cached_targets,
-            which on a miss calls prepare_targets),
-          - skip library generation / reporting phases entirely,
-          - populate record.interactions and print a single-compound summary,
-          - exit(0) immediately.
-        Library generation must NOT be invoked.
-        """
-        import discovery_pipeline as dp
-
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        cache_dir = tmp_path / "cache"
-
-        def mock_gen(*args, **kwargs):
-            pytest.fail("Library generation must be skipped in quick-screen mode")
-
-        mock_targets = {
-            "holo_pdb": "/dev/null",
-            "PBP2a": {
-                "pdbqt": "/dev/null",
-                "cleaned_pdb": "/dev/null",
-                "allosteric_center": np.zeros(3),
-                "active_center": np.zeros(3),
-            },
-            "trypsin": {"pdbqt": "/dev/null", "active_center": np.zeros(3)},
-            "CES1": {"pdbqt": "/dev/null", "active_center": np.zeros(3)},
-        }
-
-        # _get_cached_targets must hit prepare_targets once (cache miss) and
-        # write a manifest. We spy on the real prepare_targets so the cache
-        # machinery is exercised end-to-end.
-        real_prepare = dp.prepare_targets
-
-        def spy_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
-            # Write a manifest into the cache dir so the next call would hit.
-            return real_prepare(pdb_dir_arg, work_dir_arg, deps, config=config) \
-                if False else mock_targets
-
-        with patch.object(dp, "check_dependencies",
-                          return_value={"vina": False, "USE_VINA": False}):
-            with patch.object(dp, "prepare_targets", side_effect=spy_prepare) as mpt:
-                with patch.object(dp, "_get_cached_targets",
-                                  return_value=mock_targets) as mcache:
-                    with patch.object(dp, "generate_candidate_library",
-                                      side_effect=mock_gen):
-                        with patch.object(dp, "OUTPUT_DIR", output_dir):
-                            with patch.object(dp, "CSV_REPORT",
-                                              output_dir / "top_candidates.csv"):
-                                with patch.dict(os.environ, {
-                                    "AUTOANTIBIOTIC_FORCE": "1",
-                                }):
-                                    with pytest.raises(SystemExit) as exc:
-                                        from discovery_pipeline import main
-                                        main(target_count=3, quick=True,
-                                             smiles="c1ccccc1")
-                                    assert exc.value.code == 0
-
-        # Cache must be consulted, and library generation must never run.
-        mcache.assert_called_once()
-        mpt.assert_not_called()  # _get_cached_targets was mocked, so no real call
-
-    def test_get_cached_targets_builds_and_reloads(self, tmp_path):
-        """
-        _get_cached_targets must build the cache (calling prepare_targets and
-        writing a manifest) on a miss, then reload from the manifest on a
-        subsequent call without re-running prepare_targets.
-        """
-        import discovery_pipeline as dp
-
-        cache_dir = str(tmp_path / "cache")
-
-        real_targets = {
-            "mode": "science",
-            "holo_pdb": str(tmp_path / "holo.pdb"),
-            "PBP2a": {
-                "pdbqt": str(tmp_path / "PBP2a.pdbqt"),
-                "cleaned_pdb": str(tmp_path / "PBP2a.pdb"),
-                "allosteric_center": np.array([1.0, 2.0, 3.0]),
-                "active_center": np.array([4.0, 5.0, 6.0]),
-            },
-            "trypsin": {
-                "pdbqt": str(tmp_path / "trypsin.pdbqt"),
-                "active_center": np.array([7.0, 8.0, 9.0]),
-            },
-            "CES1": {
-                "pdbqt": str(tmp_path / "ces1.pdbqt"),
-                "active_center": np.array([1.0, 1.0, 1.0]),
-            },
-        }
-        # Touch the referenced files so the cache copy step succeeds.
-        for path in (real_targets["holo_pdb"],
-                     real_targets["PBP2a"]["pdbqt"],
-                     real_targets["PBP2a"]["cleaned_pdb"],
-                     real_targets["trypsin"]["pdbqt"],
-                     real_targets["CES1"]["pdbqt"]):
-            with open(path, "w") as f:
-                f.write("REMARK cached\n")
-
-        calls = {"n": 0}
-
-        def fake_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
-            calls["n"] += 1
-            # prepare_targets writes into work_dir; emulate by copying the
-            # real_targets files into cache_dir so the manifest resolves.
-            for src, dst in [
-                (real_targets["PBP2a"]["pdbqt"],
-                 os.path.join(cache_dir, "PBP2a_clean.pdbqt")),
-                (real_targets["PBP2a"]["cleaned_pdb"],
-                 os.path.join(cache_dir, "PBP2a_clean.pdb")),
-                (real_targets["trypsin"]["pdbqt"],
-                 os.path.join(cache_dir, "trypsin_clean.pdbqt")),
-                (real_targets["CES1"]["pdbqt"],
-                 os.path.join(cache_dir, "CES1_clean.pdbqt")),
-                (real_targets["holo_pdb"],
-                 os.path.join(cache_dir, "holo_cached.pdb")),
-            ]:
-                shutil.copy(src, dst)
-            return {
-                "mode": "science",
-                "holo_pdb": os.path.join(cache_dir, "holo_cached.pdb"),
-                "PBP2a": {
-                    "pdbqt": os.path.join(cache_dir, "PBP2a_clean.pdbqt"),
-                    "cleaned_pdb": os.path.join(cache_dir, "PBP2a_clean.pdb"),
-                    "allosteric_center": np.array([1.0, 2.0, 3.0]),
-                    "active_center": np.array([4.0, 5.0, 6.0]),
-                },
-                "trypsin": {
-                    "pdbqt": os.path.join(cache_dir, "trypsin_clean.pdbqt"),
-                    "active_center": np.array([7.0, 8.0, 9.0]),
-                },
-                "CES1": {
-                    "pdbqt": os.path.join(cache_dir, "CES1_clean.pdbqt"),
-                    "active_center": np.array([1.0, 1.0, 1.0]),
-                },
-            }
-
-        with patch.object(dp, "prepare_targets", side_effect=fake_prepare):
-            with patch.object(dp, "check_dependencies",
-                              return_value={"vina": False, "USE_VINA": False}):
-                with patch.object(dp, "load_config", return_value={"mode": "science"}):
-                    # First call builds + caches.
-                    t1 = dp._get_cached_targets(cache_dir)
-                    # Second call reloads from manifest (no prepare_targets call).
-                    t2 = dp._get_cached_targets(cache_dir)
-
-        assert calls["n"] == 1, "prepare_targets should run only once (cache reused)"
-        assert np.allclose(t1["PBP2a"]["allosteric_center"],
-                           t2["PBP2a"]["allosteric_center"])
-        # Reloaded paths must point inside the cache dir.
-        assert "cache" in t2["PBP2a"]["pdbqt"]
-        assert t2["PBP2a"]["pdbqt"].endswith(".pdbqt")
 
 
 if __name__ == "__main__":

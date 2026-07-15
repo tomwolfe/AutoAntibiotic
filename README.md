@@ -32,9 +32,9 @@ prioritize compounds for experimental follow-up.
 
 The pipeline relies on two external binaries that are **not** pip packages:
 **AutoDock Vina** (docking + redocking validation) and **OpenBabel** (PDBQT /
-structure conversion). If either is missing the pipeline still runs, but falls
-back to an RDKit-based Shape/Pharmacophore scoring path and emits a clear
-warning. For the best scientific results, install both.
+structure conversion). AutoDock Vina is **required** for screening — if it is
+missing, the pipeline aborts with a clear message. For the best scientific
+results, install both (or run via the Docker image, which bundles them).
 
 | Tool           | Purpose                                                            |
 | -------------- | ------------------------------------------------------------------ |
@@ -121,7 +121,7 @@ The fastest way to confirm your installation works — **no large PDB files are
 downloaded** — is to run an offline, mock CI run:
 
 ```bash
-AUTOANTIBIOTIC_CI=1 autoantibiotic --count 10
+autoantibiotic --count 10
 ```
 
 This runs the full pipeline against small synthetic/mock structures and proves
@@ -146,19 +146,18 @@ autoantibiotic --library examples/known_ligands.csv --count 4
 
 ## Python API
 
-You can drive the pipeline programmatically instead of via the CLI. See
-[`examples/single_compound_api.py`](examples/single_compound_api.py) for a
-complete example that prepares the targets and screens one compound:
+You can drive the pipeline programmatically instead of via the CLI. A minimal
+example (the full version lives in
+[`examples/single_compound_api.py`](examples/single_compound_api.py)):
 
 ```python
 from discovery_pipeline import prepare_targets, screen_single_compound
 
+SMILES = "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O"
 deps = {"vina": False, "USE_VINA": False}
 targets = prepare_targets("output/pdb", "output/workdir", deps)
-rec = screen_single_compound(
-    "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O", targets, ".", deps
-)
-print(rec.pb2pa_allosteric_energy, rec.pb2pa_active_energy)
+rec = screen_single_compound(SMILES, targets, ".", deps)
+print(rec.compound_id, rec.pb2pa_allosteric_energy, rec.pb2pa_active_energy)
 ```
 
 ---
@@ -237,7 +236,7 @@ are particularly important for triaging candidates:
 | Column                | Meaning                                                                                                                       |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | **`Selectivity_Index`** | Ratio of the candidate's predicted mammalian-cell toxicity to its anti-PBP2a potency. **Higher is better** — a large value means the compound is predicted to hit the bacterial target while sparing human cells. |
-| **`Redock_Validated`**  | `True` when the docking protocol was validated by redocking the native ligand into PBP2a within an RMSD threshold in science mode. `False` (or absent in CI mode) means docking results should be interpreted with caution. |
+| **`protocol_trust`**     | A single trust badge for the docking protocol: `CI Mode (Skipped)`, `Validated`, `Validated (Marginal)`, `CAUTION: High RMSD`, or `Validation Unavailable`. In CI mode no physical RMSD is computed and results are not for scientific use. |
 
 Additional artifacts (top-candidate images, a `pipeline.log`, and the
 validation JSON) are written under `output/` as well.
@@ -250,7 +249,6 @@ Configuration is resolved in this order:
 
 1. `config.yaml` on disk (preferred) — set `mode: ci` or `mode: science`.
 2. The `AUTOANTIBIOTIC_MODE` environment variable (`ci` or `science`).
-3. `AUTOANTIBIOTIC_CI=1` → `ci` (legacy offline escape hatch).
 
 If no `config.yaml` exists, the pipeline defaults to `mode: ci` so a new user
 sees results immediately. A real, heavy computational run requires an explicit

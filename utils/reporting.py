@@ -133,10 +133,9 @@ def generate_csv_report(
     Columns:
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
-        Selectivity_Confidence, Shape_Score, Max_Similarity, Passes_Lipinski,
-        QED_Score, Binding_Mode_Notes, Redock_RMSD, Protocol_RMSD,
-        Redock_Validated, Validation_Status, Validation_Warning,
-        H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446, Structure_Source.
+        Selectivity_Confidence, Max_Similarity, Passes_Lipinski,
+        QED_Score, Binding_Mode_Notes, Protocol_RMSD, protocol_trust,
+        H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446.
 
     Returns path to CSV.
     """
@@ -160,41 +159,6 @@ def generate_csv_report(
         else:
             h_ser = h_lys = h_tyr = False
 
-        # ── Why_Won: a short human-readable rationale string combining the
-        # selectivity index, per-residue H-bond flags, and the docking
-        # energies already computed for this candidate (no new computation).
-        why_parts = []
-        if rec.selectivity_index is not None:
-            why_parts.append(f"SI={rec.selectivity_index:.1f}")
-        hbond_residues = [
-            name for name, flag in (
-                ("Ser403", h_ser), ("Lys406", h_lys), ("Tyr446", h_tyr)
-            ) if flag
-        ]
-        if hbond_residues:
-            why_parts.append("H-bonds " + ",".join(hbond_residues))
-        if rec.pb2pa_active_energy is not None:
-            why_parts.append(f"active E={rec.pb2pa_active_energy:.1f}")
-        if rec.pb2pa_allosteric_energy is not None:
-            why_parts.append(f"allosteric E={rec.pb2pa_allosteric_energy:.1f}")
-        why_won = "; ".join(why_parts) if why_parts else "N/A"
-
-        # Redock RMSD: report the measured value in science mode, mark the
-        # column SKIPPED in CI/mock mode, and N/A when no value is available.
-        if is_mock:
-            redock_rmsd_str = "SKIPPED"
-        elif redock_rmsd is not None:
-            redock_rmsd_str = f"{redock_rmsd:.3f}"
-        else:
-            redock_rmsd_str = "N/A"
-
-        # Validation warning: only raised in science mode when the protocol
-        # did not validate (RMSD > 2.0 Å or the redocking step failed).
-        if (not validation_ok) and mode == "science":
-            validation_warning = "RMSD > 2.0Å or Failed"
-        else:
-            validation_warning = "None"
-
         # ── Trust Badge columns ──
         # Protocol_RMSD: the raw redocking RMSD value (in Å) for every row, shown
         # as a plain float (e.g. "1.234") wherever a real measurement exists. In
@@ -203,28 +167,27 @@ def generate_csv_report(
             f"{redock_rmsd:.3f}" if redock_rmsd is not None else "N/A"
         )
 
-        # Validation_Status: a quick-glance trust badge so chemists immediately
-        # see protocol quality.
+        # protocol_trust: a single quick-glance trust badge so chemists
+        # immediately see protocol quality.
         #   • CI mode (no real RMSD)                 → "CI Mode (Skipped)"
         #   • redock_rmsd > 2.0 Å                    → "CAUTION: High RMSD (<val> Å)"
         #   • 1.5 Å < redock_rmsd <= 2.0 Å          → "Validated (Marginal)"
         #   • redock_rmsd <= 1.5 Å (good protocol)  → "Validated"
         #   • science mode but no measured RMSD     → "Validation Unavailable"
         if is_mock:
-            validation_status = "CI Mode (Skipped)"
+            protocol_trust = "CI Mode (Skipped)"
         elif redock_rmsd is not None and redock_rmsd > 2.0:
-            validation_status = f"CAUTION: High RMSD ({redock_rmsd:.3f} Å)"
+            protocol_trust = f"CAUTION: High RMSD ({redock_rmsd:.3f} Å)"
         elif redock_rmsd is not None and 1.5 < redock_rmsd <= 2.0:
-            validation_status = "Validated (Marginal)"
+            protocol_trust = "Validated (Marginal)"
         elif redock_rmsd is not None:
-            validation_status = "Validated"
+            protocol_trust = "Validated"
         else:
-            validation_status = "Validation Unavailable"
+            protocol_trust = "Validation Unavailable"
 
         rows.append({
             "Compound_ID": rec.compound_id,
             "SMILES": rec.smiles,
-            "Structure_Source": "mock" if is_mock else "real",
             "PBP2a_Allosteric_Energy": (
                 f"{rec.pb2pa_allosteric_energy:.2f}" if rec.pb2pa_allosteric_energy is not None
                 else "N/A"
@@ -249,26 +212,15 @@ def generate_csv_report(
                 "Unassessed" if rec.selectivity_confidence == "None"
                 else rec.selectivity_confidence
             ) + (" (mock)" if is_mock else ""),
-            "Shape_Score": (
-                f"{rec.shape_score:.2f}" if rec.shape_score is not None
-                else "N/A"
-            ),
             "Max_Similarity": f"{rec.max_similarity:.3f}",
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
-            "Redock_RMSD": redock_rmsd_str,
             "Protocol_RMSD": protocol_rmsd_str,
-            "Redock_Validated": (
-                "SKIPPED" if is_mock
-                else "N/A" if validation_ok is None else str(bool(validation_ok))
-            ) + (" (mock)" if is_mock else ""),
-            "Validation_Status": validation_status,
-            "Validation_Warning": validation_warning,
+            "protocol_trust": protocol_trust,
             "H_Bond_Ser403": str(h_ser),
             "H_Bond_Lys406": str(h_lys),
             "H_Bond_Tyr446": str(h_tyr),
-            "Why_Won": why_won,
         })
 
     df = pd.DataFrame(rows)

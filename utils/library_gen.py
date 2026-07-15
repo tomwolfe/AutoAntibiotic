@@ -68,9 +68,6 @@ class CompoundRecord:
     # Resistance flags
     resistance_notes: str = ""
 
-    # Fallback shape score (0–10, lower better)
-    shape_score: Optional[float] = None
-
     # Selectivity confidence based on how many human off-targets were docked:
     #   "High" if 2 human targets provided valid energies,
     #   "Low"  if 1 human target provided a valid energy,

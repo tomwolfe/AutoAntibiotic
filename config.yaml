@@ -6,9 +6,8 @@
 #                    the full redocking protocol. This is the default when this
 #                    file is missing.
 #
-# The mode may also be overridden via environment variables:
+# The mode may also be overridden via an environment variable:
 #   AUTOANTIBIOTIC_MODE=ci|science   (explicit, highest precedence)
-#   AUTOANTIBIOTIC_CI=1               (legacy; forces CI mode)
 # -----------------------------------------------------------------------------
 
 mode: science

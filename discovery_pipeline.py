@@ -12,11 +12,11 @@ resistance-risk analysis.
 Author: AutoAntibiotic Agent
 Environment: Python 3.9+, RDKit | Bio.PDB | AutoDock Vina
 
-CI mode: set USE_VINA=False or use bundled tests/data mocks; real PDBs required for scientific validation.
+ CI mode: set USE_VINA=False or use bundled tests/data mocks; real PDBs required for scientific validation.
 
- Bundled tests/data PDBs are minimal mocks; redocking RMSD against them is non‑physical. Use real PDB downloads for science mode.
+  Bundled tests/data PDBs are minimal mocks; redocking RMSD against them is non‑physical. Use real PDB downloads for science mode.
 
-For real science runs: set AUTOANTIBIOTIC_CI=0 and place real PDBs in pdb_dir; bundled tests/data are mocks.
+ For real science runs: set `mode: science` in config.yaml and place real PDBs in pdb_dir; bundled tests/data are mocks.
  """
 
 import os
@@ -62,8 +62,6 @@ from utils.docking import (
     dock_compound,
     _dock_compounds_parallel,
     _dock_worker,
-    _compute_shape_fallback_score,
-    _compute_shape_scores,
 )
 from utils.filtering import apply_filters
 
@@ -180,171 +178,7 @@ def select_top(records, score_key, descending=False, n=TOP_N):
     return valid[:n]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  TARGET CACHE MANAGER (Quick Screen mode)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-DEFAULT_CACHE_DIR = os.path.expanduser("~/.autoantibiotic/cache")
-
-
-def _cache_file(src: Optional[str], cache_dir: str) -> Optional[str]:
-    """
-    Return the path (relative to *cache_dir*) under which *src* is stored,
-    copying the file into *cache_dir* if it lives elsewhere.
-
-    Files already inside *cache_dir* are left untouched. ``None``/missing
-    inputs are returned unchanged so callers can preserve them.
-    """
-    if not src or not os.path.exists(src):
-        return src
-    dst = os.path.join(cache_dir, os.path.basename(src))
-    if os.path.abspath(src) != os.path.abspath(dst):
-        try:
-            shutil.copy(src, dst)
-        except OSError as exc:
-            log.warning(f"  Could not copy {src} into cache: {exc}")
-    return os.path.basename(src)
-
-
-def _serialize_targets(targets: dict, cache_dir: str) -> dict:
-    """Build a JSON-safe manifest describing the prepared targets in *cache_dir*."""
-    def ser_center(c):
-        if c is None:
-            return None
-        return [float(c[0]), float(c[1]), float(c[2])]
-
-    manifest = {
-        "mode": targets.get("mode"),
-        "holo_pdb": _cache_file(targets.get("holo_pdb"), cache_dir),
-    }
-    for key in ("PBP2a", "trypsin", "CES1"):
-        t = targets.get(key)
-        if not t:
-            continue
-        entry = {}
-        if "pdbqt" in t:
-            entry["pdbqt"] = _cache_file(t["pdbqt"], cache_dir)
-        if "cleaned_pdb" in t:
-            entry["cleaned_pdb"] = _cache_file(t["cleaned_pdb"], cache_dir)
-        if "allosteric_center" in t:
-            entry["allosteric_center"] = ser_center(t["allosteric_center"])
-        if "active_center" in t:
-            entry["active_center"] = ser_center(t["active_center"])
-        manifest[key] = entry
-    return manifest
-
-
-def _deserialize_targets(manifest: dict, cache_dir: str) -> dict:
-    """Rebuild a usable targets dict from a cached manifest."""
-    def de_center(c):
-        if c is None:
-            return None
-        return np.array(c, dtype=float)
-
-    targets: Dict[str, Dict] = {}
-    targets["mode"] = manifest.get("mode")
-    hp = manifest.get("holo_pdb")
-    if hp:
-        hp_path = hp if os.path.isabs(hp) else os.path.join(cache_dir, hp)
-        targets["holo_pdb"] = hp_path if os.path.exists(hp_path) else hp
-
-    for key in ("PBP2a", "trypsin", "CES1"):
-        m = manifest.get(key)
-        if not m:
-            continue
-        entry: Dict[str, object] = {}
-        if "pdbqt" in m:
-            p = m["pdbqt"]
-            p = p if os.path.isabs(p) else os.path.join(cache_dir, p)
-            entry["pdbqt"] = p
-        if "cleaned_pdb" in m:
-            p = m["cleaned_pdb"]
-            p = p if os.path.isabs(p) else os.path.join(cache_dir, p)
-            entry["cleaned_pdb"] = p
-        if "allosteric_center" in m:
-            entry["allosteric_center"] = de_center(m["allosteric_center"])
-        if "active_center" in m:
-            entry["active_center"] = de_center(m["active_center"])
-        targets[key] = entry
-    return targets
-
-
-def _get_cached_targets(
-    cache_dir: str,
-    deps: Optional[dict] = None,
-    config: Optional[dict] = None,
-) -> Dict[str, Dict]:
-    """
-    Return prepared docking targets, using an on-disk cache when available.
-
-    The cache lives under *cache_dir* (default ``~/.autoantibiotic/cache``) and
-    consists of a ``targets_manifest.json`` plus the prepared PDBQT/cleaned-PDB
-    files. On a cache hit the manifest is loaded and the targets dict is rebuilt
-    directly from it (no PDB download / cleaning). On a miss, :func:`prepare_targets`
-    is run once, the resulting files are copied into *cache_dir*, and a manifest
-    is written for future runs.
-
-    Args:
-        cache_dir: Directory to store / read the prepared targets.
-        deps: Dependency dict (falls back to :func:`check_dependencies`).
-        config: Config dict (falls back to :func:`load_config`).
-
-    Returns:
-        The targets dictionary (same shape as :func:`prepare_targets`).
-
-    Raises:
-        Whatever :func:`prepare_targets` raises on a cache miss — callers should
-        catch this and fall back to a fresh ``prepare_targets`` invocation.
-    """
-    cache_dir = os.path.expanduser(cache_dir)
-    os.makedirs(cache_dir, exist_ok=True)
-    manifest_path = os.path.join(cache_dir, "targets_manifest.json")
-
-    if os.path.exists(manifest_path):
-        try:
-            with open(manifest_path) as fh:
-                manifest = json.load(fh)
-            targets = _deserialize_targets(manifest, cache_dir)
-            log.info(f"  Loaded cached prepared targets from {cache_dir}")
-            return targets
-        except Exception as exc:
-            log.warning(
-                f"  Cached targets manifest unreadable ({exc}); rebuilding cache."
-            )
-
-    # ── Cache miss: build fresh and persist ──
-    if deps is None:
-        deps = check_dependencies()
-    if config is None:
-        config = load_config()
-
-    # Run preparation directly inside the cache dir so all generated PDBQT /
-    # cleaned-PDB files land there and can be served straight from the cache.
-    targets = prepare_targets(cache_dir, cache_dir, deps, config=config)
-
-    # Ensure the holo structure (used for redocking validation) is also cached.
-    holo_src = targets.get("holo_pdb")
-    if holo_src and os.path.exists(holo_src):
-        holo_dst = os.path.join(cache_dir, "holo_cached.pdb")
-        if os.path.abspath(holo_src) != os.path.abspath(holo_dst):
-            try:
-                shutil.copy(holo_src, holo_dst)
-                targets["holo_pdb"] = holo_dst
-            except OSError as exc:
-                log.warning(f"  Could not cache holo PDB: {exc}")
-
-    manifest = _serialize_targets(targets, cache_dir)
-    try:
-        with open(manifest_path, "w") as fh:
-            json.dump(manifest, fh, indent=2)
-        log.info(f"  Cached prepared targets to {cache_dir}")
-    except OSError as exc:
-        log.warning(f"  Could not write cache manifest: {exc}")
-
-    return targets
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 #  PHASE 0 — DEPENDENCY CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -441,10 +275,10 @@ def check_dependencies() -> dict:
     if not vina_available:
         log.warning(
             "  ⚠  Vina binary not found. Setting USE_VINA = False. "
-            "Pipeline will use RDKit Shape/Pharmacophore fallback."
+            "Screening requires AutoDock Vina; the pipeline will abort."
         )
         # High-visibility, bold error printed directly to stdout so the user
-        # is not silently left on the (slower, less accurate) fallback path.
+        # is not silently left on a broken path.
         # The fix is one line away via setup.sh or Docker.
         print(
             "\033[1;31m"
@@ -780,7 +614,7 @@ def prepare_targets(
     # ── Fetch structures (prefer bundled offline PDBs under tests/data) ──
     def _resolve_structure(pdb_id: str) -> str:
         """Return a local tests/data/{pdb_id}.pdb path if CI mode, else download."""
-        if os.environ.get("AUTOANTIBIOTIC_CI") == "1":
+        if config.get("mode") == "ci":
             local_pdb = REPO_ROOT / "tests" / "data" / f"{pdb_id}.pdb"
             if local_pdb.exists():
                 log.info(f"  Using local structure for {pdb_id}: {local_pdb}")
@@ -942,108 +776,69 @@ def screen_library(
         1. Dock all filtered compounds against allosteric site.
         2. Select top 50 by energy; dock against active site.
 
-    Fallback (RDKit Shape):
-        1. Generate 3D conformers.
-        2. Compute Shape Protrude Distance vs native 6TKO ligand.
-        3. Rank by normalised score.
+    Returns top 10 candidates with docking scores populated.
 
-    Returns top 10 candidates with docking/shape scores populated.
+    Requires AutoDock Vina. If Vina is unavailable the pipeline cannot screen
+    and raises ``RuntimeError`` — install Vina via ``bash setup.sh`` or Docker.
     """
     log.info("─── Phase 3: Virtual Screening ───")
+
+    if not deps["USE_VINA"]:
+        log.error(
+            "AutoDock Vina is required for screening. Install via "
+            "`bash setup.sh` or Docker."
+        )
+        raise RuntimeError(
+            "AutoDock Vina is required for screening. Install via "
+            "`bash setup.sh` or Docker."
+        )
 
     pb2pa = targets["PBP2a"]
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
 
-    if deps["USE_VINA"]:
-        # ── Allosteric docking ──
-        log.info("  Docking all compounds against allosteric site…")
-        allosteric_results = _dock_compounds_parallel(
-            records, pb2pa["pdbqt"],
-            allosteric_center, ALLOSTERIC_BOX_SIZE,
-            work_dir, "allosteric",
+    # ── Allosteric docking ──
+    log.info("  Docking all compounds against allosteric site…")
+    allosteric_results = _dock_compounds_parallel(
+        records, pb2pa["pdbqt"],
+        allosteric_center, ALLOSTERIC_BOX_SIZE,
+        work_dir, "allosteric",
+    )
+
+    n_scored = 0
+    for rec, energy in allosteric_results:
+        rec.pb2pa_allosteric_energy = energy
+        if energy is not None:
+            n_scored += 1
+
+    log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
+
+    # ── Select top 50 for active-site docking ──
+    scored = [r for r, e in allosteric_results if e is not None]
+    scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+
+    if len(scored) >= 50:
+        top50 = scored[:50]
+        log.info(f"  Docking top {len(top50)} compounds against active site…")
+
+        active_results = _dock_compounds_parallel(
+            top50, pb2pa["pdbqt"],
+            active_center, ACTIVE_BOX_SIZE,
+            work_dir, "active",
         )
 
-        n_scored = 0
-        for rec, energy in allosteric_results:
-            rec.pb2pa_allosteric_energy = energy
-            if energy is not None:
-                n_scored += 1
-
-        log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
-
-        # ── Select top 50 for active-site docking ──
-        scored = [r for r, e in allosteric_results if e is not None]
-        scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
-
-        if len(scored) >= 50:
-            top50 = scored[:50]
-            log.info(f"  Docking top {len(top50)} compounds against active site…")
-
-            active_results = _dock_compounds_parallel(
-                top50, pb2pa["pdbqt"],
-                active_center, ACTIVE_BOX_SIZE,
-                work_dir, "active",
-            )
-
-            for rec, energy in active_results:
-                rec.pb2pa_active_energy = energy
-
-    else:
-        # ── Fallback: RDKit Shape protrude ──
-        log.info("  Vina unavailable. Using RDKit Shape Fallback.")
-
-        # Extract native ligand from 6TKO as reference via the canonical parser
-        ref_mol = None
-        holo_pdb = targets.get("holo_pdb")
-        if holo_pdb and os.path.exists(holo_pdb):
-            lig_smi = os.path.join(work_dir, "native_ref.smi")
-            lig_pdbqt = os.path.join(work_dir, "native_ref.pdbqt")
-            try:
-                smi = _extract_native_ligand_from_holo(holo_pdb, lig_smi, lig_pdbqt)
-                if smi is not None:
-                    ref_mol = Chem.MolFromSmiles(smi)
-            except Exception:
-                pass
-
-        if ref_mol is None:
-            # Fallback reference: first positive control, log a warning
-            ref_smi = list(CONTROL_SMILES.values())[0]
-            ref_mol = Chem.MolFromSmiles(ref_smi)
-            if ref_mol is not None:
-                log.warning(
-                    "  ⚠  Could not extract native ligand for shape reference; "
-                    f"falling back to control SMILES ({ref_smi})."
-                )
-
-        if ref_mol is None:
-            log.error("  Cannot obtain reference molecule for shape scoring.")
-            return records[:TOP_N]
-
-        shape_scores = _compute_shape_scores(records, ref_mol)
-        shape_scores = [s for s in shape_scores if s[1] is not None]
-
-        if shape_scores:
-            shape_scores.sort(key=lambda x: x[1])
-            log.info(f"  Shape scoring complete. Best score: {shape_scores[0][1]:.3f}")
-        else:
-            log.warning("  No valid shape scores computed. Using default scores.")
-            for rec in records:
-                rec.shape_score = 0.0
-            shape_scores = [(rec, 0.0) for rec in records]
+        for rec, energy in active_results:
+            rec.pb2pa_active_energy = energy
 
     # ── Select top 10 ──
-    if deps["USE_VINA"]:
-        # Rank by allosteric energy (lower = better)
-        top10 = select_top(records, "pb2pa_allosteric_energy")
-    else:
-        top10 = select_top(records, "shape_score")
+    # Rank by allosteric energy (lower = better)
+    top10 = select_top(records, "pb2pa_allosteric_energy")
 
     log.info(f"  Top {len(top10)} candidates selected.")
     for i, r in enumerate(top10):
         energy_str = (
             f"{r.pb2pa_allosteric_energy:.2f}" if r.pb2pa_allosteric_energy is not None
-            else f"{r.shape_score:.2f} (shape)"
+            else "N/A"
         )
         log.info(f"    {i + 1}. {r.compound_id}: {energy_str} kcal/mol")
 
@@ -1620,7 +1415,7 @@ def print_summary(
     log.info(f"  Top candidates reported:       {len(top10)}")
     log.info(f"  Successfully docked:           {n_docked}")
     log.info(f"  Selectivity pass (SI >= 2.0):  {n_selectivity_pass}")
-    log.info(f"  Docking engine:                {'Vina' if deps['USE_VINA'] else 'RDKit Shape (fallback)'}")
+    log.info(f"  Docking engine:                {'Vina' if deps['USE_VINA'] else 'N/A (Vina required)'}")
     log.info(f"  Redocking RMSD:                {redock_rmsd:.3f} Å" if redock_rmsd else "  Redocking RMSD:                N/A")
     log.info(f"  Redocking validated:           {validation_ok}")
     if redock_rmsd is not None:
@@ -1679,7 +1474,7 @@ def _read_records_from_sdf(sdf_path: str) -> List[CompoundRecord]:
 
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
           config: Optional[dict] = None, sdf: Optional[str] = None,
-          smiles: Optional[str] = None, quick: bool = False):
+          smiles: Optional[str] = None):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -1698,10 +1493,6 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         smiles: Optional SMILES string for single-compound screening. When
             set, the full library pipeline (phases 2/4/5) is skipped and a
             single compound is docked & summarised immediately.
-        quick: When True (typically with ``--quick``), prepared targets are
-            served from a persistent cache (``~/.autoantibiotic/cache``) instead
-            of being re-downloaded / re-cleaned. Falls back to a fresh
-            ``prepare_targets`` call if the cache is unavailable.
     """
     ensure_output_dir()
 
@@ -1713,34 +1504,36 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # ── Dependency check ──
     deps = check_dependencies()
 
+    # ── Credibility banner ──
+    if mode == "ci":
+        print(
+            "\033[1;33m"
+            "\n"
+            "  ⚠ CI/MOCK MODE — results are NOT for scientific use.\n"
+            "\033[0m",
+            flush=True,
+        )
+    elif mode == "science" and not deps["USE_VINA"]:
+        if os.environ.get("AUTOANTIBIOTIC_FORCE") != "1":
+            log.error(
+                "Science mode requires AutoDock Vina. Install via "
+                "`bash setup.sh` or Docker, or set AUTOANTIBIOTIC_FORCE=1 to "
+                "override."
+            )
+            sys.exit(1)
+
     # ── Working directory for intermediate files ──
     work_dir = str(OUTPUT_DIR / "workdir")
     pdb_dir = str(OUTPUT_DIR / "pdb")
     os.makedirs(work_dir, exist_ok=True)
 
     # ── Phase1: Target preparation ──
-    # In Quick Screen mode (--quick) we reuse a persistent cache of prepared
-    # targets instead of re-downloading / re-cleaning PDBs every run. If the
-    # cache is unavailable we transparently fall back to a fresh prepare_targets.
-    if quick:
-        log.info("─── Quick Screen mode: using cached prepared targets ───")
-        cache_dir = DEFAULT_CACHE_DIR
-        try:
-            targets = _get_cached_targets(cache_dir, deps, config)
-        except Exception as exc:
-            log.warning(
-                f"  ⚠  Target caching failed ({exc}); "
-                "falling back to standard prepare_targets()."
-            )
-            targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
-    else:
-        targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
+    targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
 
     # ── Single-compound ("--smiles") mode ──
     # Screen one molecule instantly and print a text summary. This bypasses the
     # full library generation / selectivity / reporting phases entirely so a
-    # chemist can inspect a single candidate in seconds. (When combined with
-    # --quick, prepared targets are served from the cache.)
+    # chemist can inspect a single candidate in seconds.
     if smiles is not None:
         log.info("─── Single-Compound Mode (--smiles) ───")
         rec = screen_single_compound(smiles, targets, work_dir, deps)
@@ -1798,7 +1591,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         )
         # A failed redocking validation against real PDBs is a diagnostic
         # signal, not a hard gate: log the error, keep validation_ok=False,
-        # and continue. The status is recorded in the CSV (Redock_Validated).
+        # and continue. The status is recorded in the CSV (protocol_trust).
         if (
             targets.get("mode") == "science"
             and deps["USE_VINA"] is True
@@ -1819,13 +1612,13 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             "interpreted with caution."
         )
         # Redocking validation is diagnostic, not a hard gate: never abort.
-        # The validation status is recorded in the CSV (Redock_Validated col).
+        # The validation status is recorded in the CSV (protocol_trust).
         if not os.environ.get("AUTOANTIBIOTIC_FORCE"):
             log.warning(
                 "  ⚠  Redocking validation FAILED and AUTOANTIBIOTIC_FORCE is "
                 "not set. Proceeding WITHOUT a validated docking protocol; "
-                "validation status (Redock_Validated=False) will be written to "
-                "the CSV report. Interpret all docking results with caution."
+                "validation status will be written to the CSV report "
+                "(protocol_trust). Interpret all docking results with caution."
             )
 
     # ── Release status badge (status.json) ──
@@ -1974,15 +1767,6 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--quick", action="store_true",
-        help=(
-            "Quick Screen mode. Reuse a persistent cache of prepared targets "
-            "(~/.autoantibiotic/cache) instead of re-downloading / re-cleaning "
-            "PDBs. Use with --smiles to screen a single compound in seconds, or "
-            "on its own to accelerate the full pipeline's target preparation."
-        ),
-    )
-    parser.add_argument(
         "--version", action="version",
         version=f"AutoAntibiotic Discovery Pipeline v{__version__}",
         help="Print the pipeline version and exit.",
@@ -1996,4 +1780,4 @@ if __name__ == "__main__":
 
     log.info(f"AutoAntibiotic Discovery Pipeline v{__version__}")
     main(target_count=args.count, force=args.force, library=args.library,
-         sdf=args.input_sdf, smiles=args.smiles, quick=args.quick)
+         sdf=args.input_sdf, smiles=args.smiles)

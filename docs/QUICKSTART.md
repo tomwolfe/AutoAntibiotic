@@ -8,7 +8,7 @@ for full details.
 No PDB downloads, completes in seconds — proves the install is wired up:
 
 ```bash
-AUTOANTIBIOTIC_CI=1 autoantibiotic --count 10
+autoantibiotic --count 10
 ```
 
 ## 2. Real screening (science mode)

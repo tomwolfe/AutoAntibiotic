@@ -6,7 +6,11 @@ prepare the targets, then dock one SMILES against the allosteric and active
 sites and print the resulting binding energies.
 
 Run with:
-    AUTOANTIBIOTIC_CI=1 python examples/single_compound_api.py
+    python examples/single_compound_api.py
+
+Uses CI mode (config={"mode": "ci"}) so it runs offline against the bundled
+mock PDBs without downloading real structures or requiring AutoDock Vina.
+For real screening, set mode to "science" and install Vina via `bash setup.sh`.
 """
 
 import os
@@ -22,7 +26,8 @@ SMILES = "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O"
 # Disable Vina so the example runs anywhere (no docking binary required).
 deps = {"vina": False, "USE_VINA": False}
 
-targets = prepare_targets("output/pdb", "output/workdir", deps)
+# CI mode uses the bundled mock PDBs (no network / no Vina needed).
+targets = prepare_targets("output/pdb", "output/workdir", deps, config={"mode": "ci"})
 
 rec = screen_single_compound(SMILES, targets, ".", deps)
 

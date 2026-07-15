@@ -2,9 +2,8 @@
 Docking utilities
 ==================
 
-Virtual screening helpers: AutoDock Vina invocation, single/multi-compound
-docking orchestration, and the RDKit Shape-Protrude fallback scorer used when
-Vina is unavailable.
+Virtual screening helpers: AutoDock Vina invocation and single/multi-compound
+docking orchestration.
 
 Docking-related constants (``VINA_TIMEOUT_S``, ``N_JOBS``, ``RANDOM_SEED``)
 live in ``config.constants`` and are imported at module top level, which keeps
@@ -21,8 +20,6 @@ from typing import List, Tuple, Optional, Callable
 import numpy as np
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdDistGeom
-
 from .ligand_prep import prepare_ligand_pdbqt
 from config.constants import VINA_TIMEOUT_S, N_JOBS, RANDOM_SEED
 
@@ -283,119 +280,4 @@ def _dock_worker(
         return rec, None
 
 
-def _compute_shape_fallback_score(
-    mol: Chem.Mol,
-    ref_mol: Chem.Mol,
-    seed: Optional[int] = None,
-) -> Optional[float]:
-    """
-    Fallback scoring: generate 3D conformer, compute shape protrude distance
-    vs reference (co-crystallised ligand from 6TKO). Normalise to 0–10 scale
-    (lower = better shape match).
 
-    If available, also computes electrostatic similarity and combines with
-    the shape score (50/50 weight) for a more robust metric.
-
-    Returns combined normalised score (0–10, lower = better), or None on failure.
-    """
-    if seed is None:
-        seed = RANDOM_SEED
-
-    try:
-        # Generate 3D conformer with ETKDGv3 for better stereochemistry
-        mol_3d = Chem.RWMol(mol)
-        mol_3d = Chem.AddHs(mol_3d)
-        params = rdDistGeom.ETKDGv3()
-        params.useExpTorsionAnglePrefs = True
-        params.useBasicKnowledge = True
-        params.enforceChirality = True
-        params.randomSeed = seed
-        status = rdDistGeom.EmbedMolecule(mol_3d, params)
-        if status < 0:
-            return None
-        AllChem.MMFFOptimizeMolecule(mol_3d)
-
-        ref_3d = Chem.RWMol(ref_mol)
-        ref_3d = Chem.AddHs(ref_3d)
-        params_ref = rdDistGeom.ETKDGv3()
-        params_ref.useExpTorsionAnglePrefs = True
-        params_ref.useBasicKnowledge = True
-        params_ref.enforceChirality = True
-        params_ref.randomSeed = seed
-        status_ref = rdDistGeom.EmbedMolecule(ref_3d, params_ref)
-        if status_ref < 0:
-            return None
-        AllChem.MMFFOptimizeMolecule(ref_3d)
-
-        # Shape protrude distance
-        try:
-            protrude = AllChem.GetShapeProtrudeDist(mol_3d, ref_3d)
-        except Exception:
-            try:
-                protrude = AllChem.GetShapeProtrudeDist(ref_3d, mol_3d)
-            except Exception:
-                return None
-
-        # Normalise to 0–10 scale (heuristic: typical range 0–0.5)
-        # Map: protrude=0 → score=0 (perfect), protrude=0.5 → score=10 (worst)
-        shape_norm = min(protrude / 0.05, 10.0) if protrude > 0 else 0.0
-
-        # Electrostatic similarity (optional enhancement)
-        elec_sim = None
-        try:
-            from rdkit.Chem.rdMolDescriptors import GetElectrostaticSimilarity
-            elec_sim = GetElectrostaticSimilarity(mol_3d, ref_3d)
-        except Exception:
-            pass
-
-        if elec_sim is not None:
-            # Convert electrostatic similarity (0–1, higher = better) to
-            # a penalty (0–10, lower = better) and average with shape score
-            elec_penalty = (1.0 - elec_sim) * 10.0
-            combined = 0.5 * shape_norm + 0.5 * elec_penalty
-            return combined
-
-        return shape_norm
-
-    except Exception:
-        return None
-
-
-def _compute_shape_scores(
-    records: "List[CompoundRecord]",
-    ref_mol: Chem.Mol,
-) -> List[Tuple["CompoundRecord", Optional[float]]]:
-    """
-    Compute RDKit Shape-Protrude fallback scores for a list of records.
-
-    For every record the molecule is embedded in 3D and compared against
-    *ref_mol* (the co-crystallised 6TKO ligand).  The normalised score
-    (0–10, lower = better shape match) is stored on ``rec.shape_score``.
-
-    Args:
-        records: Compounds to score (must expose ``.mol`` / ``.smiles``).
-        ref_mol: Reference molecule used for the shape comparison.
-
-    Returns:
-        List of ``(CompoundRecord, score_or_None)`` tuples.
-    """
-    total = len(records)
-    scored: List[Tuple["CompoundRecord", Optional[float]]] = []
-
-    for i, rec in enumerate(records):
-        if rec.mol is None:
-            mol = Chem.MolFromSmiles(rec.smiles)
-            if mol is None:
-                rec.shape_score = None
-                scored.append((rec, None))
-                continue
-            rec.mol = mol
-
-        score = _compute_shape_fallback_score(rec.mol, ref_mol)
-        rec.shape_score = score
-        scored.append((rec, score))
-
-        if (i + 1) % 100 == 0:
-            log.info(f"  Shape scored {i + 1} / {total}")
-
-    return scored

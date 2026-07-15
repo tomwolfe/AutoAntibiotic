@@ -24,16 +24,14 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
     Resolution order (first match wins):
         1. ``AUTOANTIBIOTIC_MODE`` environment variable — explicit override,
-           takes precedence over everything on disk. Accepted values:
-           ``"ci"`` or ``"science"``.
-        2. ``AUTOANTIBIOTIC_CI=1`` environment variable — legacy escape hatch
-           that forces ``"ci"`` (offline / mock run).
-        3. ``config.yaml`` on disk — the preferred, version-controlled source
-           of truth. The ``mode`` key must be exactly ``"ci"`` or
-           ``"science"``; anything else is ignored and the warning path runs.
-        4. Default fallback — if no file exists (or it is unreadable / missing
-           a valid ``mode``), the pipeline defaults to ``mode: ci`` (a fast,
-           offline run that proves the install works) and emits a warning.
+            takes precedence over everything on disk. Accepted values:
+            ``"ci"`` or ``"science"``.
+        2. ``config.yaml`` on disk — the preferred, version-controlled source
+            of truth. The ``mode`` key must be exactly ``"ci"`` or
+            ``"science"``; anything else is ignored and the warning path runs.
+        3. Default fallback — if no file exists (or it is unreadable / missing
+            a valid ``mode``), the pipeline defaults to ``mode: ci`` (a fast,
+            offline run that proves the install works) and emits a warning.
 
     To perform heavy scientific computations, create a ``config.yaml`` with
     ``mode: science`` (or set ``AUTOANTIBIOTIC_MODE=science``).
@@ -43,17 +41,13 @@ def load_config(config_path: str = "config.yaml") -> dict:
     """
     cfg: Dict[str, str] = {"mode": "ci"}
 
-    # ── 1 & 2: Environment overrides (explicit is preferred over implicit) ──
+    # ── 1: Environment override (explicit is preferred over implicit) ──
     env_mode = os.environ.get("AUTOANTIBIOTIC_MODE")
     if env_mode in ("ci", "science"):
         cfg["mode"] = env_mode
         return cfg
-    if os.environ.get("AUTOANTIBIOTIC_CI") == "1":
-        # Legacy escape hatch for offline CI runs.
-        cfg["mode"] = "ci"
-        return cfg
 
-    # ── 3: config.yaml on disk ──
+    # ── 2: config.yaml on disk ──
     config_file = Path(config_path)
     if config_file.exists():
         try:
