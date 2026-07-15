@@ -12,6 +12,7 @@ that it can be imported by any other module — including ``discovery_pipeline``
 
 import multiprocessing as mp
 from pathlib import Path
+from typing import Dict, List
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  RANDOM SEED
@@ -40,15 +41,67 @@ REFERENCE_ANTIBIOTICS = {
 BETA_LACTAM_SMARTS = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
 
 # Allosteric and Active site residues
-ALLOSTERIC_RESIDUES = ["ALA237", "MET241", "TYR159"]
-ACTIVE_SITE_RESIDUES = ["SER403"]
+#
+# These residue lists are target-specific and are loaded from
+# ``config/targets.yaml`` at runtime (see :func:`_load_target_residues`).
+# The hardcoded values below are kept as defaults so that the pipeline still
+# works if ``targets.yaml`` is missing, unreadable, or pyyaml is unavailable.
+_ALLOSTERIC_RESIDUES_DEFAULT = ["ALA237", "MET241", "TYR159"]
+_ACTIVE_SITE_RESIDUES_DEFAULT = ["SER403"]
+_CONSERVED_RESIDUES_DEFAULT = ["SER403", "LYS406", "TYR446"]
+_TRYPSIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS57", "ASP102", "SER195"]
+_CES1_CATALYTIC_RESIDUES_DEFAULT = ["SER221", "HIS468", "GLU354"]
 
-# Conserved catalytic residues for scientific coherence cross-check
-CONSERVED_RESIDUES = ["SER403", "LYS406", "TYR446"]
+# Names of the target residue lists that can be overridden via targets.yaml.
+_TARGET_RESIDUE_KEYS = (
+    "ALLOSTERIC_RESIDUES",
+    "ACTIVE_SITE_RESIDUES",
+    "CONSERVED_RESIDUES",
+    "TRYPSIN_CATALYTIC_RESIDUES",
+    "CES1_CATALYTIC_RESIDUES",
+)
 
-# Off-target catalytic residues for selectivity docking
-TRYPSIN_CATALYTIC_RESIDUES = ["HIS57", "ASP102", "SER195"]
-CES1_CATALYTIC_RESIDUES = ["SER221", "HIS468", "GLU354"]
+TARGETS_FILE = Path(__file__).resolve().parent / "targets.yaml"
+
+
+def _load_target_residues() -> Dict[str, List[str]]:
+    """
+    Load target residue lists from ``config/targets.yaml``.
+
+    Returns the five residue lists, falling back to the hardcoded
+    ``*_DEFAULT`` values whenever the YAML file is missing, unreadable, or
+    pyyaml is not installed. Any subset of the keys may be overridden.
+    """
+    defaults: Dict[str, List[str]] = {
+        "ALLOSTERIC_RESIDUES": _ALLOSTERIC_RESIDUES_DEFAULT,
+        "ACTIVE_SITE_RESIDUES": _ACTIVE_SITE_RESIDUES_DEFAULT,
+        "CONSERVED_RESIDUES": _CONSERVED_RESIDUES_DEFAULT,
+        "TRYPSIN_CATALYTIC_RESIDUES": _TRYPSIN_CATALYTIC_RESIDUES_DEFAULT,
+        "CES1_CATALYTIC_RESIDUES": _CES1_CATALYTIC_RESIDUES_DEFAULT,
+    }
+    try:
+        import yaml
+
+        if TARGETS_FILE.exists():
+            with open(TARGETS_FILE) as fh:
+                data = yaml.safe_load(fh) or {}
+            targets = data.get("targets", {}) if isinstance(data, dict) else {}
+            for key in _TARGET_RESIDUE_KEYS:
+                if key in targets and targets[key]:
+                    defaults[key] = list(targets[key])
+    except Exception:
+        # Any failure (missing file, missing pyyaml, bad YAML) → use defaults.
+        pass
+    return defaults
+
+
+_loaded_target_residues = _load_target_residues()
+
+ALLOSTERIC_RESIDUES = _loaded_target_residues["ALLOSTERIC_RESIDUES"]
+ACTIVE_SITE_RESIDUES = _loaded_target_residues["ACTIVE_SITE_RESIDUES"]
+CONSERVED_RESIDUES = _loaded_target_residues["CONSERVED_RESIDUES"]
+TRYPSIN_CATALYTIC_RESIDUES = _loaded_target_residues["TRYPSIN_CATALYTIC_RESIDUES"]
+CES1_CATALYTIC_RESIDUES = _loaded_target_residues["CES1_CATALYTIC_RESIDUES"]
 
 # Grid box defaults (Angstroms)
 ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)

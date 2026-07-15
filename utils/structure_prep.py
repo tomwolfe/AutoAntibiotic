@@ -34,10 +34,20 @@ def _extract_native_ligand_from_holo(
     holo_pdb_path: str,
     output_ligand_smi: str,
     output_ligand_pdbqt: str,
+    resname_override: Optional[str] = None,
 ) -> Optional[str]:
     """
     Parse the holo structure (6TKO), locate the co-crystallised ligand,
     write its SMILES to *output_ligand_smi* and its PDBQT to *output_ligand_pdbqt*.
+
+    Args:
+        holo_pdb_path: Path to the holo PDB structure.
+        output_ligand_smi: Destination path for the ligand SMILES.
+        output_ligand_pdbqt: Destination path for the ligand PDBQT.
+        resname_override: Optional explicit ligand residue name (e.g. "CEF").
+            When provided, auto-detection is skipped and the residue with this
+            name is selected directly. Useful for complex structures where the
+            heuristic picks the wrong molecule.
 
     Returns the SMILES string, or None on failure.
     """
@@ -55,7 +65,7 @@ def _extract_native_ligand_from_holo(
         if upper in skip_names:
             return False
         if any(upper.startswith(prefix) for prefix in ("LIG", "INH", "BPN", "NAT",
-                                                        "CEF", "MER", "VAN")):
+                                                         "CEF", "MER", "VAN")):
             return True
         return False
 
@@ -63,43 +73,70 @@ def _extract_native_ligand_from_holo(
         parser = PDBParser(QUIET=True)
         struct = parser.get_structure("6TKO", holo_pdb_path)
 
-        ligand_residues = []
-        for model in struct:
-            for chain in model:
-                for residue in chain:
-                    if residue.get_id()[0] in ("H_", "W", "H_M"):
-                        continue
-                    if residue.get_id()[0] == " ":
-                        continue
-                    resname = residue.get_resname().strip()
-                    if resname in ("HOH", "WAT", "SOL"):
-                        continue
-                    ligand_residues.append((chain.get_id(), residue))
-
-        if not ligand_residues:
-            log.warning("  ⚠  No hetero-ligand found in 6TKO.")
-            return None
-
-        # Filter out buffers/ions, prefer known antibiotic names
-        filtered = []
-        for chain_id, res in ligand_residues:
-            resname = res.get_resname().strip().upper()
-            if _is_likely_ligand(resname):
-                filtered.append((chain_id, res))
-
-        if not filtered:
-            log.warning("  ⚠  No known antibiotic/ligand residue found. Falling back to first HETATM.")
-            filtered = ligand_residues  # fallback to original list
-
-        if len(filtered) > 1:
-            # Prefer the one with the highest heavy atom count
-            best = max(filtered, key=lambda x: x[1].get_num_atoms())
-            chain_id, lig_res = best
-            log.info(f"  Selected ligand (most heavy atoms): chain {chain_id}, "
-                     f"residue {lig_res.get_resname()} ({lig_res.get_num_atoms()} atoms)")
+        # ── Optional explicit resname override (Task 3) ─────────────────────
+        if resname_override is not None:
+            override = resname_override.strip().upper()
+            lig_res = None
+            chain_id = None
+            for model in struct:
+                for chain in model:
+                    for residue in chain:
+                        if residue.get_resname().strip().upper() == override:
+                            lig_res = residue
+                            chain_id = chain.get_id()
+                            break
+                    if lig_res is not None:
+                        break
+                if lig_res is not None:
+                    break
+            if lig_res is None:
+                log.warning(
+                    f"  ⚠  resname_override '{resname_override}' not found in "
+                    f"{holo_pdb_path}."
+                )
+                return None
+            log.info(
+                f"  Native ligand (resname override '{resname_override}'): "
+                f"chain {chain_id}, residue {lig_res.get_resname()}"
+            )
         else:
-            chain_id, lig_res = filtered[0]
-            log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
+            ligand_residues = []
+            for model in struct:
+                for chain in model:
+                    for residue in chain:
+                        if residue.get_id()[0] in ("H_", "W", "H_M"):
+                            continue
+                        if residue.get_id()[0] == " ":
+                            continue
+                        resname = residue.get_resname().strip()
+                        if resname in ("HOH", "WAT", "SOL"):
+                            continue
+                        ligand_residues.append((chain.get_id(), residue))
+
+            if not ligand_residues:
+                log.warning("  ⚠  No hetero-ligand found in 6TKO.")
+                return None
+
+            # Filter out buffers/ions, prefer known antibiotic names
+            filtered = []
+            for chain_id, res in ligand_residues:
+                resname = res.get_resname().strip().upper()
+                if _is_likely_ligand(resname):
+                    filtered.append((chain_id, res))
+
+            if not filtered:
+                log.warning("  ⚠  No known antibiotic/ligand residue found. Falling back to first HETATM.")
+                filtered = ligand_residues  # fallback to original list
+
+            if len(filtered) > 1:
+                # Prefer the one with the highest heavy atom count
+                best = max(filtered, key=lambda x: x[1].get_num_atoms())
+                chain_id, lig_res = best
+                log.info(f"  Selected ligand (most heavy atoms): chain {chain_id}, "
+                         f"residue {lig_res.get_resname()} ({lig_res.get_num_atoms()} atoms)")
+            else:
+                chain_id, lig_res = filtered[0]
+                log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
 
         # Write ligand as a separate PDB file
         pdbio = PDBIO()

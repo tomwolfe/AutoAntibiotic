@@ -12,3 +12,15 @@
 # -----------------------------------------------------------------------------
 
 mode: science
+
+# Native ligand override (optional)
+# -----------------------------------------------------------------------------
+# When redocking validation extracts the native ligand from the holo PDB, it
+# normally auto-detects the largest non-buffer hetero-residue. In complex
+# structures this can pick the wrong molecule. Set this to the exact ligand
+# residue name (case-insensitive) to force selection, e.g.:
+#
+# native_ligand_resname: CEF
+#
+# Uncomment and set as needed; leave absent for automatic detection.
+# native_ligand_resname: CEF

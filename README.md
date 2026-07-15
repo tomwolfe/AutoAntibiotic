@@ -165,6 +165,39 @@ If no `config.yaml` exists, the pipeline defaults to `mode: ci` so a new user
 sees results immediately. A real, heavy computational run requires an explicit
 `config.yaml` with `mode: science`.
 
+### Target-specific residue configuration (`config/targets.yaml`)
+
+The residue lists used to build docking grids and for scientific cross-checks —
+`ALLOSTERIC_RESIDUES`, `ACTIVE_SITE_RESIDUES`, `CONSERVED_RESIDUES`,
+`TRYPSIN_CATALYTIC_RESIDUES`, and `CES1_CATALYTIC_RESIDUES` — live in
+`config/targets.yaml` under a top-level `targets:` key:
+
+```yaml
+targets:
+  ALLOSTERIC_RESIDUES: ["ALA237", "MET241", "TYR159"]
+  ACTIVE_SITE_RESIDUES: ["SER403"]
+  CONSERVED_RESIDUES: ["SER403", "LYS406", "TYR446"]
+  TRYPSIN_CATALYTIC_RESIDUES: ["HIS57", "ASP102", "SER195"]
+  CES1_CATALYTIC_RESIDUES: ["SER221", "HIS468", "GLU354"]
+```
+
+`config/constants.py` loads these at runtime; you may override any subset. If
+`config/targets.yaml` is missing, unreadable, or `pyyaml` is unavailable, the
+pipeline falls back to the original hardcoded defaults, so it keeps working.
+
+### Native ligand override (`native_ligand_resname`)
+
+During redocking validation the pipeline auto-detects the co-crystallised
+ligand in the holo PDB. In complex structures this can select the wrong
+molecule. Force the correct residue by name:
+
+```yaml
+native_ligand_resname: CEF
+```
+
+When set, auto-detection is skipped and the residue with that name (e.g. `CEF`)
+is selected directly. Leave it absent for automatic detection.
+
 ---
 
 ## License

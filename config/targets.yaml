@@ -1,0 +1,18 @@
+# AutoAntibiotic Discovery Pipeline — Target-specific configuration
+# -----------------------------------------------------------------------------
+# Residue lists used to build docking grid boxes and for scientific
+# cross-checks. These were previously hardcoded in ``config/constants.py``.
+#
+# Editing this file lets you re-target the pipeline (or adjust the known
+# catalytic/active-site residues) without touching the source code.
+#
+# If this file is missing or cannot be parsed, ``config/constants.py`` falls
+# back to the original hardcoded defaults, so the pipeline keeps working.
+# -----------------------------------------------------------------------------
+
+targets:
+  ALLOSTERIC_RESIDUES: ["ALA237", "MET241", "TYR159"]
+  ACTIVE_SITE_RESIDUES: ["SER403"]
+  CONSERVED_RESIDUES: ["SER403", "LYS406", "TYR446"]
+  TRYPSIN_CATALYTIC_RESIDUES: ["HIS57", "ASP102", "SER195"]
+  CES1_CATALYTIC_RESIDUES: ["SER221", "HIS468", "GLU354"]

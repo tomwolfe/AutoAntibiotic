@@ -12,7 +12,7 @@ dependencies = [
     "rdkit-pypi",
     "biopython",
     "pandas",
-    "numpy",
+    "numpy<2",
     "pyyaml",
     "pytest",
 ]

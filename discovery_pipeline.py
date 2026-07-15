@@ -314,6 +314,7 @@ def run_redocking_validation(
     work_dir: str,
     deps: dict,
     mode: str = "science",
+    config: Optional[dict] = None,
 ) -> Tuple[bool, Optional[float]]:
     """
     Phase 0 — Protocol Validation.
@@ -334,7 +335,12 @@ def run_redocking_validation(
     lig_pdbqt = os.path.join(work_dir, "native_ligand.pdbqt")
     docked_pdb = os.path.join(work_dir, "native_docked.pdb")
 
-    smi = _extract_native_ligand_from_holo(holo_pdb_path, lig_smi, lig_pdbqt)
+    # Optional explicit native-ligand resname override from config (Task 3).
+    resname_override = (config or {}).get("native_ligand_resname")
+
+    smi = _extract_native_ligand_from_holo(
+        holo_pdb_path, lig_smi, lig_pdbqt, resname_override=resname_override
+    )
     if smi is None:
         log.warning("  ⚠  Could not extract native ligand. Skipping redocking validation.")
         return False, None
@@ -1691,6 +1697,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
                 work_dir=work_dir,
                 deps=deps,
                 mode=targets.get("mode"),
+                config=config,
             )
     else:
         validation_ok, redock_rmsd = run_redocking_validation(
@@ -1699,6 +1706,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             work_dir=work_dir,
             deps=deps,
             mode=targets.get("mode"),
+            config=config,
         )
         # A failed redocking validation against real PDBs is a diagnostic
         # signal, not a hard gate: log the error, keep validation_ok=False,

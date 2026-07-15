@@ -47,6 +47,12 @@ class LigandPreparator:
         """
         meeko_error = None
         try:
+            # Newer meeko releases call ``Mol.HasQuery()``, which is absent in
+            # older RDKit builds (e.g. 2022.09). Patch it in if missing so the
+            # meeko preparation path works across RDKit versions.
+            if not hasattr(Chem.Mol, "HasQuery"):
+                Chem.Mol.HasQuery = lambda self: False
+
             from meeko import MoleculePreparation, PDBQTWriterLegacy
             preparator = MoleculePreparation()
             mol_setups = preparator.prepare(mol)
@@ -58,7 +64,10 @@ class LigandPreparator:
             raise RuntimeError("Meeko produced an empty PDBQT string for the input molecule")
         except (ImportError, AttributeError, RuntimeError) as exc:
             meeko_error = str(exc)
-            log.warning(f"Meeko failed: {exc}")
+            log.warning(
+                f"Meeko failed: {exc}. For better accuracy, install it via "
+                "'pip install meeko'."
+            )
 
         obabel_error = None
         try:
@@ -79,9 +88,8 @@ class LigandPreparator:
             log.warning(f"obabel fallback failed: {exc}")
 
         raise RuntimeError(
-            "Cannot convert Mol to PDBQT. Ensure meeko is installed "
-            "(pip install meeko) or OpenBabel is available on PATH. "
-            "Alternatively, set USE_VINA=False to skip PDBQT-dependent steps."
+            "PDBQT preparation failed. Please ensure either 'meeko' or "
+            "'openbabel' is installed and on your PATH."
             f" meeko error: {meeko_error}; obabel error: {obabel_error}"
         )
 

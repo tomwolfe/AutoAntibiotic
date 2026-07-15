@@ -1365,5 +1365,164 @@ class TestResistanceUnverifiedResidue:
         assert "unverified" in notes.lower(), notes
 
 
+# ── Test: Task 1 — Externalised target residue lists ──────────────────────
+
+class TestTargetResidueLoading:
+    def test_load_target_residues_override(self, tmp_path):
+        """_load_target_residues merges a subset override from targets.yaml."""
+        from config import constants
+
+        yaml_file = tmp_path / "targets.yaml"
+        yaml_file.write_text(
+            "targets:\n  ALLOSTERIC_RESIDUES: ['X1', 'X2']\n"
+        )
+        old = constants.TARGETS_FILE
+        constants.TARGETS_FILE = yaml_file
+        try:
+            result = constants._load_target_residues()
+        finally:
+            constants.TARGETS_FILE = old
+
+        assert result["ALLOSTERIC_RESIDUES"] == ["X1", "X2"]
+        # Untouched lists keep their defaults.
+        assert result["CONSERVED_RESIDUES"] == ["SER403", "LYS406", "TYR446"]
+
+    def test_load_target_residues_fallback_when_missing(self, tmp_path):
+        """Missing targets.yaml falls back to hardcoded defaults."""
+        from config import constants
+
+        missing = tmp_path / "does_not_exist.yaml"
+        old = constants.TARGETS_FILE
+        constants.TARGETS_FILE = missing
+        try:
+            result = constants._load_target_residues()
+        finally:
+            constants.TARGETS_FILE = old
+
+        assert result["ALLOSTERIC_RESIDUES"] == ["ALA237", "MET241", "TYR159"]
+        assert result["ACTIVE_SITE_RESIDUES"] == ["SER403"]
+        assert result["CONSERVED_RESIDUES"] == ["SER403", "LYS406", "TYR446"]
+        assert result["TRYPSIN_CATALYTIC_RESIDUES"] == ["HIS57", "ASP102", "SER195"]
+        assert result["CES1_CATALYTIC_RESIDUES"] == ["SER221", "HIS468", "GLU354"]
+
+    def test_constants_expose_loaded_residues(self):
+        """Module-level residue constants are populated from targets.yaml."""
+        from config.constants import (
+            ALLOSTERIC_RESIDUES,
+            ACTIVE_SITE_RESIDUES,
+            CONSERVED_RESIDUES,
+            TRYPSIN_CATALYTIC_RESIDUES,
+            CES1_CATALYTIC_RESIDUES,
+        )
+
+        assert ALLOSTERIC_RESIDUES == ["ALA237", "MET241", "TYR159"]
+        assert ACTIVE_SITE_RESIDUES == ["SER403"]
+        assert CONSERVED_RESIDUES == ["SER403", "LYS406", "TYR446"]
+        assert TRYPSIN_CATALYTIC_RESIDUES == ["HIS57", "ASP102", "SER195"]
+        assert CES1_CATALYTIC_RESIDUES == ["SER221", "HIS468", "GLU354"]
+
+
+# ── Test: Task 2 — LigandPreparator error clarity ─────────────────────────
+
+class TestLigandPreparatorError:
+    @staticmethod
+    def _benzene_mol():
+        from rdkit.Chem import AllChem
+
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol)
+        return mol
+
+    def test_raises_clear_error_when_both_backends_fail(self):
+        """
+        When both meeko and obabel are unavailable, LigandPreparator.prepare
+        raises a RuntimeError carrying the exact user-facing message.
+        """
+        from utils.ligand_prep import LigandPreparator
+
+        preparator = LigandPreparator()
+        with patch.dict(sys.modules, {"meeko": None}):
+            with patch("utils.ligand_prep.subprocess.run") as mock_run:
+                mock_run.side_effect = FileNotFoundError("obabel not on PATH")
+                with pytest.raises(RuntimeError) as exc_info:
+                    preparator.prepare(self._benzene_mol())
+        assert (
+            "PDBQT preparation failed. Please ensure either 'meeko' or "
+            "'openbabel' is installed and on your PATH."
+            in str(exc_info.value)
+        )
+
+    def test_warns_to_install_meeko_on_failure(self):
+        """
+        A meeko failure logs a warning suggesting 'pip install meeko'.
+        """
+        from utils.ligand_prep import LigandPreparator
+
+        mol = Chem.MolFromSmiles("c1ccccc1")
+        mol = Chem.AddHs(mol)
+        from rdkit.Chem import AllChem
+        AllChem.EmbedMolecule(mol)
+
+        preparator = LigandPreparator()
+        with patch.dict(sys.modules, {"meeko": None}):
+            with patch("utils.ligand_prep.subprocess.run") as mock_run:
+                mock_run.side_effect = FileNotFoundError("obabel not on PATH")
+                with patch.object(log, "warning") as mock_warn:
+                    with pytest.raises(RuntimeError):
+                        preparator.prepare(mol)
+                    assert any(
+                        "pip install meeko" in str(call.args[0])
+                        for call in mock_warn.call_args_list
+                    ), "Expected a warning suggesting 'pip install meeko'"
+
+
+# ── Test: Task 3 — Native ligand resname override ─────────────────────────
+
+class TestNativeLigandResnameOverride:
+    @staticmethod
+    def _write_holo_pdb(path: Path) -> None:
+        # Two ligands: SO4 (buffer, auto-detect skipped) and CEF (target).
+        path.write_text(textwrap.dedent("""\
+            HETATM    1  C1  CEF A 500       1.000   2.000   3.000  1.00  0.00           C
+            HETATM    2  C2  CEF A 500       2.000   3.000   4.000  1.00  0.00           C
+            HETATM    3  S1  SO4 A 501       9.000   9.000   9.000  1.00  0.00           S
+            END
+        """))
+
+    def test_resname_override_selects_exact_residue(self, tmp_path):
+        """resname_override picks the named residue and writes it to a PDB."""
+        from utils.structure_prep import _extract_native_ligand_from_holo
+
+        holo = tmp_path / "holo.pdb"
+        self._write_holo_pdb(holo)
+        smi = tmp_path / "lig.smi"
+        pdbqt = tmp_path / "lig.pdbqt"
+
+        result = _extract_native_ligand_from_holo(
+            str(holo), str(smi), str(pdbqt), resname_override="CEF"
+        )
+        # Ligand PDB is written as the .pdb sibling of the .pdbqt path.
+        lig_pdb = str(pdbqt).replace(".pdbqt", ".pdb")
+        assert Path(lig_pdb).exists()
+        content = Path(lig_pdb).read_text()
+        assert "CEF" in content
+        assert "SO4" not in content
+
+    def test_resname_override_missing_returns_none(self, tmp_path):
+        """An override name absent from the PDB returns None gracefully."""
+        from utils.structure_prep import _extract_native_ligand_from_holo
+
+        holo = tmp_path / "holo.pdb"
+        self._write_holo_pdb(holo)
+        smi = tmp_path / "lig.smi"
+        pdbqt = tmp_path / "lig.pdbqt"
+
+        result = _extract_native_ligand_from_holo(
+            str(holo), str(smi), str(pdbqt), resname_override="NOPE"
+        )
+        assert result is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
