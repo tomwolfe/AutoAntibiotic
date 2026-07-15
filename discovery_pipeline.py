@@ -78,6 +78,29 @@ from utils.structure_prep import (
     compute_residue_centroid,
 )
 
+# Library generation (scaffolds, controls, CompoundRecord) lives in its own
+# flat module so the orchestrator stays focused on flow control. Re-exported
+# here so existing call sites / tests that reference
+# ``discovery_pipeline.generate_candidate_library`` / ``CompoundRecord`` keep
+# working unchanged.
+from utils.library_gen import (
+    generate_candidate_library,
+    NATURAL_PRODUCT_SCAFFOLDS,
+    CONTROL_SMILES,
+    CompoundRecord,
+    _count_atoms,
+)
+
+# Reporting / artifact generation (CSV, images, interaction diagrams, PyMOL
+# script) lives in its own flat module. Re-exported here for backward compat.
+from utils.reporting import (
+    generate_csv_report,
+    generate_images,
+    generate_interaction_diagram,
+    generate_pymol_script,
+    _print_single_summary,
+)
+
 # Configuration constants are centralised in config.constants to break the
 # former circular import between this module and the utils package. They are
 # re-exported here for backward compatibility with existing call sites/tests.
@@ -107,6 +130,16 @@ from config.constants import (
 
 # Preserve the original import-time side effect (seeding for reproducibility).
 np.random.seed(RANDOM_SEED)
+
+# Package version, resolved from pyproject.toml metadata when installed (e.g.
+# via `pip install .`) and falling back to a sensible default during local
+# development. Exposed through the `--version` CLI flag.
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("autoantibiotic-discovery-pipeline")
+except Exception:  # pragma: no cover - local/dev fallback
+    __version__ = "3.1.0"
 
 # Configuration loading is isolated in config.loader so the orchestrator stays
 # focused on flow control. Re-exported here so call sites that reference
@@ -311,32 +344,6 @@ def _get_cached_targets(
     return targets
 
 
-def _print_single_summary(rec: "CompoundRecord") -> None:
-    """Print a concise single-compound screening summary table to stdout."""
-    inter = getattr(rec, "interactions", None)
-    key_interactions = []
-    if inter:
-        if inter.get("Ser403_contact"):
-            key_interactions.append("Ser403")
-        if inter.get("Lys406_Hbond"):
-            key_interactions.append("Lys406")
-        if inter.get("Tyr446_Hbond"):
-            key_interactions.append("Tyr446")
-    key_str = ", ".join(key_interactions) if key_interactions else "None detected"
-
-    fmt = lambda v: f"{v:.2f} kcal/mol" if v is not None else "N/A"
-
-    print("\n" + "=" * 64)
-    print("  SINGLE-COMPOUND SCREEN SUMMARY")
-    print("=" * 64)
-    print(f"  {'Compound ID':<20}: {rec.compound_id}")
-    print(f"  {'SMILES':<20}: {rec.smiles}")
-    print(f"  {'Allosteric Energy':<20}: {fmt(rec.pb2pa_allosteric_energy)}")
-    print(f"  {'Active Energy':<20}: {fmt(rec.pb2pa_active_energy)}")
-    print(f"  {'Key Interactions':<20}: {key_str}")
-    print("=" * 64 + "\n")
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 0 — DEPENDENCY CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -379,6 +386,7 @@ def check_dependencies() -> dict:
 
     # ── External binaries (non-fatal; affect available features) ──
     vina_available = False
+    vina_version = ""
     try:
         vina_result = subprocess.run(
             ["vina", "--version"], capture_output=True, text=True, timeout=10
@@ -398,10 +406,20 @@ def check_dependencies() -> dict:
         missing_bins.append("AutoDock Vina (vina)")
 
     obabel_available = False
+    obabel_version = ""
     try:
-        subprocess.run(["obabel", "--version"], capture_output=True, timeout=10)
+        obabel_result = subprocess.run(
+            ["obabel", "--version"], capture_output=True, text=True, timeout=10
+        )
         obabel_available = True
-        log.info("  ✓  OpenBabel binary found on PATH.")
+        obabel_version = (obabel_result.stdout or obabel_result.stderr).strip()
+        if obabel_version:
+            log.info(
+                f"  ✓  OpenBabel binary found on PATH "
+                f"(version: {obabel_version})"
+            )
+        else:
+            log.info("  ✓  OpenBabel binary found on PATH.")
     except (FileNotFoundError, subprocess.TimeoutExpired):
         missing_bins.append("OpenBabel (obabel)")
 
@@ -427,19 +445,25 @@ def check_dependencies() -> dict:
         )
         # High-visibility, bold error printed directly to stdout so the user
         # is not silently left on the (slower, less accurate) fallback path.
-        # The command is copy-pasteable so the fix is one line away.
+        # The fix is one line away via setup.sh or Docker.
         print(
             "\033[1;31m"
             "\n"
             "  ╔══════════════════════════════════════════════════════════════════╗\n"
             "  ║  ERROR: AutoDock Vina not found.                                ║\n"
-            "  ║  Install it via:                                                ║\n"
-            "  ║    conda install -c conda-forge vina                            ║\n"
+            "  ║  Install it with one command:                                   ║\n"
+            "  ║    bash setup.sh        (creates the 'autoantibiotic' env)      ║\n"
+            "  ║  or run everything in a container:                              ║\n"
+            "  ║    docker run autoantibiotic --smiles \"...\"                     ║\n"
+            "  ║  Or manually: conda install -c conda-forge vina                 ║\n"
             "  ╚══════════════════════════════════════════════════════════════════╝\n"
             "\033[0m",
             flush=True,
         )
-        log.error("Error: AutoDock Vina not found. Install it via: conda install -c conda-forge vina")
+        log.error(
+            "Error: AutoDock Vina not found. Fix via `bash setup.sh`, "
+            "the Docker image, or `conda install -c conda-forge vina`."
+        )
 
     if not obabel_available:
         log.warning(
@@ -453,13 +477,34 @@ def check_dependencies() -> dict:
             "\n"
             "  ╔══════════════════════════════════════════════════════════════════╗\n"
             "  ║  ERROR: OpenBabel not found.                                    ║\n"
-            "  ║  Install it via:                                                ║\n"
-            "  ║    conda install -c conda-forge openbabel                       ║\n"
+            "  ║  Install it with one command:                                   ║\n"
+            "  ║    bash setup.sh        (creates the 'autoantibiotic' env)      ║\n"
+            "  ║  or run everything in a container:                              ║\n"
+            "  ║    docker run autoantibiotic --smiles \"...\"                     ║\n"
+            "  ║  Or manually: conda install -c conda-forge openbabel            ║\n"
             "  ╚══════════════════════════════════════════════════════════════════╝\n"
             "\033[0m",
             flush=True,
         )
-        log.error("Error: OpenBabel not found. Install it via: conda install -c conda-forge openbabel")
+        log.error(
+            "Error: OpenBabel not found. Fix via `bash setup.sh`, "
+            "the Docker image, or `conda install -c conda-forge openbabel`."
+        )
+
+    # ── Success banner ──
+    # All Python packages are required (checked above) and the two external
+    # binaries (Vina + OpenBabel) are the only remaining gating items. When
+    # both are present the environment is fully ready to screen.
+    if vina_available and obabel_available:
+        print(
+            "\033[1;32m"
+            "\n"
+            f"  ✅ Ready to screen!  "
+            f"(Vina: {vina_version or 'found'} | "
+            f"OpenBabel: {obabel_version or 'found'})\n"
+            "\033[0m",
+            flush=True,
+        )
 
     return {"vina": vina_available, "USE_VINA": vina_available}
 
@@ -871,244 +916,13 @@ def prepare_targets(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  DATA CLASSES
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@dataclass
-class CompoundRecord:
-    """Stores all computed properties for a single candidate."""
-
-    # Selectivity confidence labels
-    CONF_HIGH = "High"
-    CONF_LOW = "Low"
-    CONF_NONE = "None"
-
-    compound_id: str
-    smiles: str
-    mol: Optional[Chem.Mol] = None
-
-    # Docking scores
-    pb2pa_allosteric_energy: Optional[float] = None
-    pb2pa_active_energy: Optional[float] = None
-    human_trypsin_energy: Optional[float] = None
-    human_ces1_energy: Optional[float] = None
-
-    # Selectivity
-    selectivity_index: Optional[float] = None
-
-    # Similarity
-    max_similarity: float = 0.0
-
-    # ADMET
-    passes_lipinski: bool = False
-    qed_score: float = 0.0
-    passes_pains: bool = False
-
-    # Resistance flags
-    resistance_notes: str = ""
-
-    # Fallback shape score (0–10, lower better)
-    shape_score: Optional[float] = None
-
-    # Selectivity confidence based on how many human off-targets were docked:
-    #   "High" if 2 human targets provided valid energies,
-    #   "Low"  if 1 human target provided a valid energy,
-    #   "None" if 0 human targets provided a valid energy.
-    selectivity_confidence: str = "None"
-
-    # Path to the active-site Vina docked pose (PDBQT), populated during
-    # screening so that pose-based interaction analysis need not re-dock.
-    active_docked_pdbqt: Optional[str] = None
-
-    # Interaction fingerprint (dict returned by analyze_binding_interactions)
-    # captured during Phase 4 so reporting can expose per-residue H-bond flags
-    # without re-parsing the docked pose.
-    interactions: Optional[Dict[str, Union[bool, float]]] = None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 2 — LIBRARY GENERATION & FILTERING
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# 15 diverse natural product scaffolds (SMILES)
-NATURAL_PRODUCT_SCAFFOLDS = [
-    "O=c1c(O)c2c(oc3cc(O)cc(O)c3c2=O)c(O)c1O",                 # Quercetin
-    "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                # Resveratrol
-    "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin
-    "COc1cc2c(cc1OC)[n+]1ccc3cc4c(cc3c1CC2)OCO4",              # Berberine
-    "CC1(C)OC2C3C(=O)OC4C(OO5)C3C5C2C4O1",                     # Artemisinin (approximate)
-    "Oc1ccccc1C(=O)O",                                         # Salicylic acid (salicylate)
-    "O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12",                    # 7-Hydroxyflavone (flavonoid core)
-    "CC1OCCCC(=O)C1",                                          # Macrolide-like lactone core (no β-lactam)
-    "Oc1c(O)c(O)cc(C(=O)O)c1",                                 # Gallic acid (phenolic)
-    "CC1=C(C=C(C=C1)O)O",                                      # Hydroquinone
-    "COc1cc2c(cc1OC)C(=O)C3=C(O)C=CC(=C3O2)C",                 # Rottlerin
-    "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",                            # Caffeine
-]
-
-# Positive control SMILES (to verify pipeline)
-CONTROL_SMILES = {
-    "Ceftaroline": "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
-    "Meropenem": "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
-}
-
-
-def _count_atoms(mol: Chem.Mol) -> int:
-    """Heavy-atom count for a molecule."""
-    return mol.GetNumHeavyAtoms()
-
-
-def generate_candidate_library(
-    target_count: int = 500,
-    seed: int = RANDOM_SEED,
-    input_csv: Optional[str] = None,
-) -> List[CompoundRecord]:
-    """
-    Phase 2.1 — Generate a diverse library.
-
-    If *input_csv* is provided, the library is read directly from that CSV
-    file (expected columns: ``smiles``, ``compound_id``) and the BRICS
-    scaffold-generation logic is skipped entirely.
-
-    Otherwise, a library is generated by BRICS decomposition of natural
-    product scaffolds, fragment recombination, and expansion.
-
-    Args:
-        target_count: Desired number of compounds (~500).
-        seed: Random seed for reproducibility.
-        input_csv: Optional path to an external compound library CSV.
-
-    Returns:
-        List of CompoundRecord objects (SMILES only, no computed props yet).
-    """
-    log.info("─── Phase 2: Library Generation ───")
-
-    if input_csv is not None:
-        log.info(f"  Loading external compound library from CSV: {input_csv}")
-        if not os.path.exists(input_csv):
-            raise FileNotFoundError(f"Input library CSV not found: {input_csv}")
-
-        df = pd.read_csv(input_csv)
-        df_cols = {str(c).strip().lower() for c in df.columns}
-        if not {"smiles", "compound_id"}.issubset(df_cols):
-            raise ValueError(
-                f"Input CSV must contain 'smiles' and 'compound_id' columns; "
-                f"found: {list(df.columns)}"
-            )
-
-        records = []
-        for _, row in df.iterrows():
-            smi = str(row["smiles"]).strip()
-            cid = str(row["compound_id"]).strip()
-            if not smi or smi.lower() in ("nan", "none"):
-                log.warning(f"  Skipping row with empty SMILES (compound_id={cid}).")
-                continue
-            mol = Chem.MolFromSmiles(smi)
-            records.append(CompoundRecord(
-                compound_id=cid,
-                smiles=smi,
-                mol=mol,
-            ))
-        log.info(f"  Loaded {len(records)} compounds from external CSV (BRICS skipped).")
-        return records
-
-    all_scaffolds = NATURAL_PRODUCT_SCAFFOLDS
-    scaffold_mols = []
-    for smi in all_scaffolds:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            scaffold_mols.append(mol)
-
-    log.info(f"  Loaded {len(scaffold_mols)} valid scaffolds.")
-
-    # BRICS decompose all scaffolds
-    all_fragments = set()
-    for mol in scaffold_mols:
-        try:
-            fragments = BRICS.BRICSDecompose(mol, minFragmentSize=8)
-            for frag_smi in fragments:
-                frag_mol = Chem.MolFromSmiles(frag_smi)
-                if frag_mol is not None and _count_atoms(frag_mol) >= 8:
-                    all_fragments.add(frag_smi)
-        except Exception:
-            continue
-
-    frag_mols = []
-    for smi in all_fragments:
-        m = Chem.MolFromSmiles(smi)
-        if m is not None:
-            frag_mols.append(m)
-
-    log.info(f"  Generated {len(frag_mols)} unique fragments (>=8 heavy atoms).")
-
-    if len(frag_mols) < 2:
-        log.warning("  Too few fragments for meaningful recombination. Falling back to scaffold enumeration.")
-        # Fallback: use the scaffolds directly plus random variations
-        candidates = []
-        for mol in scaffold_mols:
-            smi = Chem.MolToSmiles(mol)
-            candidates.append(CompoundRecord(
-                compound_id=f"SCAFFOLD_{len(candidates)}",
-                smiles=smi,
-                mol=mol,
-            ))
-        # Add controls
-        for name, smi in CONTROL_SMILES.items():
-            mol = Chem.MolFromSmiles(smi)
-            candidates.append(CompoundRecord(
-                compound_id=f"CTRL_{name}",
-                smiles=smi,
-                mol=mol,
-            ))
-        log.info(f"  Fallback library: {len(candidates)} entries.")
-        return candidates
-
-    # Recombine fragments to create novel analogs via BRICSBuild over all fragments
-    seen_smiles = set()
-    records = []
-
-    log.info(f"  Building recombinant library via BRICS.BRICSBuild (target ≤ {target_count})…")
-    builder = BRICS.BRICSBuild(list(frag_mols))
-    for product in builder:
-        try:
-            Chem.SanitizeMol(product)
-        except Exception:
-            continue
-        smi = Chem.MolToSmiles(product)
-        if smi in seen_smiles:
-            continue
-        seen_smiles.add(smi)
-
-        # Generate unique ID
-        cid = f"AA-{len(records):04d}"
-        records.append(CompoundRecord(
-            compound_id=cid,
-            smiles=smi,
-            mol=product,
-        ))
-
-        if len(records) % 100 == 0:
-            log.info(f"  Generated {len(records)} / {target_count} candidates…")
-
-        if len(records) >= target_count:
-            break
-
-    # Add controls explicitly (ensures at least controls are always returned)
-    for name, smi in CONTROL_SMILES.items():
-        if len(records) >= target_count:
-            break
-        if smi not in seen_smiles:
-            mol = Chem.MolFromSmiles(smi)
-            if mol is not None:
-                records.append(CompoundRecord(
-                    compound_id=f"CTRL_{name}",
-                    smiles=smi,
-                    mol=mol,
-                ))
-                seen_smiles.add(smi)
-
-    log.info(f"  Library generation complete: {len(records)} compounds.")
-    return records
+#
+# NOTE: The ``CompoundRecord`` dataclass, ``NATURAL_PRODUCT_SCAFFOLDS``,
+# ``CONTROL_SMILES`` and ``generate_candidate_library`` now live in
+# ``utils/library_gen.py`` and are re-exported at the top of this module for
+# backward compatibility. The orchestrator below only consumes them.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1701,457 +1515,12 @@ def analyze_selectivity_and_resistance(
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 5 — REPORTING & ARTIFACTS
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def generate_csv_report(
-    top10: List[CompoundRecord],
-    validation_ok: bool = False,
-    holo_pdb_path: Optional[str] = None,
-    mode: str = "science",
-    redock_rmsd: Optional[float] = None,
-) -> str:
-    """
-    Phase 5.1 — Write top_candidates.csv with all required columns.
-
-    Columns:
-        Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
-        Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
-        Selectivity_Confidence, Shape_Score, Max_Similarity, Passes_Lipinski,
-        QED_Score, Binding_Mode_Notes, Redock_RMSD, Protocol_RMSD,
-        Redock_Validated, Validation_Status, Validation_Warning,
-        H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446, Structure_Source.
-
-    Returns path to CSV.
-    """
-    log.info("─── Phase 5: Reporting ───")
-    ensure_output_dir()
-
-    is_mock = (mode == "ci")
-
-    rows = []
-    for rec in top10:
-        # Per-residue H-bond flags derived from the interaction fingerprint
-        # captured during Phase 4 (min distance to the conserved residue; a
-        # contact is flagged when the ligand approaches within 3.5 Å).
-        inter = getattr(rec, "interactions", None)
-        if inter:
-            h_ser = bool(inter.get("min_dist_Ser403", float("inf")) < 3.5)
-            h_lys = bool(inter.get("min_dist_Lys406", float("inf")) < 3.5)
-            h_tyr = bool(inter.get("min_dist_Tyr446", float("inf")) < 3.5)
-        else:
-            h_ser = h_lys = h_tyr = False
-
-        # ── Why_Won: a short human-readable rationale string combining the
-        # selectivity index, per-residue H-bond flags, and the docking
-        # energies already computed for this candidate (no new computation).
-        why_parts = []
-        if rec.selectivity_index is not None:
-            why_parts.append(f"SI={rec.selectivity_index:.1f}")
-        hbond_residues = [
-            name for name, flag in (
-                ("Ser403", h_ser), ("Lys406", h_lys), ("Tyr446", h_tyr)
-            ) if flag
-        ]
-        if hbond_residues:
-            why_parts.append("H-bonds " + ",".join(hbond_residues))
-        if rec.pb2pa_active_energy is not None:
-            why_parts.append(f"active E={rec.pb2pa_active_energy:.1f}")
-        if rec.pb2pa_allosteric_energy is not None:
-            why_parts.append(f"allosteric E={rec.pb2pa_allosteric_energy:.1f}")
-        why_won = "; ".join(why_parts) if why_parts else "N/A"
-
-        # Redock RMSD: report the measured value in science mode, mark the
-        # column SKIPPED in CI/mock mode, and N/A when no value is available.
-        if is_mock:
-            redock_rmsd_str = "SKIPPED"
-        elif redock_rmsd is not None:
-            redock_rmsd_str = f"{redock_rmsd:.3f}"
-        else:
-            redock_rmsd_str = "N/A"
-
-        # Validation warning: only raised in science mode when the protocol
-        # did not validate (RMSD > 2.0 Å or the redocking step failed).
-        if (not validation_ok) and mode == "science":
-            validation_warning = "RMSD > 2.0Å or Failed"
-        else:
-            validation_warning = "None"
-
-        # ── Trust Badge columns ──
-        # Protocol_RMSD: the raw redocking RMSD value (in Å) for every row, shown
-        # as a plain float (e.g. "1.234") wherever a real measurement exists. In
-        # CI/mock mode the protocol is never redocked, so it reads "SKIPPED".
-        protocol_rmsd_str = "SKIPPED" if is_mock else (
-            f"{redock_rmsd:.3f}" if redock_rmsd is not None else "N/A"
-        )
-
-        # Validation_Status: a quick-glance trust badge so chemists immediately
-        # see protocol quality.
-        #   • CI mode (no real RMSD)                 → "CI Mode (Skipped)"
-        #   • redock_rmsd > 2.0 Å                    → "CAUTION: High RMSD (<val> Å)"
-        #   • 1.5 Å < redock_rmsd <= 2.0 Å          → "Validated (Marginal)"
-        #   • redock_rmsd <= 1.5 Å (good protocol)  → "Validated"
-        #   • science mode but no measured RMSD     → "Validation Unavailable"
-        if is_mock:
-            validation_status = "CI Mode (Skipped)"
-        elif redock_rmsd is not None and redock_rmsd > 2.0:
-            validation_status = f"CAUTION: High RMSD ({redock_rmsd:.3f} Å)"
-        elif redock_rmsd is not None and 1.5 < redock_rmsd <= 2.0:
-            validation_status = "Validated (Marginal)"
-        elif redock_rmsd is not None:
-            validation_status = "Validated"
-        else:
-            validation_status = "Validation Unavailable"
-
-        rows.append({
-            "Compound_ID": rec.compound_id,
-            "SMILES": rec.smiles,
-            "Structure_Source": "mock" if is_mock else "real",
-            "PBP2a_Allosteric_Energy": (
-                f"{rec.pb2pa_allosteric_energy:.2f}" if rec.pb2pa_allosteric_energy is not None
-                else "N/A"
-            ),
-            "PBP2a_Active_Energy": (
-                f"{rec.pb2pa_active_energy:.2f}" if rec.pb2pa_active_energy is not None
-                else "N/A"
-            ),
-            "Human_Trypsin_Energy": (
-                f"{rec.human_trypsin_energy:.2f}" if rec.human_trypsin_energy is not None
-                else "N/A"
-            ),
-            "Human_CES1_Energy": (
-                f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
-                else "N/A"
-            ),
-            "Selectivity_Index": (
-                f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
-                else "N/A"
-            ) + ("" if rec.selectivity_confidence == "High" else " (low-conf)"),
-            "Selectivity_Confidence": (
-                "Unassessed" if rec.selectivity_confidence == "None"
-                else rec.selectivity_confidence
-            ) + (" (mock)" if is_mock else ""),
-            "Shape_Score": (
-                f"{rec.shape_score:.2f}" if rec.shape_score is not None
-                else "N/A"
-            ),
-            "Max_Similarity": f"{rec.max_similarity:.3f}",
-            "Passes_Lipinski": str(rec.passes_lipinski),
-            "QED_Score": f"{rec.qed_score:.3f}",
-            "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
-            "Redock_RMSD": redock_rmsd_str,
-            "Protocol_RMSD": protocol_rmsd_str,
-            "Redock_Validated": (
-                "SKIPPED" if is_mock
-                else "N/A" if validation_ok is None else str(bool(validation_ok))
-            ) + (" (mock)" if is_mock else ""),
-            "Validation_Status": validation_status,
-            "Validation_Warning": validation_warning,
-            "H_Bond_Ser403": str(h_ser),
-            "H_Bond_Lys406": str(h_lys),
-            "H_Bond_Tyr446": str(h_tyr),
-            "Why_Won": why_won,
-        })
-
-    df = pd.DataFrame(rows)
-    df.to_csv(CSV_REPORT, index=False)
-    log.info(f"  CSV report saved: {CSV_REPORT}")
-
-    json_path = Path(str(CSV_REPORT)).with_suffix(".json")
-    with open(json_path, "w") as fh:
-        json.dump(rows, fh, indent=2)
-    log.info(f"  JSON candidates saved: {json_path}")
-
-    return str(CSV_REPORT)
-
-
-def generate_images(top3: List[CompoundRecord]) -> List[str]:
-    """
-    Phase 5.2 — Save 2D structure PNGs for the top 3 candidates.
-
-    Returns list of file paths.
-    """
-    paths = []
-    for i, rec in enumerate(top3):
-        if rec.mol is None:
-            mol = Chem.MolFromSmiles(rec.smiles)
-            if mol is None:
-                continue
-            rec.mol = mol
-
-        img_path = OUTPUT_DIR / f"top{i + 1}_{rec.compound_id}.png"
-        try:
-            drawer = rdMolDraw2D.MolDraw2DCairo(400, 400)
-            drawer.DrawMolecule(rec.mol)
-            drawer.FinishDrawing()
-            drawer.WriteDrawingText(str(img_path))
-            paths.append(str(img_path))
-            log.info(f"  Image saved: {img_path}")
-        except Exception as exc:
-            log.warning(f"  Failed to render {rec.compound_id}: {exc}")
-
-    return paths
-
-
-def _key_residue_coords(receptor_pdb: str) -> Dict[str, List[np.ndarray]]:
-    """
-    Return the 3D coordinates of the key catalytic residue atoms in *receptor_pdb*.
-
-    Only the polar H-bond donor/acceptor atoms are collected:
-        Ser403 → OG, Lys406 → NZ, Tyr446 → OH.
-
-    Returns a dict ``{resname: [np.ndarray, ...]}`` (empty lists for absent
-    residues). Used to highlight ligand atoms that engage these residues in the
-    2D interaction diagram.
-    """
-    targets_map = {
-        "Ser403": [("SER", 403, "OG")],
-        "Lys406": [("LYS", 406, "NZ")],
-        "Tyr446": [("TYR", 446, "OH")],
-    }
-    atom_coords: Dict[str, List[np.ndarray]] = {k: [] for k in targets_map}
-    try:
-        parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("receptor", receptor_pdb)
-        for model in struct:
-            for chain in model:
-                for residue in chain:
-                    for resname, entries in targets_map.items():
-                        for entry in entries:
-                            aname = entry[-1]
-                            resname_expected = entry[0] if len(entry) > 2 else ""
-                            resno_expected = entry[1] if len(entry) > 2 else -1
-                            if (
-                                resname_expected
-                                and residue.get_resname().strip().upper()
-                                != resname_expected.upper()
-                            ):
-                                continue
-                            if resno_expected >= 0 and residue.get_id()[1] != resno_expected:
-                                continue
-                            if aname in residue:
-                                atom_coords[resname].append(
-                                    residue[aname].get_vector().get_array()
-                                )
-    except Exception as exc:
-        log.warning(f"  Could not parse receptor for key residues: {exc}")
-    return atom_coords
-
-
-def _pose_heavy_atom_coords(pdbqt_path: str) -> List[np.ndarray]:
-    """
-    Parse heavy-atom 3D coordinates (in file order) from a docked ligand PDBQT.
-
-    Hydrogen lines are skipped so the returned list indexes the same heavy
-    atoms as a SMILES-derived :class:`Chem.Mol` (PDBQT preparation appends
-    hydrogens after the heavy atoms, preserving heavy-atom order).
-    """
-    coords: List[np.ndarray] = []
-    try:
-        with open(pdbqt_path) as f:
-            for line in f:
-                if not line.startswith(("ATOM", "HETATM")):
-                    continue
-                try:
-                    x = float(line[30:38].strip())
-                    y = float(line[38:46].strip())
-                    z = float(line[46:54].strip())
-                    elem = line[76:78].strip()
-                except (ValueError, IndexError):
-                    continue
-                if elem and elem.upper() != "H":
-                    coords.append(np.array([x, y, z]))
-    except OSError:
-        pass
-    return coords
-
-
-def generate_interaction_diagram(
-    record: CompoundRecord,
-    receptor_pdb: str,
-    output_path: str,
-) -> Optional[str]:
-    """
-    Phase 5.2b — Render a 2D interaction diagram for a single compound.
-
-    Draws the ligand (from ``record.mol`` / SMILES) and overlays the key
-    binding interactions: ligand atoms that approach within H-bond distance of
-    Ser403, Lys406, or Tyr446 (parsed from the docked pose in
-    ``record.active_docked_pdbqt``) are highlighted in red. A legend line
-    summarises which conserved residues are engaged.
-
-    The diagram is saved to *output_path* (typically
-    ``output/interaction_<compound_id>.png``) and the path is returned.
-
-    If the heavyweight pose/atom mapping is unavailable, the function still
-    draws the ligand and annotates the detected key interactions from
-    ``record.interactions`` — so a chemist always gets a visual artefact.
-    """
-    mol = record.mol
-    if mol is None:
-        mol = Chem.MolFromSmiles(record.smiles)
-        if mol is None:
-            log.warning(
-                f"  Cannot render ligand for {record.compound_id} "
-                "(invalid SMILES)."
-            )
-            return None
-
-    try:
-        from rdkit.Chem.Draw import rdMolDraw2D
-    except Exception as exc:
-        log.warning(f"  RDKit drawing unavailable: {exc}")
-        return None
-
-    # ── Determine which ligand atoms engage the key residues ──
-    highlight_atoms: List[int] = []
-    inter = getattr(record, "interactions", None)
-    pose = getattr(record, "active_docked_pdbqt", None)
-
-    if pose and os.path.exists(pose) and receptor_pdb and os.path.exists(receptor_pdb):
-        try:
-            key_coords = _key_residue_coords(receptor_pdb)
-            pose_coords = _pose_heavy_atom_coords(pose)
-            n_lig = mol.GetNumAtoms()
-            # Heavy-atom order in the docked pose matches the SMILES-derived mol
-            # (H are appended by the PDBQT prep), so index i maps directly.
-            for i, p in enumerate(pose_coords):
-                if i >= n_lig:
-                    break
-                for resname, coords in key_coords.items():
-                    if not coords:
-                        continue
-                    cutoff = 3.8 if resname == "Lys406" else 3.5
-                    if any(np.linalg.norm(p - c) < cutoff for c in coords):
-                        highlight_atoms.append(i)
-                        break
-        except Exception as exc:
-            log.warning(f"  Atom-level interaction highlight failed: {exc}")
-            highlight_atoms = []
-
-    # De-duplicate while preserving order.
-    highlight_atoms = list(dict.fromkeys(highlight_atoms))
-
-    # ── Build the legend from the interaction fingerprint ──
-    parts = []
-    if inter:
-        if inter.get("Ser403_contact"):
-            parts.append("Ser403 H-bond")
-        if inter.get("Lys406_Hbond"):
-            parts.append("Lys406 H-bond")
-        if inter.get("Tyr446_Hbond"):
-            parts.append("Tyr446 H-bond")
-    legend = "; ".join(parts) if parts else "No key H-bonds detected"
-
-    try:
-        drawer = rdMolDraw2D.MolDraw2DCairo(500, 500)
-        drawer.drawOptions().highlightColor = rdMolDraw2D.Color(1.0, 0.0, 0.0)
-        drawer.DrawMolecule(
-            mol,
-            highlightAtoms=highlight_atoms,
-            legend=legend,
-        )
-        drawer.FinishDrawing()
-        drawer.WriteDrawingText(output_path)
-        log.info(f"  Interaction diagram saved: {output_path}")
-        return output_path
-    except Exception as exc:
-        log.warning(f"  Could not render interaction diagram: {exc}")
-        return None
-
-
-def generate_pymol_script(
-    top_candidates: List[CompoundRecord],
-    targets: dict,
-    output_dir: str,
-) -> str:
-    """
-    Phase 5.3 — Write a PyMOL session script (``visualization.pml``) that loads
-    the PBP2a receptor, the top 3 candidate active-site poses, highlights the
-    conserved catalytic residues (Ser403, Lys406, Tyr446) as sticks, and colours
-    each ligand by element for quick medicinal-chemist inspection.
-
-    Returns the path to the generated ``.pml`` file.
-    """
-    pml_path = os.path.join(output_dir, "visualization.pml")
-    receptor_pdb = targets.get("PBP2a", {}).get("cleaned_pdb")
-
-    lines = [
-        "# Auto-generated PyMOL visualization script (AutoAntibiotic)",
-        "# Load with: pymol -l visualization.pml",
-        "",
-    ]
-
-    if receptor_pdb and os.path.exists(receptor_pdb):
-        lines.append(f"load {receptor_pdb!r}, PBP2a")
-        # Highlight the conserved catalytic residues as sticks.
-        lines.append(
-            "select conserved_residues, "
-            "(resn SER and resi 403) or "
-            "(resn LYS and resi 406) or "
-            "(resn TYR and resi 446)"
-        )
-        lines.append("show sticks, conserved_residues")
-        lines.append("color magenta, conserved_residues")
-        lines.append("")
-    else:
-        log.warning(
-            "  PBP2a cleaned PDB not available; PyMOL script will skip receptor load."
-        )
-
-    loaded = 0
-    for i, rec in enumerate(top_candidates[:3]):
-        pose = getattr(rec, "active_docked_pdbqt", None)
-        if not pose or not os.path.exists(pose):
-            log.warning(
-                f"  No active-site pose for {rec.compound_id}; skipping in PyMOL script."
-            )
-            continue
-        name = f"Ligand_{i + 1}_{rec.compound_id}"
-        lines.append(f"load {pose!r}, {name}")
-        # Show the ligand as sticks coloured by element for quick inspection.
-        lines.append(f"color byelement, {name}")
-        lines.append(f"show sticks, {name}")
-
-        # ── Dashed hydrogen-bond lines from the pose-derived interaction fingerprint ──
-        # Draw a dashed measurement line for each conserved residue whose
-        # ligand→residue distance is within the H-bond cutoff (Ser403/Tyr446 < 3.5 Å,
-        # Lys406 < 3.8 Å). These come straight from the record.interactions dict
-        # computed during Phase 4, so the script reflects the real measured pose.
-        inter = getattr(rec, "interactions", None)
-        if inter:
-            ser_d = inter.get("min_dist_Ser403", float("inf"))
-            lys_d = inter.get("min_dist_Lys406", float("inf"))
-            tyr_d = inter.get("min_dist_Tyr446", float("inf"))
-            if np.isfinite(ser_d) and ser_d < 3.5:
-                lines.append(
-                    f"distance hbond_ser_{i + 1}, {name}, resi 403 & name OG, cutoff=3.5"
-                )
-                lines.append("dash wid 2.0")
-            if np.isfinite(lys_d) and lys_d < 3.8:
-                lines.append(
-                    f"distance hbond_lys_{i + 1}, {name}, resi 406 & name NZ, cutoff=3.8"
-                )
-                lines.append("dash wid 2.0")
-            if np.isfinite(tyr_d) and tyr_d < 3.5:
-                lines.append(
-                    f"distance hbond_tyr_{i + 1}, {name}, resi 446 & name OH, cutoff=3.5"
-                )
-                lines.append("dash wid 2.0")
-        lines.append("")
-        loaded += 1
-
-    lines.append("")
-    lines.append("# Orient the view")
-    lines.append("zoom")
-    lines.append("orient")
-
-    with open(pml_path, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
-
-    log.info(
-        f"  PyMOL script saved: {pml_path} "
-        f"({loaded} ligand pose(s) loaded)."
-    )
-    return pml_path
+#
+# NOTE: ``generate_csv_report``, ``generate_images``,
+# ``generate_interaction_diagram``, ``generate_pymol_script`` and
+# ``_print_single_summary`` now live in ``utils/reporting.py`` and are
+# re-exported at the top of this module for backward compatibility. The
+# orchestrator below (main) only calls them.
 
 
 def screen_single_compound(
@@ -2613,11 +1982,18 @@ if __name__ == "__main__":
             "on its own to accelerate the full pipeline's target preparation."
         ),
     )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"AutoAntibiotic Discovery Pipeline v{__version__}",
+        help="Print the pipeline version and exit.",
+    )
     args = parser.parse_args()
 
     if args.check:
+        print(f"AutoAntibiotic Discovery Pipeline v{__version__}")
         check_dependencies()
         sys.exit(0)
 
+    log.info(f"AutoAntibiotic Discovery Pipeline v{__version__}")
     main(target_count=args.count, force=args.force, library=args.library,
          sdf=args.input_sdf, smiles=args.smiles, quick=args.quick)

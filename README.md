@@ -14,8 +14,10 @@ prioritize compounds for experimental follow-up.
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
 - [Installation](#installation)
+  - [Option A — Docker (Zero-Install, Recommended)](#option-a--docker-zero-install-recommended)
+  - [Option B — Quick Install Script (Non-Docker)](#option-b--quick-install-script-non-docker)
+  - [Option C — Manual Install](#option-c--manual-install)
 - [Quick Start (CI Mode)](#quick-start-ci-mode)
 - [Python API](#python-api)
 - [Real Run (Science Mode)](#real-run-science-mode)
@@ -28,27 +30,72 @@ prioritize compounds for experimental follow-up.
 
 ## Prerequisites
 
-The pipeline relies on two external binaries that are **not** pip packages.
-Install them with `conda` (recommended):
-
-```bash
-conda install -c conda-forge vina openbabel
-```
+The pipeline relies on two external binaries that are **not** pip packages:
+**AutoDock Vina** (docking + redocking validation) and **OpenBabel** (PDBQT /
+structure conversion). If either is missing the pipeline still runs, but falls
+back to an RDKit-based Shape/Pharmacophore scoring path and emits a clear
+warning. For the best scientific results, install both.
 
 | Tool           | Purpose                                                            |
 | -------------- | ------------------------------------------------------------------ |
 | **AutoDock Vina** | Rigid/semi-flexible molecular docking (Phase 3) and native-ligand redocking validation (Phase 0). |
 | **OpenBabel**     | PDBQT / ligand format preparation and structure conversion.       |
 
-If either binary is missing, the pipeline still runs but falls back to an
-RDKit-based Shape/Pharmacophore scoring path and emits a clear warning. For
-best scientific results, install both via the `conda` command above.
-
 Python **3.9+** is required.
+
+> **New here?** You do not need to install anything locally. The two options
+> below (Docker, or the `setup.sh` script) handle Vina, OpenBabel, and the
+> Python package for you.
 
 ---
 
 ## Installation
+
+There are three ways to install AutoAntibiotic. **Option A (Docker)** is the
+zero-install, reproducible path; **Option B (`setup.sh`)** is the recommended
+path for local, non-Docker use; **Option C** is for those who want full manual
+control.
+
+### Option A — Docker (Zero-Install, Recommended)
+
+A self-contained image (`continuumio/miniconda3`) with Vina and OpenBabel
+pre-installed ships everything you need. Build it once, then screen compounds
+without touching your host environment:
+
+```bash
+# Build the image
+docker build -t autoantibiotic .
+
+# Screen a single compound (mount ./output so results land on your host)
+docker run -v "$(pwd)/output:/app/output" autoantibiotic --smiles "CN1C(=O)C(N=C1C(=O)O)S..."
+
+# Or run the full pipeline
+docker run -v "$(pwd)/output:/app/output" autoantibiotic --count 10
+```
+
+The `output/` directory is created inside the container and is mounted so all
+reports, images, and the `visualization.pml` script are available on your host.
+
+### Option B — Quick Install Script (Non-Docker)
+
+For local installs, `setup.sh` is the recommended one-command path. It
+installs Miniforge if you don't have `conda`/`mamba`, creates a dedicated
+`autoantibiotic` environment, installs Vina + OpenBabel from conda-forge, and
+installs the Python package:
+
+```bash
+bash setup.sh
+```
+
+After it finishes, activate the environment and you are ready to screen:
+
+```bash
+conda activate autoantibiotic
+autoantibiotic --check          # verify Vina + OpenBabel are present
+autoantibiotic --count 10       # quick offline smoke test
+```
+
+### Option C — Manual Install
 
 Clone the repository, then install the package and its Python dependencies:
 
@@ -62,7 +109,7 @@ pip install -e ".[docking]"
 
 The `[docking]` extra pulls in `meeko` and `openbabel-wheel` (PDBQT
 preparation helpers). On platforms where the OpenBabel wheel is unavailable,
-rely on the `conda` install of `openbabel` shown in [Prerequisites](#prerequisites).
+rely on the `conda` install of `openbabel` shown above.
 
 After installation the `autoantibiotic` command is available on your `PATH`.
 
@@ -153,18 +200,32 @@ flag:
 autoantibiotic --check
 ```
 
-If **AutoDock Vina** is missing, the pipeline prints a bold, high-visibility
-warning directing you to install it:
+When everything is present, you get a clean green confirmation that includes the
+detected Vina and OpenBabel versions:
+
+```
+AutoAntibiotic Discovery Pipeline v3.1.0
+  ✅ Ready to screen!  (Vina: 1.2.5 (... ) | OpenBabel: Open Babel 3.1.1)
+```
+
+If **AutoDock Vina** (or **OpenBabel**) is missing, the pipeline prints a
+bold, high-visibility error that points you straight to `setup.sh` or the
+Docker image:
 
 ```
   ╔══════════════════════════════════════════════════════════════════╗
-  ║  WARNING: Vina is missing.                                      ║
-  ║  For best results, install via:                                 ║
-  ║    conda install -c conda-forge vina                            ║
+  ║  ERROR: AutoDock Vina not found.                                ║
+  ║  Install it with one command:                                   ║
+  ║    bash setup.sh        (creates the 'autoantibiotic' env)      ║
+  ║  or run everything in a container:                              ║
+  ║    docker run autoantibiotic --smiles "..."                     ║
+  ║  Or manually: conda install -c conda-forge vina                 ║
   ╚══════════════════════════════════════════════════════════════════╝
 ```
 
-The command exits `0` once the check completes.
+The `--check` command exits `0` once the check completes (even when the
+optional binaries are missing, so it is safe to use in CI). To print just the
+version, use `autoantibiotic --version`.
 
 ---
 

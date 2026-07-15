@@ -1,0 +1,34 @@
+# Version control / CI caches
+.git
+.gitignore
+.github
+
+# Python caches and build artifacts
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build
+dist
+.pytest_cache
+
+# Local environment and large data
+.venv
+venv
+env
+output
+status.json
+config.yaml
+
+# Docs and examples that are not needed inside the image
+docs
+examples
+*.ipynb
+
+# Test suite (keeps the image lean; not required to run the pipeline)
+tests
+
+# Editor / OS noise
+.DS_Store
+.idea
+.vscode
