@@ -14,7 +14,6 @@ Keeping them here breaks the former circular import between
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 from typing import List, Optional
 
@@ -132,8 +131,7 @@ def _extract_native_ligand_from_holo(
             log.info(f"  Native ligand PDBQT written to {output_ligand_pdbqt}")
         except Exception as exc:
             log.warning(f"  ⚠  LigandPreparator failed for native ligand: {exc}")
-            # Fallback: copy PDB as-is
-            shutil.copy(lig_pdb, output_ligand_pdbqt)
+            return None
 
         return smi
 

@@ -244,18 +244,8 @@ def _dock_compounds_parallel(
             for payload in payloads
         }
         for i, future in enumerate(as_completed(futures)):
-            cid = futures[future]  # original compound id
-            rec = by_id[cid]
-            try:
-                result = future.result(timeout=60)
-                # result[0] is the reconstructed record; map back to original.
-                results.append((rec, result[1]))
-            except Exception as exc:
-                log.warning(
-                    f"    Docking failed for {cid} ({tag}): {exc}. "
-                    "Returning (record, None) and continuing."
-                )
-                results.append((rec, None))
+            result = future.result()   # worker always returns (rec, energy_or_None)
+            results.append((by_id[result[0].compound_id], result[1]))
             if (i + 1) % 25 == 0:
                 log.info(f"    Docked {i + 1} / {total} ({tag})")
 

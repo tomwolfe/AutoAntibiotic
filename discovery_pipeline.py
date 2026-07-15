@@ -592,8 +592,6 @@ def prepare_targets(
     result = {}
 
     # ── Resolve run mode explicitly from config (no path-based heuristic) ──
-    if config is None:
-        config = load_config()
     mode = config.get("mode", "science")
     log.info(f"  Run mode (from config): {mode}")
 
@@ -671,19 +669,10 @@ def prepare_targets(
         active_center = None
     log.info(f"    Active site center: {active_center}")
 
-    if result.get("mode") == "science" and active_center is None:
-        log.error("Active site center missing in science mode – aborting")
-        sys.exit(1)
-
-    if result.get("mode") == "science" and allosteric_center is None:
-        log.error("Active site center missing in science mode – aborting")
-        sys.exit(1)
-
-    if allosteric_center is None or active_center is None:
-        log.warning(
-            "  ⚠  PBP2a grid center(s) undefined; leaving as None. "
-            "Supply a real PDB for docking grid config."
-        )
+    for site, center in (("allosteric", allosteric_center), ("active", active_center)):
+        if center is None and mode == "science":
+            log.error(f"{site} center missing in science mode – aborting")
+            sys.exit(1)
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,

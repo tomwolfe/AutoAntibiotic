@@ -581,7 +581,7 @@ class TestRealPDBSmoke:
         real_prepare_targets = dp.prepare_targets
 
         def spy_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
-            result = real_prepare_targets(pdb_dir_arg, work_dir_arg, deps)
+            result = real_prepare_targets(pdb_dir_arg, work_dir_arg, deps, config)
             captured["targets"] = result
             return result
 
@@ -1063,7 +1063,8 @@ class TestConservedResiduesCentroid:
                     with patch.object(dp.log, "warning") as mock_warn:
                         with patch("sys.exit"):
                             prepare_targets(str(tmp_path), str(tmp_path),
-                                            {"vina": False, "USE_VINA": False})
+                                            {"vina": False, "USE_VINA": False},
+                                            config={"mode": "ci"})
                         assert any(
                             "Conserved residues" in str(c.args[0])
                             for c in mock_warn.call_args_list
@@ -1112,6 +1113,7 @@ class TestPrepareTargetsNoneCenter:
                         result = prepare_targets(
                             str(tmp_path), str(tmp_path),
                             {"vina": False, "USE_VINA": False},
+                            config={"mode": "ci"},
                         )
 
         assert result["PBP2a"]["active_center"] is None, (
@@ -1157,6 +1159,7 @@ class TestOfflinePDBLoad:
                         dp.prepare_targets(
                             str(tmp_path), str(tmp_path),
                             {"vina": False, "USE_VINA": False},
+                            config={"mode": "ci"},
                         )
 
         # 3QPD must be sourced locally, never downloaded.
@@ -1184,6 +1187,7 @@ class TestOfflinePDBLoad:
                         dp.prepare_targets(
                             str(tmp_path), str(tmp_path),
                             {"vina": False, "USE_VINA": False},
+                            config={"mode": "science"},
                         )
                     assert exc.value.code == 1
         assert any(
