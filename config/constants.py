@@ -42,6 +42,12 @@ PDB_IDS = {
     # alongside the other targets (no mock-free static files required).
     "HUMAN_ALBUMIN": "1AO6",
     "CYP3A4": "1W0E",
+    # Additional (mock-capable / optional) off-target panel entries. HERG is
+    # included behind config; CYP2D6 is mock-capable. Both are merged into the
+    # human selectivity panel when a prepared receptor + grid centre exist, so
+    # they gracefully skip when no real PDB is available (CI/offline).
+    "HERG": "7CN1",
+    "CYP2D6": "MOCK_CYP2D6",
 }
 
 # Reference antibiotics for similarity filtering (SMILES)
@@ -69,6 +75,8 @@ _TRYPSIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS57", "ASP102", "SER195"]
 _CES1_CATALYTIC_RESIDUES_DEFAULT = ["SER221", "HIS468", "GLU354"]
 _ALBUMIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS242", "LYS199"]
 _CYP3A4_CATALYTIC_RESIDUES_DEFAULT = ["HIS368", "ARG105"]
+_HERG_CATALYTIC_RESIDUES_DEFAULT = ["SER624", "TYR652", "PHE656"]
+_CYP2D6_CATALYTIC_RESIDUES_DEFAULT = ["ASP301", "GLU216", "SER304"]
 
 # Names of the target residue lists that can be overridden via targets.yaml.
 _TARGET_RESIDUE_KEYS = (
@@ -79,6 +87,8 @@ _TARGET_RESIDUE_KEYS = (
     "CES1_CATALYTIC_RESIDUES",
     "ALBUMIN_CATALYTIC_RESIDUES",
     "CYP3A4_CATALYTIC_RESIDUES",
+    "HERG_CATALYTIC_RESIDUES",
+    "CYP2D6_CATALYTIC_RESIDUES",
 )
 
 TARGETS_FILE = Path(__file__).resolve().parent / "targets.yaml"
@@ -141,6 +151,8 @@ def _load_target_residues() -> Dict[str, List[str]]:
         "CES1_CATALYTIC_RESIDUES": _CES1_CATALYTIC_RESIDUES_DEFAULT,
         "ALBUMIN_CATALYTIC_RESIDUES": _ALBUMIN_CATALYTIC_RESIDUES_DEFAULT,
         "CYP3A4_CATALYTIC_RESIDUES": _CYP3A4_CATALYTIC_RESIDUES_DEFAULT,
+        "HERG_CATALYTIC_RESIDUES": _HERG_CATALYTIC_RESIDUES_DEFAULT,
+        "CYP2D6_CATALYTIC_RESIDUES": _CYP2D6_CATALYTIC_RESIDUES_DEFAULT,
     }
     try:
         import yaml
@@ -167,6 +179,8 @@ TRYPSIN_CATALYTIC_RESIDUES = _loaded_target_residues["TRYPSIN_CATALYTIC_RESIDUES
 CES1_CATALYTIC_RESIDUES = _loaded_target_residues["CES1_CATALYTIC_RESIDUES"]
 ALBUMIN_CATALYTIC_RESIDUES = _loaded_target_residues["ALBUMIN_CATALYTIC_RESIDUES"]
 CYP3A4_CATALYTIC_RESIDUES = _loaded_target_residues["CYP3A4_CATALYTIC_RESIDUES"]
+HERG_CATALYTIC_RESIDUES = _loaded_target_residues["HERG_CATALYTIC_RESIDUES"]
+CYP2D6_CATALYTIC_RESIDUES = _loaded_target_residues["CYP2D6_CATALYTIC_RESIDUES"]
 
 # Grid box defaults (Angstroms)
 ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
@@ -188,6 +202,25 @@ SELECTIVITY_INDEX_THRESHOLD = 2.0
 OUTPUT_DIR = Path("output")
 CSV_REPORT = OUTPUT_DIR / "top_candidates.csv"
 TOP_N = 10
+
+# Local flexible docking: residues treated as flexible (Vina --flex) during the
+# active-site step of science mode. These are the conserved catalytic residues
+# whose side-chain repositioning matters most for binder pose discrimination.
+FLEX_RESIDUES = ["SER403", "LYS406", "TYR446"]
+
+# Simple PBP2a mutation scan (consensus / reduced-resistance probability). For
+# the top-N candidates, dock the active-site pose against mutant receptors built
+# by mutating the apo PDBQT (cheap string replace). Toggle via config; defaults
+# on so experimental-validation odds are improved. Missing/mock PDBs skip.
+MUTATION_SCAN = True
+
+# Mutants scanned and their single-residue substitutions of the conserved
+# catalytic network.
+MUTATION_SCAN_MUTANTS = ["S403A", "K406A", "Y446A"]
+
+# Morgan fingerprint parameters used for clustering the pre-top-N pool.
+FP_RADIUS = 2
+FP_NBITS = 2048
 
 # Repository root (used to locate bundled offline PDB files under tests/data).
 REPO_ROOT = Path(__file__).resolve().parent.parent

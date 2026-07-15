@@ -54,10 +54,17 @@ def _run_vina_docking(
     center: np.ndarray,
     box_size: Tuple[float, float, float],
     timeout: Optional[int] = None,
+    flex_pdbqt: Optional[str] = None,
 ) -> Optional[float]:
     """
     Run a single Vina docking job. Returns best binding energy (kcal/mol)
     or None on failure.
+
+    When *flex_pdbqt* is provided it is passed as Vina's ``--flex`` argument so
+    the listed receptor residues are treated as flexible during docking (local
+    flexible docking). *flex_pdbqt* must already be a valid flexible-residue
+    PDBQT produced by the caller (e.g. via ``write_receptor_pdbqt`` logic or
+    ``obabel``); failures are handled upstream by falling back to rigid docking.
     """
     if timeout is None:
         timeout = VINA_TIMEOUT_S
@@ -76,6 +83,8 @@ def _run_vina_docking(
         "--exhaustiveness", "8",
         "--num_modes", "3",
     ]
+    if flex_pdbqt is not None:
+        cmd += ["--flex", flex_pdbqt]
 
     try:
         result = subprocess.run(
@@ -248,6 +257,7 @@ def dock_compound(
     work_dir: str,
     tag: str = "",
     use_vina: bool = True,
+    flex_pdbqt: Optional[str] = None,
 ) -> Optional[float]:
     """
     Full docking pipeline for a single compound: PDBQT prep → Vina → parse.
@@ -266,6 +276,9 @@ def dock_compound(
         work_dir: Scratch directory.
         tag: Label for temp files (e.g. 'allosteric').
         use_vina: When ``False``, skip Vina and use the RDKit fallback scorer.
+        flex_pdbqt: Optional flexible-residue PDBQT passed to Vina's ``--flex``
+            for local flexible docking (active-site step). Ignored when Vina is
+            unavailable.
 
     Returns:
         Best binding energy (Vina) or fallback score, or None on failure.
@@ -303,6 +316,7 @@ def dock_compound(
     energy = _run_vina_docking(
         receptor_pdbqt, lig_pdbqt, out_pdbqt,
         center, box_size,
+        flex_pdbqt=flex_pdbqt,
     )
 
     # Keep the docked pose for the active site so downstream pose analysis

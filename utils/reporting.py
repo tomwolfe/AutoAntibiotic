@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from rdkit import Chem
+from rdkit import DataStructs
+from rdkit.Chem import rdFingerprintGenerator
 from rdkit.Chem.Draw import rdMolDraw2D
 
 from Bio.PDB import PDBParser
@@ -203,6 +205,21 @@ def generate_csv_report(
                 if getattr(rec, "human_cyp3a4_energy", None) is not None
                 else "N/A"
             ),
+            "Human_HERG_Energy": (
+                f"{getattr(rec, 'human_herg_energy', None):.2f}"
+                if getattr(rec, "human_herg_energy", None) is not None
+                else "N/A"
+            ),
+            "Human_CYP2D6_Energy": (
+                f"{getattr(rec, 'human_cyp2d6_energy', None):.2f}"
+                if getattr(rec, "human_cyp2d6_energy", None) is not None
+                else "N/A"
+            ),
+            "Mutant_Energy_Delta": (
+                f"{getattr(rec, 'mutant_energy_delta', None):.2f}"
+                if getattr(rec, "mutant_energy_delta", None) is not None
+                else "N/A"
+            ),
             "MMGBSA_Score": (
                 f"{rec.mmgbca_score:.2f}" if rec.mmgbca_score is not None
                 else "N/A"
@@ -236,6 +253,100 @@ def generate_csv_report(
     log.info(f"  JSON candidates saved: {json_path}")
 
     return str(csv_report)
+
+
+def rerank_and_diversify(
+    pool: List[CompoundRecord],
+    ranked: Optional[List[CompoundRecord]] = None,
+    top_n: int = 10,
+    radius: int = 2,
+    n_bits: int = 2048,
+    max_tanimoto: float = 0.4,
+) -> List[CompoundRecord]:
+    """
+    Post-rerank gate that (1) drops any candidate whose MM-GBSA-like rerank
+    score is positive (``mmgbca_score > 0`` — a positive relaxation energy
+    means the pose is unstable / unfavourable) and (2) clusters the remaining
+    pool by Morgan fingerprint and picks a maximally dissimilar final set
+    (pairwise Tanimoto ≤ ``max_tanimoto``) to fill up to *top_n* slots.
+
+    The *ranked* ordering (best-first) defines the priority used to seed the
+    diverse selection: the top-ranked passing candidate is always kept, then
+    each subsequent candidate is admitted only if it is sufficiently dissimilar
+    (Tanimoto ≤ ``max_tanimoto``) from all already-selected compounds. If the
+    diverse set is smaller than *top_n*, the remaining slots are filled with the
+    next-best passing candidates regardless of similarity (so the report always
+    has up to *top_n* rows). Records lacking a computable Morgan FP are kept
+    only as last-resort fillers.
+
+    Args:
+        pool: Candidate records that reached the pre-top-N stage.
+        ranked: Preferred best-first ordering (defaults to ``pool``).
+        top_n: Final number of candidates to report.
+        radius / n_bits: Morgan FP parameters.
+        max_tanimoto: Similarity ceiling for the diverse selection.
+
+    Returns:
+        A (possibly shorter) list of up to *top_n* diverse, passing candidates.
+    """
+    if ranked is None:
+        ranked = pool
+
+    def _fp(rec: CompoundRecord):
+        mol = rec.mol if rec.mol is not None else Chem.MolFromSmiles(rec.smiles)
+        if mol is None:
+            return None
+        try:
+            return rdFingerprintGenerator.GetMorganGenerator(
+                radius=radius, fpSize=n_bits
+            ).GetFingerprint(mol)
+        except Exception:
+            return None
+
+    # (1) Drop positive relaxation-energy candidates.
+    passing = [r for r in ranked if getattr(r, "mmgbca_score", None) is None
+               or r.mmgbca_score <= 0.0]
+    dropped = len(ranked) - len(passing)
+    if dropped:
+        log.info(
+            f"  Rerank gate dropped {dropped} candidate(s) with positive "
+            f"MM-GBSA-like (MMFF) relaxation energy (mmgbca_score > 0)."
+        )
+    if not passing:
+        log.warning(
+            "  All candidates dropped by rerank gate (positive relaxation "
+            "energy). Returning the original ranked list as a fallback."
+        )
+        return ranked[:top_n]
+
+    # (2) Diverse selection by Morgan Tanimoto.
+    selected: List[CompoundRecord] = []
+    selected_fps = []
+    fillers: List[CompoundRecord] = []
+
+    for rec in passing:
+        fp = _fp(rec)
+        if fp is None:
+            fillers.append(rec)
+            continue
+        if all(DataStructs.TanimotoSimilarity(fp, sfp) <= max_tanimoto
+               for sfp in selected_fps):
+            selected.append(rec)
+            selected_fps.append(fp)
+        else:
+            fillers.append(rec)
+        if len(selected) >= top_n:
+            break
+
+    # Fill any remaining slots with the next-best passing candidates.
+    remaining = [r for r in passing if r not in selected and r not in fillers]
+    final = selected + fillers + remaining
+    final = final[:top_n]
+    log.info(
+        f"  Diversified final set: {len(selected)} diverse + "
+        f"{len(final) - len(selected)} filler = {len(final)} candidate(s)."
+    )
+    return final
 
 
 def generate_images(

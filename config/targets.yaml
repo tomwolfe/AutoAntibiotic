@@ -21,6 +21,19 @@ targets:
   # grid. Edit here to re-target without touching source code.
   ALBUMIN_CATALYTIC_RESIDUES: ["HIS242", "LYS199"]
   CYP3A4_CATALYTIC_RESIDUES: ["HIS368", "ARG105"]
+  # Additional (optional / mock-capable) off-target panel entries used to widen
+  # the selectivity screen further. HERG (cardiotoxicity) and CYP2D6 (metabolic
+  # liability) are appended when a prepared receptor + grid centre exist; they
+  # skip gracefully if no real PDB is available (CI/offline). Sane defaults:
+  HERG_CATALYTIC_RESIDUES: ["SER624", "TYR652", "PHE656"]
+  CYP2D6_CATALYTIC_RESIDUES: ["ASP301", "GLU216", "SER304"]
+
+# ── Mutation scan (reduced-resistance probability) ──────────────────────────
+# When true, top candidates are redocked against PBP2a mutant receptors
+# (S403A, K406A, Y446A) built by mutating the apo PDBQT. The energy delta vs
+# the wild-type pose is recorded quantitatively (mutant_energy_delta) and folded
+# into the resistance notes. Disable to skip the extra docking calls.
+mutation_scan: true
 
 # ── Protocol trust RMSD thresholds (Å) ────────────────────────────────────────
 # Redocking RMSD cutoffs used by config.constants.protocol_trust and the

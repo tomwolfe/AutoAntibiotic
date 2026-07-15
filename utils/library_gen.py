@@ -168,11 +168,25 @@ def _save_brics_cache(cache_path: str, fragments: List[str]) -> None:
         pass
 
 
+# External library CSV env var. When set, the file (columns ``smiles``,
+# ``compound_id``) is merged into the generated library *before* filtering,
+# reusing the existing input_csv logic. This lets users inject curated/de novo
+# compounds without editing source.
+EXTERNAL_LIB_CSV_ENV = "AUTOANTIBIOTIC_LIB_CSV"
+
+# Known β-lactam binders used to bias BRICS recombination: their fragments are
+# decomposed and allowed into the fragment pool so the recombinant library is
+# enriched toward credible PBP2a-binding chemotypes. Defaults to ceftaroline &
+# meropenem (from CONTROL_SMILES); overridable via ``seed_smiles``.
+DEFAULT_SEED_SMILES = list(CONTROL_SMILES.values())
+
+
 def generate_candidate_library(
     target_count: int = 500,
     seed: int = RANDOM_SEED,
     input_csv: Optional[str] = None,
     input_sdf: Optional[str] = None,
+    seed_smiles: Optional[List[str]] = None,
 ) -> List[CompoundRecord]:
     """
     Phase 2.1 — Generate a diverse library.
@@ -194,11 +208,38 @@ def generate_candidate_library(
         seed: Random seed for reproducibility.
         input_csv: Optional path to an external compound library CSV.
         input_sdf: Optional path to an external compound library SDF.
+        seed_smiles: Optional list of known-binder SMILES whose fragments are
+            added to the BRICS fragment pool to bias recombination toward
+            credible PBP2a-binding chemotypes. Defaults to ceftaroline &
+            meropenem (from ``CONTROL_SMILES``); pass ``[]`` to disable. The
+            env var ``AUTOANTIBIOTIC_LIB_CSV``, if set, is merged in as if
+            passed via ``input_csv`` (in addition to any explicit argument).
 
     Returns:
         List of CompoundRecord objects (SMILES only, no computed props yet).
     """
     log.info("─── Phase 2: Library Generation ───")
+
+    # ── External CSV merge (AUTOANTIBIOTIC_LIB_CSV) ──
+    # If the env var points to a CSV, merge it into the generated library
+    # before filtering. We reuse the existing input_csv reader and simply
+    # concatenate the two record lists when BRICS generation is used. When an
+    # explicit ``input_csv`` was given we prefer it; otherwise the env var is
+    # read as an additional external source. Missing/invalid env CSV is skipped
+    # gracefully (warning only) so the pipeline keeps running.
+    external_csv = os.environ.get(EXTERNAL_LIB_CSV_ENV)
+    if external_csv and input_csv is None:
+        if os.path.exists(external_csv):
+            log.info(
+                f"  Merging external library CSV from env "
+                f"{EXTERNAL_LIB_CSV_ENV}: {external_csv}"
+            )
+            input_csv = external_csv
+        else:
+            log.warning(
+                f"  {EXTERNAL_LIB_CSV_ENV} set but file not found "
+                f"({external_csv}); ignoring external merge."
+            )
 
     if input_sdf is not None:
         return _read_records_from_sdf(input_sdf)
@@ -256,6 +297,26 @@ def generate_candidate_library(
             try:
                 fragments = BRICS.BRICSDecompose(mol, minFragmentSize=8)
                 for frag_smi in fragments:
+                    frag_mol = Chem.MolFromSmiles(frag_smi)
+                    if frag_mol is not None and _count_atoms(frag_mol) >= 8:
+                        all_fragments.add(frag_smi)
+            except Exception:
+                continue
+
+        # ── Known-binder fragment seeding (optional bias) ──
+        # Decompose the supplied known binders (default: ceftaroline, meropenem)
+        # and allow their BRICS fragments into the pool so recombination is
+        # biased toward credible PBP2a-binding chemotypes. Seeds are added to
+        # the same fragment set; ``None`` keeps the default seeds, ``[]``
+        # disables seeding entirely.
+        if seed_smiles is None:
+            seed_smiles = DEFAULT_SEED_SMILES
+        for smi in seed_smiles:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            try:
+                for frag_smi in BRICS.BRICSDecompose(mol, minFragmentSize=8):
                     frag_mol = Chem.MolFromSmiles(frag_smi)
                     if frag_mol is not None and _count_atoms(frag_mol) >= 8:
                         all_fragments.add(frag_smi)
