@@ -148,6 +148,196 @@ def select_top(records, score_key, descending=False, n=TOP_N):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  TARGET CACHE MANAGER (Quick Screen mode)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DEFAULT_CACHE_DIR = os.path.expanduser("~/.autoantibiotic/cache")
+
+
+def _cache_file(src: Optional[str], cache_dir: str) -> Optional[str]:
+    """
+    Return the path (relative to *cache_dir*) under which *src* is stored,
+    copying the file into *cache_dir* if it lives elsewhere.
+
+    Files already inside *cache_dir* are left untouched. ``None``/missing
+    inputs are returned unchanged so callers can preserve them.
+    """
+    if not src or not os.path.exists(src):
+        return src
+    dst = os.path.join(cache_dir, os.path.basename(src))
+    if os.path.abspath(src) != os.path.abspath(dst):
+        try:
+            shutil.copy(src, dst)
+        except OSError as exc:
+            log.warning(f"  Could not copy {src} into cache: {exc}")
+    return os.path.basename(src)
+
+
+def _serialize_targets(targets: dict, cache_dir: str) -> dict:
+    """Build a JSON-safe manifest describing the prepared targets in *cache_dir*."""
+    def ser_center(c):
+        if c is None:
+            return None
+        return [float(c[0]), float(c[1]), float(c[2])]
+
+    manifest = {
+        "mode": targets.get("mode"),
+        "holo_pdb": _cache_file(targets.get("holo_pdb"), cache_dir),
+    }
+    for key in ("PBP2a", "trypsin", "CES1"):
+        t = targets.get(key)
+        if not t:
+            continue
+        entry = {}
+        if "pdbqt" in t:
+            entry["pdbqt"] = _cache_file(t["pdbqt"], cache_dir)
+        if "cleaned_pdb" in t:
+            entry["cleaned_pdb"] = _cache_file(t["cleaned_pdb"], cache_dir)
+        if "allosteric_center" in t:
+            entry["allosteric_center"] = ser_center(t["allosteric_center"])
+        if "active_center" in t:
+            entry["active_center"] = ser_center(t["active_center"])
+        manifest[key] = entry
+    return manifest
+
+
+def _deserialize_targets(manifest: dict, cache_dir: str) -> dict:
+    """Rebuild a usable targets dict from a cached manifest."""
+    def de_center(c):
+        if c is None:
+            return None
+        return np.array(c, dtype=float)
+
+    targets: Dict[str, Dict] = {}
+    targets["mode"] = manifest.get("mode")
+    hp = manifest.get("holo_pdb")
+    if hp:
+        hp_path = hp if os.path.isabs(hp) else os.path.join(cache_dir, hp)
+        targets["holo_pdb"] = hp_path if os.path.exists(hp_path) else hp
+
+    for key in ("PBP2a", "trypsin", "CES1"):
+        m = manifest.get(key)
+        if not m:
+            continue
+        entry: Dict[str, object] = {}
+        if "pdbqt" in m:
+            p = m["pdbqt"]
+            p = p if os.path.isabs(p) else os.path.join(cache_dir, p)
+            entry["pdbqt"] = p
+        if "cleaned_pdb" in m:
+            p = m["cleaned_pdb"]
+            p = p if os.path.isabs(p) else os.path.join(cache_dir, p)
+            entry["cleaned_pdb"] = p
+        if "allosteric_center" in m:
+            entry["allosteric_center"] = de_center(m["allosteric_center"])
+        if "active_center" in m:
+            entry["active_center"] = de_center(m["active_center"])
+        targets[key] = entry
+    return targets
+
+
+def _get_cached_targets(
+    cache_dir: str,
+    deps: Optional[dict] = None,
+    config: Optional[dict] = None,
+) -> Dict[str, Dict]:
+    """
+    Return prepared docking targets, using an on-disk cache when available.
+
+    The cache lives under *cache_dir* (default ``~/.autoantibiotic/cache``) and
+    consists of a ``targets_manifest.json`` plus the prepared PDBQT/cleaned-PDB
+    files. On a cache hit the manifest is loaded and the targets dict is rebuilt
+    directly from it (no PDB download / cleaning). On a miss, :func:`prepare_targets`
+    is run once, the resulting files are copied into *cache_dir*, and a manifest
+    is written for future runs.
+
+    Args:
+        cache_dir: Directory to store / read the prepared targets.
+        deps: Dependency dict (falls back to :func:`check_dependencies`).
+        config: Config dict (falls back to :func:`load_config`).
+
+    Returns:
+        The targets dictionary (same shape as :func:`prepare_targets`).
+
+    Raises:
+        Whatever :func:`prepare_targets` raises on a cache miss — callers should
+        catch this and fall back to a fresh ``prepare_targets`` invocation.
+    """
+    cache_dir = os.path.expanduser(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+    manifest_path = os.path.join(cache_dir, "targets_manifest.json")
+
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path) as fh:
+                manifest = json.load(fh)
+            targets = _deserialize_targets(manifest, cache_dir)
+            log.info(f"  Loaded cached prepared targets from {cache_dir}")
+            return targets
+        except Exception as exc:
+            log.warning(
+                f"  Cached targets manifest unreadable ({exc}); rebuilding cache."
+            )
+
+    # ── Cache miss: build fresh and persist ──
+    if deps is None:
+        deps = check_dependencies()
+    if config is None:
+        config = load_config()
+
+    # Run preparation directly inside the cache dir so all generated PDBQT /
+    # cleaned-PDB files land there and can be served straight from the cache.
+    targets = prepare_targets(cache_dir, cache_dir, deps, config=config)
+
+    # Ensure the holo structure (used for redocking validation) is also cached.
+    holo_src = targets.get("holo_pdb")
+    if holo_src and os.path.exists(holo_src):
+        holo_dst = os.path.join(cache_dir, "holo_cached.pdb")
+        if os.path.abspath(holo_src) != os.path.abspath(holo_dst):
+            try:
+                shutil.copy(holo_src, holo_dst)
+                targets["holo_pdb"] = holo_dst
+            except OSError as exc:
+                log.warning(f"  Could not cache holo PDB: {exc}")
+
+    manifest = _serialize_targets(targets, cache_dir)
+    try:
+        with open(manifest_path, "w") as fh:
+            json.dump(manifest, fh, indent=2)
+        log.info(f"  Cached prepared targets to {cache_dir}")
+    except OSError as exc:
+        log.warning(f"  Could not write cache manifest: {exc}")
+
+    return targets
+
+
+def _print_single_summary(rec: "CompoundRecord") -> None:
+    """Print a concise single-compound screening summary table to stdout."""
+    inter = getattr(rec, "interactions", None)
+    key_interactions = []
+    if inter:
+        if inter.get("Ser403_contact"):
+            key_interactions.append("Ser403")
+        if inter.get("Lys406_Hbond"):
+            key_interactions.append("Lys406")
+        if inter.get("Tyr446_Hbond"):
+            key_interactions.append("Tyr446")
+    key_str = ", ".join(key_interactions) if key_interactions else "None detected"
+
+    fmt = lambda v: f"{v:.2f} kcal/mol" if v is not None else "N/A"
+
+    print("\n" + "=" * 64)
+    print("  SINGLE-COMPOUND SCREEN SUMMARY")
+    print("=" * 64)
+    print(f"  {'Compound ID':<20}: {rec.compound_id}")
+    print(f"  {'SMILES':<20}: {rec.smiles}")
+    print(f"  {'Allosteric Energy':<20}: {fmt(rec.pb2pa_allosteric_energy)}")
+    print(f"  {'Active Energy':<20}: {fmt(rec.pb2pa_active_energy)}")
+    print(f"  {'Key Interactions':<20}: {key_str}")
+    print("=" * 64 + "\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 0 — DEPENDENCY CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -385,6 +575,10 @@ def run_redocking_validation(
     else:
         log.info(f"  ✓  Redocking validated (RMSD = {rmsd:.3f} Å ≤ 2.0 Å).")
 
+    # ``validation_ok`` reflects the 2.0 Å pass/fail gate, but we always return
+    # the exact measured ``rmsd`` float (even when it exceeds the threshold) so
+    # downstream reporters can display the raw value and emit nuanced trust
+    # signals rather than a binary pass/fail.
     validation_ok = rmsd <= 2.0 if rmsd is not None else False
     return validation_ok, rmsd
 
@@ -1582,7 +1776,8 @@ def generate_csv_report(
             validation_warning = "None"
 
         # ── Trust Badge columns ──
-        # Protocol_RMSD: the raw redocking RMSD value (in Å) for every row. In
+        # Protocol_RMSD: the raw redocking RMSD value (in Å) for every row, shown
+        # as a plain float (e.g. "1.234") wherever a real measurement exists. In
         # CI/mock mode the protocol is never redocked, so it reads "SKIPPED".
         protocol_rmsd_str = "SKIPPED" if is_mock else (
             f"{redock_rmsd:.3f}" if redock_rmsd is not None else "N/A"
@@ -1590,15 +1785,21 @@ def generate_csv_report(
 
         # Validation_Status: a quick-glance trust badge so chemists immediately
         # see protocol quality.
-        #   • CI mode (no real RMSD)            → "CI Mode (Skipped)"
-        #   • redock_rmsd > 2.0 Å               → "CAUTION: High RMSD"
-        #   • otherwise (validated protocol)    → "Validated"
+        #   • CI mode (no real RMSD)                 → "CI Mode (Skipped)"
+        #   • redock_rmsd > 2.0 Å                    → "CAUTION: High RMSD (<val> Å)"
+        #   • 1.5 Å < redock_rmsd <= 2.0 Å          → "Validated (Marginal)"
+        #   • redock_rmsd <= 1.5 Å (good protocol)  → "Validated"
+        #   • science mode but no measured RMSD     → "Validation Unavailable"
         if is_mock:
             validation_status = "CI Mode (Skipped)"
         elif redock_rmsd is not None and redock_rmsd > 2.0:
-            validation_status = "CAUTION: High RMSD"
-        else:
+            validation_status = f"CAUTION: High RMSD ({redock_rmsd:.3f} Å)"
+        elif redock_rmsd is not None and 1.5 < redock_rmsd <= 2.0:
+            validation_status = "Validated (Marginal)"
+        elif redock_rmsd is not None:
             validation_status = "Validated"
+        else:
+            validation_status = "Validation Unavailable"
 
         rows.append({
             "Compound_ID": rec.compound_id,
@@ -1688,6 +1889,173 @@ def generate_images(top3: List[CompoundRecord]) -> List[str]:
             log.warning(f"  Failed to render {rec.compound_id}: {exc}")
 
     return paths
+
+
+def _key_residue_coords(receptor_pdb: str) -> Dict[str, List[np.ndarray]]:
+    """
+    Return the 3D coordinates of the key catalytic residue atoms in *receptor_pdb*.
+
+    Only the polar H-bond donor/acceptor atoms are collected:
+        Ser403 → OG, Lys406 → NZ, Tyr446 → OH.
+
+    Returns a dict ``{resname: [np.ndarray, ...]}`` (empty lists for absent
+    residues). Used to highlight ligand atoms that engage these residues in the
+    2D interaction diagram.
+    """
+    targets_map = {
+        "Ser403": [("SER", 403, "OG")],
+        "Lys406": [("LYS", 406, "NZ")],
+        "Tyr446": [("TYR", 446, "OH")],
+    }
+    atom_coords: Dict[str, List[np.ndarray]] = {k: [] for k in targets_map}
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("receptor", receptor_pdb)
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    for resname, entries in targets_map.items():
+                        for entry in entries:
+                            aname = entry[-1]
+                            resname_expected = entry[0] if len(entry) > 2 else ""
+                            resno_expected = entry[1] if len(entry) > 2 else -1
+                            if (
+                                resname_expected
+                                and residue.get_resname().strip().upper()
+                                != resname_expected.upper()
+                            ):
+                                continue
+                            if resno_expected >= 0 and residue.get_id()[1] != resno_expected:
+                                continue
+                            if aname in residue:
+                                atom_coords[resname].append(
+                                    residue[aname].get_vector().get_array()
+                                )
+    except Exception as exc:
+        log.warning(f"  Could not parse receptor for key residues: {exc}")
+    return atom_coords
+
+
+def _pose_heavy_atom_coords(pdbqt_path: str) -> List[np.ndarray]:
+    """
+    Parse heavy-atom 3D coordinates (in file order) from a docked ligand PDBQT.
+
+    Hydrogen lines are skipped so the returned list indexes the same heavy
+    atoms as a SMILES-derived :class:`Chem.Mol` (PDBQT preparation appends
+    hydrogens after the heavy atoms, preserving heavy-atom order).
+    """
+    coords: List[np.ndarray] = []
+    try:
+        with open(pdbqt_path) as f:
+            for line in f:
+                if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                try:
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    elem = line[76:78].strip()
+                except (ValueError, IndexError):
+                    continue
+                if elem and elem.upper() != "H":
+                    coords.append(np.array([x, y, z]))
+    except OSError:
+        pass
+    return coords
+
+
+def generate_interaction_diagram(
+    record: CompoundRecord,
+    receptor_pdb: str,
+    output_path: str,
+) -> Optional[str]:
+    """
+    Phase 5.2b — Render a 2D interaction diagram for a single compound.
+
+    Draws the ligand (from ``record.mol`` / SMILES) and overlays the key
+    binding interactions: ligand atoms that approach within H-bond distance of
+    Ser403, Lys406, or Tyr446 (parsed from the docked pose in
+    ``record.active_docked_pdbqt``) are highlighted in red. A legend line
+    summarises which conserved residues are engaged.
+
+    The diagram is saved to *output_path* (typically
+    ``output/interaction_<compound_id>.png``) and the path is returned.
+
+    If the heavyweight pose/atom mapping is unavailable, the function still
+    draws the ligand and annotates the detected key interactions from
+    ``record.interactions`` — so a chemist always gets a visual artefact.
+    """
+    mol = record.mol
+    if mol is None:
+        mol = Chem.MolFromSmiles(record.smiles)
+        if mol is None:
+            log.warning(
+                f"  Cannot render ligand for {record.compound_id} "
+                "(invalid SMILES)."
+            )
+            return None
+
+    try:
+        from rdkit.Chem.Draw import rdMolDraw2D
+    except Exception as exc:
+        log.warning(f"  RDKit drawing unavailable: {exc}")
+        return None
+
+    # ── Determine which ligand atoms engage the key residues ──
+    highlight_atoms: List[int] = []
+    inter = getattr(record, "interactions", None)
+    pose = getattr(record, "active_docked_pdbqt", None)
+
+    if pose and os.path.exists(pose) and receptor_pdb and os.path.exists(receptor_pdb):
+        try:
+            key_coords = _key_residue_coords(receptor_pdb)
+            pose_coords = _pose_heavy_atom_coords(pose)
+            n_lig = mol.GetNumAtoms()
+            # Heavy-atom order in the docked pose matches the SMILES-derived mol
+            # (H are appended by the PDBQT prep), so index i maps directly.
+            for i, p in enumerate(pose_coords):
+                if i >= n_lig:
+                    break
+                for resname, coords in key_coords.items():
+                    if not coords:
+                        continue
+                    cutoff = 3.8 if resname == "Lys406" else 3.5
+                    if any(np.linalg.norm(p - c) < cutoff for c in coords):
+                        highlight_atoms.append(i)
+                        break
+        except Exception as exc:
+            log.warning(f"  Atom-level interaction highlight failed: {exc}")
+            highlight_atoms = []
+
+    # De-duplicate while preserving order.
+    highlight_atoms = list(dict.fromkeys(highlight_atoms))
+
+    # ── Build the legend from the interaction fingerprint ──
+    parts = []
+    if inter:
+        if inter.get("Ser403_contact"):
+            parts.append("Ser403 H-bond")
+        if inter.get("Lys406_Hbond"):
+            parts.append("Lys406 H-bond")
+        if inter.get("Tyr446_Hbond"):
+            parts.append("Tyr446 H-bond")
+    legend = "; ".join(parts) if parts else "No key H-bonds detected"
+
+    try:
+        drawer = rdMolDraw2D.MolDraw2DCairo(500, 500)
+        drawer.drawOptions().highlightColor = rdMolDraw2D.Color(1.0, 0.0, 0.0)
+        drawer.DrawMolecule(
+            mol,
+            highlightAtoms=highlight_atoms,
+            legend=legend,
+        )
+        drawer.FinishDrawing()
+        drawer.WriteDrawingText(output_path)
+        log.info(f"  Interaction diagram saved: {output_path}")
+        return output_path
+    except Exception as exc:
+        log.warning(f"  Could not render interaction diagram: {exc}")
+        return None
 
 
 def generate_pymol_script(
@@ -1842,6 +2210,23 @@ def screen_single_compound(
             "cannot dock. Returning record with no docking energies."
         )
 
+    # ── Pose-based interaction analysis ──
+    # The active-site dock (tag == "active") stores its docked pose on
+    # ``rec.active_docked_pdbqt`` (see utils.docking.dock_compound). When such a
+    # pose exists we analyse binding interactions against the cleaned receptor
+    # so the caller gets a populated ``interactions`` fingerprint (H-bond flags
+    # to Ser403 / Lys406 / Tyr446) without re-docking.
+    cleaned_pdb = pb2pa.get("cleaned_pdb")
+    pose = getattr(rec, "active_docked_pdbqt", None)
+    if pose and os.path.exists(pose) and cleaned_pdb and os.path.exists(cleaned_pdb):
+        try:
+            rec.interactions = analyze_binding_interactions(pose, cleaned_pdb)
+        except Exception as exc:
+            log.warning(f"  Interaction analysis failed: {exc}")
+            rec.interactions = None
+    else:
+        rec.interactions = None
+
     return rec
 
 
@@ -1925,7 +2310,7 @@ def _read_records_from_sdf(sdf_path: str) -> List[CompoundRecord]:
 
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
           config: Optional[dict] = None, sdf: Optional[str] = None,
-          smiles: Optional[str] = None):
+          smiles: Optional[str] = None, quick: bool = False):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -1944,6 +2329,10 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         smiles: Optional SMILES string for single-compound screening. When
             set, the full library pipeline (phases 2/4/5) is skipped and a
             single compound is docked & summarised immediately.
+        quick: When True (typically with ``--quick``), prepared targets are
+            served from a persistent cache (``~/.autoantibiotic/cache``) instead
+            of being re-downloaded / re-cleaned. Falls back to a fresh
+            ``prepare_targets`` call if the cache is unavailable.
     """
     ensure_output_dir()
 
@@ -1961,50 +2350,42 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     os.makedirs(work_dir, exist_ok=True)
 
     # ── Phase1: Target preparation ──
-    targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
+    # In Quick Screen mode (--quick) we reuse a persistent cache of prepared
+    # targets instead of re-downloading / re-cleaning PDBs every run. If the
+    # cache is unavailable we transparently fall back to a fresh prepare_targets.
+    if quick:
+        log.info("─── Quick Screen mode: using cached prepared targets ───")
+        cache_dir = DEFAULT_CACHE_DIR
+        try:
+            targets = _get_cached_targets(cache_dir, deps, config)
+        except Exception as exc:
+            log.warning(
+                f"  ⚠  Target caching failed ({exc}); "
+                "falling back to standard prepare_targets()."
+            )
+            targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
+    else:
+        targets = prepare_targets(pdb_dir, work_dir, deps, config=config)
 
     # ── Single-compound ("--smiles") mode ──
     # Screen one molecule instantly and print a text summary. This bypasses the
     # full library generation / selectivity / reporting phases entirely so a
-    # chemist can inspect a single candidate in seconds.
+    # chemist can inspect a single candidate in seconds. (When combined with
+    # --quick, prepared targets are served from the cache.)
     if smiles is not None:
         log.info("─── Single-Compound Mode (--smiles) ───")
         rec = screen_single_compound(smiles, targets, work_dir, deps)
 
         pb2pa = targets.get("PBP2a", {})
-        cleaned_pdb = pb2pa.get("cleaned_pdb")
-        pose = getattr(rec, "active_docked_pdbqt", None)
-
-        # Analyse the active-site pose (if available) and summarise interactions.
-        if pose and os.path.exists(pose) and cleaned_pdb and os.path.exists(cleaned_pdb):
-            try:
-                interactions = analyze_binding_interactions(pose, cleaned_pdb)
-                rec.interactions = interactions
-            except Exception as exc:
-                log.warning(f"  Interaction analysis failed: {exc}")
-                interactions = None
-        else:
-            interactions = None
-
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
             pb2pa.get("pdbqt", ""),
             pb2pa.get("active_center"),
             ACTIVE_BOX_SIZE,
-            interactions=interactions,
+            interactions=rec.interactions,
         )
-        interaction_summary = rec.resistance_notes
 
-        fmt = lambda v: f"{v:.2f} kcal/mol" if v is not None else "N/A"
-        print("\n" + "=" * 64)
-        print("  SINGLE-COMPOUND SCREEN SUMMARY")
-        print("=" * 64)
-        print(f"  Compound ID        : {rec.compound_id}")
-        print(f"  SMILES             : {rec.smiles}")
-        print(f"  Allosteric Energy  : {fmt(rec.pb2pa_allosteric_energy)}")
-        print(f"  Active Energy      : {fmt(rec.pb2pa_active_energy)}")
-        print(f"  Interaction Summary: {interaction_summary}")
-        print("=" * 64 + "\n")
+        _print_single_summary(rec)
 
         sys.exit(0)
 
@@ -2151,6 +2532,19 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     top3 = top10[:3]
     generate_images(top3)
 
+    # Phase 5.2b — 2D interaction diagrams for the top 3 candidates. These give
+    # medicinal chemists a visual proof of the binding mode (ligand atoms that
+    # engage Ser403 / Lys406 / Tyr446 are highlighted in red).
+    try:
+        pb2pa = targets.get("PBP2a", {})
+        receptor_pdb = pb2pa.get("cleaned_pdb")
+        for rec in top3:
+            out_path = OUTPUT_DIR / f"interaction_{rec.compound_id}.png"
+            generate_interaction_diagram(rec, receptor_pdb, str(out_path))
+        log.info("Interaction diagrams saved to output/")
+    except Exception as exc:
+        log.warning(f"  Could not generate interaction diagrams: {exc}")
+
     # Phase 5.3 — PyMOL visualization script for the top 3 candidates.
     try:
         generate_pymol_script(top3, targets, str(OUTPUT_DIR))
@@ -2210,6 +2604,15 @@ if __name__ == "__main__":
             "one-compound docking summary, then exits. Requires prepared targets."
         ),
     )
+    parser.add_argument(
+        "--quick", action="store_true",
+        help=(
+            "Quick Screen mode. Reuse a persistent cache of prepared targets "
+            "(~/.autoantibiotic/cache) instead of re-downloading / re-cleaning "
+            "PDBs. Use with --smiles to screen a single compound in seconds, or "
+            "on its own to accelerate the full pipeline's target preparation."
+        ),
+    )
     args = parser.parse_args()
 
     if args.check:
@@ -2217,4 +2620,4 @@ if __name__ == "__main__":
         sys.exit(0)
 
     main(target_count=args.count, force=args.force, library=args.library,
-         sdf=args.input_sdf, smiles=args.smiles)
+         sdf=args.input_sdf, smiles=args.smiles, quick=args.quick)

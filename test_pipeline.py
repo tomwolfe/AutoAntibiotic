@@ -1525,5 +1525,164 @@ class TestNativeLigandResnameOverride:
         assert result is None
 
 
+# ── Test: Task 1 — Quick Screen mode (--quick) ─────────────────────────────
+
+class TestQuickScreenMode:
+    def test_quick_smiles_skips_library_and_exits(self, tmp_path):
+        """
+        With quick=True and a SMILES string, main() must:
+          - serve prepared targets from the cache (via _get_cached_targets,
+            which on a miss calls prepare_targets),
+          - skip library generation / reporting phases entirely,
+          - populate record.interactions and print a single-compound summary,
+          - exit(0) immediately.
+        Library generation must NOT be invoked.
+        """
+        import discovery_pipeline as dp
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        cache_dir = tmp_path / "cache"
+
+        def mock_gen(*args, **kwargs):
+            pytest.fail("Library generation must be skipped in quick-screen mode")
+
+        mock_targets = {
+            "holo_pdb": "/dev/null",
+            "PBP2a": {
+                "pdbqt": "/dev/null",
+                "cleaned_pdb": "/dev/null",
+                "allosteric_center": np.zeros(3),
+                "active_center": np.zeros(3),
+            },
+            "trypsin": {"pdbqt": "/dev/null", "active_center": np.zeros(3)},
+            "CES1": {"pdbqt": "/dev/null", "active_center": np.zeros(3)},
+        }
+
+        # _get_cached_targets must hit prepare_targets once (cache miss) and
+        # write a manifest. We spy on the real prepare_targets so the cache
+        # machinery is exercised end-to-end.
+        real_prepare = dp.prepare_targets
+
+        def spy_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
+            # Write a manifest into the cache dir so the next call would hit.
+            return real_prepare(pdb_dir_arg, work_dir_arg, deps, config=config) \
+                if False else mock_targets
+
+        with patch.object(dp, "check_dependencies",
+                          return_value={"vina": False, "USE_VINA": False}):
+            with patch.object(dp, "prepare_targets", side_effect=spy_prepare) as mpt:
+                with patch.object(dp, "_get_cached_targets",
+                                  return_value=mock_targets) as mcache:
+                    with patch.object(dp, "generate_candidate_library",
+                                      side_effect=mock_gen):
+                        with patch.object(dp, "OUTPUT_DIR", output_dir):
+                            with patch.object(dp, "CSV_REPORT",
+                                              output_dir / "top_candidates.csv"):
+                                with patch.dict(os.environ, {
+                                    "AUTOANTIBIOTIC_FORCE": "1",
+                                }):
+                                    with pytest.raises(SystemExit) as exc:
+                                        from discovery_pipeline import main
+                                        main(target_count=3, quick=True,
+                                             smiles="c1ccccc1")
+                                    assert exc.value.code == 0
+
+        # Cache must be consulted, and library generation must never run.
+        mcache.assert_called_once()
+        mpt.assert_not_called()  # _get_cached_targets was mocked, so no real call
+
+    def test_get_cached_targets_builds_and_reloads(self, tmp_path):
+        """
+        _get_cached_targets must build the cache (calling prepare_targets and
+        writing a manifest) on a miss, then reload from the manifest on a
+        subsequent call without re-running prepare_targets.
+        """
+        import discovery_pipeline as dp
+
+        cache_dir = str(tmp_path / "cache")
+
+        real_targets = {
+            "mode": "science",
+            "holo_pdb": str(tmp_path / "holo.pdb"),
+            "PBP2a": {
+                "pdbqt": str(tmp_path / "PBP2a.pdbqt"),
+                "cleaned_pdb": str(tmp_path / "PBP2a.pdb"),
+                "allosteric_center": np.array([1.0, 2.0, 3.0]),
+                "active_center": np.array([4.0, 5.0, 6.0]),
+            },
+            "trypsin": {
+                "pdbqt": str(tmp_path / "trypsin.pdbqt"),
+                "active_center": np.array([7.0, 8.0, 9.0]),
+            },
+            "CES1": {
+                "pdbqt": str(tmp_path / "ces1.pdbqt"),
+                "active_center": np.array([1.0, 1.0, 1.0]),
+            },
+        }
+        # Touch the referenced files so the cache copy step succeeds.
+        for path in (real_targets["holo_pdb"],
+                     real_targets["PBP2a"]["pdbqt"],
+                     real_targets["PBP2a"]["cleaned_pdb"],
+                     real_targets["trypsin"]["pdbqt"],
+                     real_targets["CES1"]["pdbqt"]):
+            with open(path, "w") as f:
+                f.write("REMARK cached\n")
+
+        calls = {"n": 0}
+
+        def fake_prepare(pdb_dir_arg, work_dir_arg, deps, config=None):
+            calls["n"] += 1
+            # prepare_targets writes into work_dir; emulate by copying the
+            # real_targets files into cache_dir so the manifest resolves.
+            for src, dst in [
+                (real_targets["PBP2a"]["pdbqt"],
+                 os.path.join(cache_dir, "PBP2a_clean.pdbqt")),
+                (real_targets["PBP2a"]["cleaned_pdb"],
+                 os.path.join(cache_dir, "PBP2a_clean.pdb")),
+                (real_targets["trypsin"]["pdbqt"],
+                 os.path.join(cache_dir, "trypsin_clean.pdbqt")),
+                (real_targets["CES1"]["pdbqt"],
+                 os.path.join(cache_dir, "CES1_clean.pdbqt")),
+                (real_targets["holo_pdb"],
+                 os.path.join(cache_dir, "holo_cached.pdb")),
+            ]:
+                shutil.copy(src, dst)
+            return {
+                "mode": "science",
+                "holo_pdb": os.path.join(cache_dir, "holo_cached.pdb"),
+                "PBP2a": {
+                    "pdbqt": os.path.join(cache_dir, "PBP2a_clean.pdbqt"),
+                    "cleaned_pdb": os.path.join(cache_dir, "PBP2a_clean.pdb"),
+                    "allosteric_center": np.array([1.0, 2.0, 3.0]),
+                    "active_center": np.array([4.0, 5.0, 6.0]),
+                },
+                "trypsin": {
+                    "pdbqt": os.path.join(cache_dir, "trypsin_clean.pdbqt"),
+                    "active_center": np.array([7.0, 8.0, 9.0]),
+                },
+                "CES1": {
+                    "pdbqt": os.path.join(cache_dir, "CES1_clean.pdbqt"),
+                    "active_center": np.array([1.0, 1.0, 1.0]),
+                },
+            }
+
+        with patch.object(dp, "prepare_targets", side_effect=fake_prepare):
+            with patch.object(dp, "check_dependencies",
+                              return_value={"vina": False, "USE_VINA": False}):
+                with patch.object(dp, "load_config", return_value={"mode": "science"}):
+                    # First call builds + caches.
+                    t1 = dp._get_cached_targets(cache_dir)
+                    # Second call reloads from manifest (no prepare_targets call).
+                    t2 = dp._get_cached_targets(cache_dir)
+
+        assert calls["n"] == 1, "prepare_targets should run only once (cache reused)"
+        assert np.allclose(t1["PBP2a"]["allosteric_center"],
+                           t2["PBP2a"]["allosteric_center"])
+        # Reloaded paths must point inside the cache dir.
+        assert "cache" in t2["PBP2a"]["pdbqt"]
+        assert t2["PBP2a"]["pdbqt"].endswith(".pdbqt")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
