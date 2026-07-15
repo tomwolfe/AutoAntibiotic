@@ -154,13 +154,15 @@ def load_config(config_path: str = "config.yaml") -> dict:
         2. ``AUTOANTIBIOTIC_MODE`` environment variable (overrides file).
         3. ``AUTOANTIBIOTIC_CI=1`` environment variable → ``"ci"`` (legacy).
 
-    If no ``config.yaml`` exists, the pipeline defaults to ``mode: science``
-    but emits a warning so the operator is aware of the implicit choice.
+    If no ``config.yaml`` exists, the pipeline defaults to ``mode: ci``
+    (a fast, offline run that proves the install works) and emits a warning.
+    To perform heavy scientific computations, the user must create a
+    ``config.yaml`` with ``mode: science``.
 
     Returns:
         dict with at least a ``mode`` key.
     """
-    cfg: Dict[str, str] = {"mode": "science"}
+    cfg: Dict[str, str] = {"mode": "ci"}
 
     config_file = Path(config_path)
     if config_file.exists():
@@ -173,21 +175,21 @@ def load_config(config_path: str = "config.yaml") -> dict:
             else:
                 log.warning(
                     f"  ⚠  {config_path} missing a valid 'mode' (ci/science); "
-                    "defaulting to mode='science'."
+                    "defaulting to mode='ci'."
                 )
         except ImportError:
             log.warning(
                 "  ⚠  pyyaml is not installed; cannot parse config.yaml. "
-                "Defaulting to mode='science'. Install pyyaml for config support."
+                "Defaulting to mode='ci'. Install pyyaml for config support."
             )
         except Exception as exc:
             log.warning(
                 f"  ⚠  Failed to read {config_path} ({exc}); "
-                "defaulting to mode='science'."
+                "defaulting to mode='ci'."
             )
     else:
         log.warning(
-            f"  ⚠  {config_path} not found; defaulting to mode='science'. "
+            f"  ⚠  {config_path} not found; defaulting to mode='ci'. "
             "Create a config.yaml (mode: ci|science) to set the run mode explicitly."
         )
 
@@ -278,6 +280,19 @@ def check_dependencies() -> dict:
         log.warning(
             "  ⚠  Vina binary not found. Setting USE_VINA = False. "
             "Pipeline will use RDKit Shape/Pharmacophore fallback."
+        )
+        # High-visibility, bold warning printed directly to stdout so the user
+        # is not silently left on the (slower, less accurate) fallback path.
+        print(
+            "\033[1;31m"
+            "\n"
+            "  ╔══════════════════════════════════════════════════════════════════╗\n"
+            "  ║  WARNING: Vina is missing.                                      ║\n"
+            "  ║  For best results, install via:                                 ║\n"
+            "  ║    conda install -c conda-forge vina                            ║\n"
+            "  ╚══════════════════════════════════════════════════════════════════╝\n"
+            "\033[0m",
+            flush=True,
         )
 
     if not obabel_available:
@@ -1636,7 +1651,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # ── Configuration (explicit mode: ci | science) ──
     if config is None:
         config = load_config()
-    mode = config.get("mode", "science")
+    mode = config.get("mode", "ci")
 
     # ── Dependency check ──
     deps = check_dependencies()
@@ -1787,5 +1802,18 @@ if __name__ == "__main__":
             "and the CSV compounds are used directly."
         ),
     )
+    parser.add_argument(
+        "--check", action="store_true",
+        help=(
+            "Only run the dependency check (check_dependencies) and then exit. "
+            "Useful for quickly verifying that AutoDock Vina, OpenBabel, and "
+            "all required Python packages are installed and on PATH."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.check:
+        check_dependencies()
+        sys.exit(0)
+
     main(target_count=args.count, force=args.force, library=args.library)
