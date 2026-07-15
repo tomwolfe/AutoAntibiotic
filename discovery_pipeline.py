@@ -190,9 +190,20 @@ def check_dependencies() -> dict:
     # ── External binaries (non-fatal; affect available features) ──
     vina_available = False
     try:
-        subprocess.run(["vina", "--version"], capture_output=True, timeout=10)
+        vina_result = subprocess.run(
+            ["vina", "--version"], capture_output=True, text=True, timeout=10
+        )
         vina_available = True
-        log.info("  ✓  AutoDock Vina binary found on PATH.")
+        # Capture and surface the reported Vina version so users can confirm
+        # the docking engine version used for protocol validation.
+        vina_version = (vina_result.stdout or vina_result.stderr).strip()
+        if vina_version:
+            log.info(
+                f"  ✓  AutoDock Vina binary found on PATH "
+                f"(version: {vina_version})"
+            )
+        else:
+            log.info("  ✓  AutoDock Vina binary found on PATH.")
     except (FileNotFoundError, subprocess.TimeoutExpired):
         missing_bins.append("AutoDock Vina (vina)")
 
@@ -714,6 +725,11 @@ class CompoundRecord:
     # Path to the active-site Vina docked pose (PDBQT), populated during
     # screening so that pose-based interaction analysis need not re-dock.
     active_docked_pdbqt: Optional[str] = None
+
+    # Interaction fingerprint (dict returned by analyze_binding_interactions)
+    # captured during Phase 4 so reporting can expose per-residue H-bond flags
+    # without re-parsing the docked pose.
+    interactions: Optional[Dict[str, Union[bool, float]]] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1437,6 +1453,10 @@ def analyze_selectivity_and_resistance(
                 except Exception:
                     interactions = None
 
+        # Stash the interaction fingerprint on the record so the CSV report
+        # can derive per-residue H-bond columns without re-parsing the pose.
+        rec.interactions = interactions
+
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
             pb2pa["pdbqt"],
@@ -1458,6 +1478,7 @@ def generate_csv_report(
     validation_ok: bool = False,
     holo_pdb_path: Optional[str] = None,
     mode: str = "science",
+    redock_rmsd: Optional[float] = None,
 ) -> str:
     """
     Phase 5.1 — Write top_candidates.csv with all required columns.
@@ -1467,6 +1488,7 @@ def generate_csv_report(
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
         Selectivity_Confidence, Shape_Score, Max_Similarity, Passes_Lipinski,
         QED_Score, Binding_Mode_Notes, Redock_RMSD, Redock_Validated,
+        Validation_Warning, H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446,
         Structure_Source.
 
     Returns path to CSV.
@@ -1478,6 +1500,33 @@ def generate_csv_report(
 
     rows = []
     for rec in top10:
+        # Per-residue H-bond flags derived from the interaction fingerprint
+        # captured during Phase 4 (min distance to the conserved residue; a
+        # contact is flagged when the ligand approaches within 3.5 Å).
+        inter = getattr(rec, "interactions", None)
+        if inter:
+            h_ser = bool(inter.get("min_dist_Ser403", float("inf")) < 3.5)
+            h_lys = bool(inter.get("min_dist_Lys406", float("inf")) < 3.5)
+            h_tyr = bool(inter.get("min_dist_Tyr446", float("inf")) < 3.5)
+        else:
+            h_ser = h_lys = h_tyr = False
+
+        # Redock RMSD: report the measured value in science mode, mark the
+        # column SKIPPED in CI/mock mode, and N/A when no value is available.
+        if is_mock:
+            redock_rmsd_str = "SKIPPED"
+        elif redock_rmsd is not None:
+            redock_rmsd_str = f"{redock_rmsd:.3f}"
+        else:
+            redock_rmsd_str = "N/A"
+
+        # Validation warning: only raised in science mode when the protocol
+        # did not validate (RMSD > 2.0 Å or the redocking step failed).
+        if (not validation_ok) and mode == "science":
+            validation_warning = "RMSD > 2.0Å or Failed"
+        else:
+            validation_warning = "None"
+
         rows.append({
             "Compound_ID": rec.compound_id,
             "SMILES": rec.smiles,
@@ -1514,14 +1563,15 @@ def generate_csv_report(
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
-            "Redock_RMSD": (
-                "SKIPPED" if is_mock else "N/A"
-            ),
+            "Redock_RMSD": redock_rmsd_str,
             "Redock_Validated": (
                 "SKIPPED" if is_mock
                 else "N/A" if validation_ok is None else str(bool(validation_ok))
             ) + (" (mock)" if is_mock else ""),
-            "Validation_Warning": "N/A",
+            "Validation_Warning": validation_warning,
+            "H_Bond_Ser403": str(h_ser),
+            "H_Bond_Lys406": str(h_lys),
+            "H_Bond_Tyr446": str(h_tyr),
         })
 
     df = pd.DataFrame(rows)
@@ -1564,6 +1614,133 @@ def generate_images(top3: List[CompoundRecord]) -> List[str]:
     return paths
 
 
+def generate_pymol_script(
+    top_candidates: List[CompoundRecord],
+    targets: dict,
+    output_dir: str,
+) -> str:
+    """
+    Phase 5.3 — Write a PyMOL session script (``visualization.pml``) that loads
+    the PBP2a receptor, the top 3 candidate active-site poses, highlights the
+    conserved catalytic residues (Ser403, Lys406, Tyr446) as sticks, and colours
+    each ligand by element for quick medicinal-chemist inspection.
+
+    Returns the path to the generated ``.pml`` file.
+    """
+    pml_path = os.path.join(output_dir, "visualization.pml")
+    receptor_pdb = targets.get("PBP2a", {}).get("cleaned_pdb")
+
+    lines = [
+        "# Auto-generated PyMOL visualization script (AutoAntibiotic)",
+        "# Load with: pymol -l visualization.pml",
+        "",
+    ]
+
+    if receptor_pdb and os.path.exists(receptor_pdb):
+        lines.append(f"load {receptor_pdb!r}, PBP2a")
+        # Highlight the conserved catalytic residues as sticks.
+        lines.append(
+            "select conserved_residues, "
+            "(resn SER and resi 403) or "
+            "(resn LYS and resi 406) or "
+            "(resn TYR and resi 446)"
+        )
+        lines.append("show sticks, conserved_residues")
+        lines.append("color magenta, conserved_residues")
+        lines.append("")
+    else:
+        log.warning(
+            "  PBP2a cleaned PDB not available; PyMOL script will skip receptor load."
+        )
+
+    loaded = 0
+    for i, rec in enumerate(top_candidates[:3]):
+        pose = getattr(rec, "active_docked_pdbqt", None)
+        if not pose or not os.path.exists(pose):
+            log.warning(
+                f"  No active-site pose for {rec.compound_id}; skipping in PyMOL script."
+            )
+            continue
+        name = f"Ligand_{i + 1}_{rec.compound_id}"
+        lines.append(f"load {pose!r}, {name}")
+        lines.append(f"color byelement, {name}")
+        lines.append(f"show sticks, {name}")
+        loaded += 1
+
+    lines.append("")
+    lines.append("# Orient the view")
+    lines.append("zoom")
+    lines.append("orient")
+
+    with open(pml_path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+    log.info(
+        f"  PyMOL script saved: {pml_path} "
+        f"({loaded} ligand pose(s) loaded)."
+    )
+    return pml_path
+
+
+def screen_single_compound(
+    smiles: str,
+    targets: dict,
+    work_dir: str,
+    deps: dict,
+) -> CompoundRecord:
+    """
+    Phase 3 (single-compound API) — Screen one SMILES against PBP2a.
+
+    Builds a :class:`CompoundRecord` from the SMILES, docks it against both the
+    allosteric and active sites of PBP2a (when Vina is available and grid
+    centres are defined), and returns the populated record. This is a thin,
+    programmatic entry point intended for library consumers who want to screen
+    a single compound without generating a full BRICS library.
+
+    Args:
+        smiles: SMILES of the compound to screen.
+        targets: Prepared targets dictionary (from :func:`prepare_targets`).
+        work_dir: Scratch directory for intermediate PDBQT files.
+        deps: Dependency dict (``{"vina": bool, "USE_VINA": bool}``).
+
+    Returns:
+        The populated :class:`CompoundRecord`.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"Invalid SMILES could not be parsed: {smiles!r}")
+
+    rec = CompoundRecord(
+        compound_id="SINGLE_QUERY",
+        smiles=smiles,
+        mol=mol,
+    )
+
+    pb2pa = targets.get("PBP2a", {})
+    receptor_pdbqt = pb2pa.get("pdbqt")
+    allosteric_center = pb2pa.get("allosteric_center")
+    active_center = pb2pa.get("active_center")
+
+    if deps.get("USE_VINA") and receptor_pdbqt:
+        if allosteric_center is not None:
+            rec.pb2pa_allosteric_energy = dock_compound(
+                rec, receptor_pdbqt, allosteric_center,
+                ALLOSTERIC_BOX_SIZE, work_dir, "allosteric",
+            )
+        if active_center is not None:
+            rec.pb2pa_active_energy = dock_compound(
+                rec, receptor_pdbqt, active_center,
+                ACTIVE_BOX_SIZE, work_dir, "active",
+            )
+    else:
+        log.warning(
+            "  Vina unavailable or receptor missing — screen_single_compound "
+            "cannot dock. Returning record with no docking energies."
+        )
+
+    return rec
+
+
 def print_summary(
     n_total: int, n_filtered: int,
     top10: List[CompoundRecord],
@@ -1596,8 +1773,50 @@ def print_summary(
 #  MAIN — Pipeline Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+def _read_records_from_sdf(sdf_path: str) -> List[CompoundRecord]:
+    """
+    Read pre-made molecules from an SDF file into ``CompoundRecord`` objects.
+
+    Uses RDKit's :class:`Chem.SDMolSupplier`. Each molecule becomes a record
+    with a ``compound_id`` taken from its SDF ``_Name`` property (falling back
+    to a positional ``SDF-####`` id) and its canonical SMILES.
+
+    Args:
+        sdf_path: Path to the input SDF file.
+
+    Returns:
+        List of :class:`CompoundRecord` objects (one per readable molecule).
+    """
+    if not os.path.exists(sdf_path):
+        raise FileNotFoundError(f"Input SDF not found: {sdf_path}")
+
+    supplier = Chem.SDMolSupplier(sdf_path, removeHs=False)
+    records: List[CompoundRecord] = []
+    for i, mol in enumerate(supplier):
+        if mol is None:
+            log.warning(f"  Skipping unreadable entry {i} in SDF.")
+            continue
+        if mol.HasProp("_Name"):
+            cid = mol.GetProp("_Name").strip() or f"SDF-{i:04d}"
+        else:
+            cid = f"SDF-{i:04d}"
+        smiles = Chem.MolToSmiles(mol)
+        records.append(CompoundRecord(
+            compound_id=cid,
+            smiles=smiles,
+            mol=mol,
+        ))
+
+    if not records:
+        log.warning(f"  No valid molecules read from SDF: {sdf_path}")
+    else:
+        log.info(f"  Loaded {len(records)} molecules from SDF (BRICS skipped).")
+    return records
+
+
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
-         config: Optional[dict] = None):
+          config: Optional[dict] = None, sdf: Optional[str] = None):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -1610,6 +1829,9 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             BRICS generation is skipped and the CSV compounds are used.
         config: Optional pre-loaded configuration dict (with a ``mode`` key).
             If None, :func:`load_config` is invoked to read ``config.yaml``.
+        sdf: Optional path to an SDF file of pre-made molecules. When set,
+            RDKit's ``Chem.SDMolSupplier`` reads the structures and BRICS
+            generation is skipped entirely.
     """
     ensure_output_dir()
 
@@ -1700,9 +1922,15 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             )
 
     # ── Phase 2: Library generation & filtering ──
-    all_records = generate_candidate_library(
-        target_count=target_count, input_csv=library,
-    )
+    if sdf is not None:
+        # Read pre-made molecules directly from an SDF file (RDKit) instead of
+        # generating a new library via BRICS. This makes the pipeline easy to
+        # integrate with external compound collections.
+        all_records = _read_records_from_sdf(sdf)
+    else:
+        all_records = generate_candidate_library(
+            target_count=target_count, input_csv=library,
+        )
     n_total = len(all_records)
     filtered = apply_filters(all_records)
     n_filtered = len(filtered)
@@ -1735,10 +1963,17 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         validation_ok=validation_ok,
         holo_pdb_path=targets.get("holo_pdb"),
         mode=targets.get("mode"),
+        redock_rmsd=redock_rmsd,
     )
 
     top3 = top10[:3]
     generate_images(top3)
+
+    # Phase 5.3 — PyMOL visualization script for the top 3 candidates.
+    try:
+        generate_pymol_script(top3, targets, str(OUTPUT_DIR))
+    except Exception as exc:
+        log.warning(f"  Could not generate PyMOL script: {exc}")
 
     print_summary(
         n_total, n_filtered, top10,
@@ -1770,6 +2005,14 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--input-sdf", type=str, default=None,
+        help=(
+            "Optional path to an SDF file of pre-made molecules. When provided, "
+            "RDKit reads the structures via Chem.SDMolSupplier and BRICS "
+            "generation is skipped entirely."
+        ),
+    )
+    parser.add_argument(
         "--check", action="store_true",
         help=(
             "Only run the dependency check (check_dependencies) and then exit. "
@@ -1783,4 +2026,5 @@ if __name__ == "__main__":
         check_dependencies()
         sys.exit(0)
 
-    main(target_count=args.count, force=args.force, library=args.library)
+    main(target_count=args.count, force=args.force, library=args.library,
+         sdf=args.input_sdf)
