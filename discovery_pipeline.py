@@ -66,7 +66,6 @@ from utils.filtering import apply_filters
 from utils.structure_prep import (
     _extract_native_ligand_from_holo,
     _compute_rmsd_docked_vs_crystal,
-    _centroid_of_pdb_atoms,
     compute_residue_centroid,
 )
 
@@ -111,6 +110,7 @@ from config.constants import (
     CSV_REPORT,
     TOP_N,
     REPO_ROOT,
+    load_config,
 )
 
 # Preserve the original import-time side effect (seeding for reproducibility).
@@ -125,10 +125,6 @@ try:
     __version__ = _pkg_version("autoantibiotic-discovery-pipeline")
 except Exception:  # pragma: no cover - local/dev fallback
     __version__ = "3.1.0"
-
-# Configuration loading is isolated in config.loader so the orchestrator stays
-# focused on flow control.
-from config.loader import load_config
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -374,9 +370,16 @@ def run_redocking_validation(
         log.warning("  ⚠  Vina unavailable. Redocking validation requires Vina. Skip.")
         return False, None
 
-    # Grid center = centroid of the extracted native ligand PDB (not ALLOSTERIC_RESIDUES)
-    nat_lig_pdb = lig_pdbqt.replace(".pdbqt", ".pdb")
-    center = _centroid_of_pdb_atoms(nat_lig_pdb)
+    # Grid center = centroid of the native ligand residue (derived from the
+    # native-ligand resname override, if provided). If the residue centroid
+    # fails, fall back to None rather than a second helper.
+    resname = resname_override.strip().upper() if resname_override else None
+    center = None
+    if resname:
+        try:
+            center = compute_residue_centroid(holo_pdb_path, [resname])
+        except (ValueError, Exception):
+            center = None
     if center is None:
         log.warning(
             "  ⚠  Could not compute native-ligand centroid; "
@@ -1421,47 +1424,6 @@ def print_summary(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _read_records_from_sdf(sdf_path: str) -> List[CompoundRecord]:
-    """
-    Read pre-made molecules from an SDF file into ``CompoundRecord`` objects.
-
-    Uses RDKit's :class:`Chem.SDMolSupplier`. Each molecule becomes a record
-    with a ``compound_id`` taken from its SDF ``_Name`` property (falling back
-    to a positional ``SDF-####`` id) and its canonical SMILES.
-
-    Args:
-        sdf_path: Path to the input SDF file.
-
-    Returns:
-        List of :class:`CompoundRecord` objects (one per readable molecule).
-    """
-    if not os.path.exists(sdf_path):
-        raise FileNotFoundError(f"Input SDF not found: {sdf_path}")
-
-    supplier = Chem.SDMolSupplier(sdf_path, removeHs=False)
-    records: List[CompoundRecord] = []
-    for i, mol in enumerate(supplier):
-        if mol is None:
-            log.warning(f"  Skipping unreadable entry {i} in SDF.")
-            continue
-        if mol.HasProp("_Name"):
-            cid = mol.GetProp("_Name").strip() or f"SDF-{i:04d}"
-        else:
-            cid = f"SDF-{i:04d}"
-        smiles = Chem.MolToSmiles(mol)
-        records.append(CompoundRecord(
-            compound_id=cid,
-            smiles=smiles,
-            mol=mol,
-        ))
-
-    if not records:
-        log.warning(f"  No valid molecules read from SDF: {sdf_path}")
-    else:
-        log.info(f"  Loaded {len(records)} molecules from SDF (BRICS skipped).")
-    return records
-
-
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
           config: Optional[dict] = None, sdf: Optional[str] = None,
           smiles: Optional[str] = None):
@@ -1637,15 +1599,12 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             log.warning(f"  Could not write status.json: {exc}")
 
     # ── Phase 2: Library generation & filtering ──
-    if sdf is not None:
-        # Read pre-made molecules directly from an SDF file (RDKit) instead of
-        # generating a new library via BRICS. This makes the pipeline easy to
-        # integrate with external compound collections.
-        all_records = _read_records_from_sdf(sdf)
-    else:
-        all_records = generate_candidate_library(
-            target_count=target_count, input_csv=library,
-        )
+    # Read pre-made molecules directly from an SDF file (RDKit) when provided,
+    # instead of generating a new library via BRICS. This makes the pipeline
+    # easy to integrate with external compound collections.
+    all_records = generate_candidate_library(
+        target_count=target_count, input_csv=library, input_sdf=sdf,
+    )
     n_total = len(all_records)
     filtered = apply_filters(all_records)
     n_filtered = len(filtered)

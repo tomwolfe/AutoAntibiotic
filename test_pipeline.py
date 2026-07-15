@@ -585,7 +585,7 @@ class TestRealPDBSmoke:
             captured["targets"] = result
             return result
 
-        def mock_generate(target_count=2, input_csv=None):
+        def mock_generate(target_count=2, input_csv=None, input_sdf=None):
             smis = ["c1ccccc1", "Cc1ccccc1"]
             recs = []
             for i, s in enumerate(smis):
@@ -926,7 +926,7 @@ class TestMainRedockingGate:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        def mock_gen(target_count=3, input_csv=None):
+        def mock_gen(target_count=3, input_csv=None, input_sdf=None):
             return [CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
                                    mol=Chem.MolFromSmiles("c1ccccc1")) for i in range(3)]
 
@@ -979,7 +979,7 @@ class TestMainRedockingGate:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        def mock_gen(target_count=3, input_csv=None):
+        def mock_gen(target_count=3, input_csv=None, input_sdf=None):
             return [CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
                                    mol=Chem.MolFromSmiles("c1ccccc1")) for i in range(3)]
 

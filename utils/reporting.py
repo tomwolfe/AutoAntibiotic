@@ -23,7 +23,7 @@ from rdkit.Chem.Draw import rdMolDraw2D
 
 from Bio.PDB import PDBParser
 
-from config.constants import OUTPUT_DIR, CSV_REPORT
+from config.constants import OUTPUT_DIR, CSV_REPORT, protocol_trust
 
 # A module-level logger sharing the pipeline's "AutoAntibiotic" logger name so
 # that handlers configured in discovery_pipeline capture these messages too.
@@ -157,22 +157,10 @@ def generate_csv_report(
         )
 
         # protocol_trust: a single quick-glance trust badge so chemists
-        # immediately see protocol quality.
-        #   • CI mode (no real RMSD)                 → "CI Mode (Skipped)"
-        #   • redock_rmsd > 2.0 Å                    → "CAUTION: High RMSD (<val> Å)"
-        #   • 1.5 Å < redock_rmsd <= 2.0 Å          → "Validated (Marginal)"
-        #   • redock_rmsd <= 1.5 Å (good protocol)  → "Validated"
-        #   • science mode but no measured RMSD     → "Validation Unavailable"
-        if is_mock:
-            protocol_trust = "CI Mode (Skipped)"
-        elif redock_rmsd is not None and redock_rmsd > 2.0:
-            protocol_trust = f"CAUTION: High RMSD ({redock_rmsd:.3f} Å)"
-        elif redock_rmsd is not None and 1.5 < redock_rmsd <= 2.0:
-            protocol_trust = "Validated (Marginal)"
-        elif redock_rmsd is not None:
-            protocol_trust = "Validated"
-        else:
-            protocol_trust = "Validation Unavailable"
+        # immediately see protocol quality. The canonical mapping logic lives in
+        # ``config.constants.protocol_trust`` so it remains the single source of
+        # truth for these exact output strings.
+        protocol_trust_val = protocol_trust(mode, redock_rmsd)
 
         rows.append({
             "Compound_ID": rec.compound_id,
@@ -206,7 +194,7 @@ def generate_csv_report(
             "QED_Score": f"{rec.qed_score:.3f}",
             "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
             "Protocol_RMSD": protocol_rmsd_str,
-            "protocol_trust": protocol_trust,
+            "protocol_trust": protocol_trust_val,
             "H_Bond_Ser403": str(h_ser),
             "H_Bond_Lys406": str(h_lys),
             "H_Bond_Tyr446": str(h_tyr),

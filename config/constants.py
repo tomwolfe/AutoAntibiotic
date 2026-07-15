@@ -11,8 +11,12 @@ that it can be imported by any other module — including ``discovery_pipeline``
 """
 
 import multiprocessing as mp
+import os
+import logging
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+log = logging.getLogger("AutoAntibiotic")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  RANDOM SEED
@@ -126,3 +130,103 @@ TOP_N = 10
 
 # Repository root (used to locate bundled offline PDB files under tests/data).
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PROTOCOL TRUST MAP
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def protocol_trust(mode: str, redock_rmsd: Optional[float]) -> str:
+    """
+    Return the trust badge string for the docking protocol given the run *mode*
+    and the measured *redock_rmsd*.
+
+    The exact output strings are the canonical contract consumed by
+    ``utils.reporting.generate_csv_report``:
+
+        - CI mode (no real RMSD)                 → "CI Mode (Skipped)"
+        - redock_rmsd > 2.0 Å                    → "CAUTION: High RMSD (<val> Å)"
+        - 1.5 Å < redock_rmsd <= 2.0 Å          → "Validated (Marginal)"
+        - redock_rmsd <= 1.5 Å (good protocol)  → "Validated"
+        - science mode but no measured RMSD     → "Validation Unavailable"
+    """
+    if mode == "ci":
+        return "CI Mode (Skipped)"
+    if redock_rmsd is not None and redock_rmsd > 2.0:
+        return f"CAUTION: High RMSD ({redock_rmsd:.3f} Å)"
+    if redock_rmsd is not None and 1.5 < redock_rmsd <= 2.0:
+        return "Validated (Marginal)"
+    if redock_rmsd is not None:
+        return "Validated"
+    return "Validation Unavailable"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CONFIG LOADING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_config(config_path: str = "config.yaml") -> dict:
+    """
+    Load pipeline configuration from *config_path* (YAML) or environment.
+
+    The configuration exposes a ``mode`` key, either ``"ci"`` (CI/mock runs,
+    no physical redocking) or ``"science"`` (real scientific validation).
+
+    Resolution order (first match wins):
+        1. ``AUTOANTIBIOTIC_MODE`` environment variable — explicit override,
+            takes precedence over everything on disk. Accepted values:
+            ``"ci"`` or ``"science"``.
+        2. ``config.yaml`` on disk — the preferred, version-controlled source
+            of truth. The ``mode`` key must be exactly ``"ci"`` or
+            ``"science"``; anything else is ignored and the warning path runs.
+        3. Default fallback — if no file exists (or it is unreadable / missing
+            a valid ``mode``), the pipeline defaults to ``mode: ci`` (a fast,
+            offline run that proves the install works) and emits a warning.
+
+    To perform heavy scientific computations, create a ``config.yaml`` with
+    ``mode: science`` (or set ``AUTOANTIBIOTIC_MODE=science``).
+
+    Returns:
+        dict with at least a ``mode`` key.
+    """
+    cfg: Dict[str, str] = {"mode": "ci"}
+
+    # ── 1: Environment override (explicit is preferred over implicit) ──
+    env_mode = os.environ.get("AUTOANTIBIOTIC_MODE")
+    if env_mode in ("ci", "science"):
+        cfg["mode"] = env_mode
+        return cfg
+
+    # ── 2: config.yaml on disk ──
+    config_file = Path(config_path)
+    if config_file.exists():
+        try:
+            import yaml
+
+            with open(config_file) as fh:
+                data = yaml.safe_load(fh) or {}
+            if isinstance(data, dict) and data.get("mode") in ("ci", "science"):
+                cfg["mode"] = data["mode"]
+            else:
+                log.warning(
+                    f"  ⚠  {config_path} missing a valid 'mode' (ci/science); "
+                    "defaulting to mode='ci'."
+                )
+        except ImportError:
+            log.warning(
+                "  ⚠  pyyaml is not installed; cannot parse config.yaml. "
+                "Defaulting to mode='ci'. Install pyyaml for config support."
+            )
+        except Exception as exc:
+            log.warning(
+                f"  ⚠  Failed to read {config_path} ({exc}); "
+                "defaulting to mode='ci'."
+            )
+    else:
+        log.warning(
+            f"  ⚠  {config_path} not found; defaulting to mode='ci'. "
+            "Create a config.yaml (mode: ci|science) to set the run mode explicitly."
+        )
+
+    # ── 4: default fallback already set above (mode: ci) ──
+    return cfg

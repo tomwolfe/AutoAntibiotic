@@ -39,3 +39,6 @@ The candidate CSV (`output/top_candidates.csv`) carries a single
 - `Validation Unavailable` — science mode but no RMSD was measured.
 
 Treat any result whose `protocol_trust` is not `Validated` as preliminary.
+
+> The canonical logic for these exact trust strings lives in
+> `config/constants.py` (`protocol_trust`).

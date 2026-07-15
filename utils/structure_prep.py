@@ -227,19 +227,3 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
 
     centroid = np.mean(ca_coords, axis=0)
     return centroid
-
-
-def _centroid_of_pdb_atoms(pdb_path: str) -> Optional[np.ndarray]:
-    """
-    Return the geometric centroid (x, y, z) of all atoms in a PDB file,
-    or None if the file cannot be parsed / contains no atoms.
-    """
-    try:
-        parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("lig", pdb_path)
-        coords = [atom.get_vector().get_array() for atom in struct.get_atoms()]
-        if not coords:
-            return None
-        return np.mean(coords, axis=0)
-    except Exception:
-        return None
