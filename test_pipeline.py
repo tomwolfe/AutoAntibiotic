@@ -18,7 +18,6 @@ import numpy as np
 import pytest
 
 from discovery_pipeline import (
-    compute_residue_centroid,
     apply_filters,
     generate_candidate_library,
     check_dependencies,
@@ -29,15 +28,18 @@ from discovery_pipeline import (
     profile_resistance_risk,
     LigandPreparator,
     CompoundRecord,
-    BETA_LACTAM_SMARTS,
     OUTPUT_DIR,
     TOP_N,
     ensure_output_dir,
     screen_library,
     _dock_compounds_parallel,
     TanimotoSimilarity,
-    DIVERSITY_MIN_COUNT,
     log,
+)
+from utils.structure_prep import compute_residue_centroid
+from config.constants import (
+    BETA_LACTAM_SMARTS,
+    DIVERSITY_MIN_COUNT,
 )
 from rdkit import Chem
 
@@ -589,8 +591,8 @@ class TestApplyFiltersRelaxed:
             for i in range(20)
         ]
 
-        with patch("discovery_pipeline.TanimotoSimilarity", return_value=0.45):
-            with patch("discovery_pipeline.DIVERSITY_MIN_COUNT", 100):
+        with patch("utils.filtering.TanimotoSimilarity", return_value=0.45):
+            with patch("utils.filtering.DIVERSITY_MIN_COUNT", 100):
                 with patch.object(log, "info") as mock_info:
                     result = apply_filters(records)
 

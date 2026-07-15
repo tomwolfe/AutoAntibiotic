@@ -30,15 +30,13 @@ import shutil
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Union, Callable
 from dataclasses import dataclass
-import multiprocessing as mp
-
 import numpy as np
 import pandas as pd
 
 # ── RDKit ──────────────────────────────────────────────────────────────────────
-from rdkit import Chem, RDConfig
+from rdkit import Chem
 from rdkit.Chem import (
-    AllChem, Descriptors, QED, rdMolDescriptors,
+    Descriptors, QED, rdMolDescriptors,
     rdDistGeom, Crippen, FilterCatalog, BRICS,
 )
 from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
@@ -69,68 +67,47 @@ from utils.docking import (
 )
 from utils.filtering import apply_filters
 
+# Structural helpers (native-ligand extraction, RMSD, centroids) live in their
+# own module to keep this orchestrator focused on flow control. They are
+# re-exported here so call sites and existing tests that reference
+# ``discovery_pipeline.<name>`` keep working unchanged.
+from utils.structure_prep import (
+    _extract_native_ligand_from_holo,
+    _compute_rmsd_docked_vs_crystal,
+    _centroid_of_pdb_atoms,
+    compute_residue_centroid,
+)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  CONSTANTS
-# ═══════════════════════════════════════════════════════════════════════════════
+# Configuration constants are centralised in config.constants to break the
+# former circular import between this module and the utils package. They are
+# re-exported here for backward compatibility with existing call sites/tests.
+from config.constants import (
+    RANDOM_SEED,
+    PDB_IDS,
+    REFERENCE_ANTIBIOTICS,
+    BETA_LACTAM_SMARTS,
+    ALLOSTERIC_RESIDUES,
+    ACTIVE_SITE_RESIDUES,
+    CONSERVED_RESIDUES,
+    TRYPSIN_CATALYTIC_RESIDUES,
+    CES1_CATALYTIC_RESIDUES,
+    ALLOSTERIC_BOX_SIZE,
+    ACTIVE_BOX_SIZE,
+    VINA_TIMEOUT_S,
+    N_JOBS,
+    SIMILARITY_THRESHOLD,
+    SIMILARITY_THRESHOLD_RELAXED,
+    DIVERSITY_MIN_COUNT,
+    SELECTIVITY_INDEX_THRESHOLD,
+    OUTPUT_DIR,
+    CSV_REPORT,
+    TOP_N,
+    REPO_ROOT,
+)
 
-RANDOM_SEED = 42
+# Preserve the original import-time side effect (seeding for reproducibility).
 np.random.seed(RANDOM_SEED)
 
-# PDB identifiers
-PDB_IDS = {
-    "PBP2a_apo": "3QPD",
-    "PBP2a_holo": "6TKO",
-    "trypsin": "1UTN",
-    "CES1": "3KJZ",
-}
-
-# Reference antibiotics for similarity filtering (SMILES)
-REFERENCE_ANTIBIOTICS = {
-    "Methicillin":  "CC1=C(C(=C(C(=C1O)OC)OC)OC)C(=O)NC2C3C(C(=O)N3C2=O)SC4(C)C",
-    "Vancomycin":   "CC1C(C(CC(O1)OC2C(C(C(OC2OC3=C4C=C5C(=C4OC6=C(C(=CC(=C6)C(C(=O)NC(C(=O)NC5C(=O)O)CC7=CC=C(C=C7)O)NC(=O)C8C(O)C(=C(C=C8)Cl)O)O)O)CO)O)O)O)NC(=O)C9C(O)C(=C(C=C9)Cl)O)(CC(=O)N)O",
-    "Ceftaroline":  "CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O",
-    "Meropenem":    "CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O",
-    "Oxacillin":    "CC1=C(C(=NO1)C2=CC=CC=C2)C(=O)NC3C4C(C(=O)N4C3=O)SC5(C)C",
-}
-
-# β-lactam SMARTS to exclude
-BETA_LACTAM_SMARTS = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
-
-# Allosteric and Active site residues
-ALLOSTERIC_RESIDUES = ["ALA237", "MET241", "TYR159"]
-ACTIVE_SITE_RESIDUES = ["SER403"]
-
-# Conserved catalytic residues for scientific coherence cross-check
-CONSERVED_RESIDUES = ["SER403", "LYS406", "TYR446"]
-
-# Off-target catalytic residues for selectivity docking
-TRYPSIN_CATALYTIC_RESIDUES = ["HIS57", "ASP102", "SER195"]
-CES1_CATALYTIC_RESIDUES = ["SER221", "HIS468", "GLU354"]
-
-# Grid box defaults (Angstroms)
-ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
-ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
-
-# Docking
-VINA_TIMEOUT_S = 120
-N_JOBS = max(1, mp.cpu_count() - 1)
-
-# Similarity
-SIMILARITY_THRESHOLD = 0.4
-SIMILARITY_THRESHOLD_RELAXED = 0.5
-DIVERSITY_MIN_COUNT = 100
-
-# Selectivity
-SELECTIVITY_INDEX_THRESHOLD = 2.0
-
-# Outputs
-OUTPUT_DIR = Path("output")
-CSV_REPORT = OUTPUT_DIR / "top_candidates.csv"
-TOP_N = 10
-
-# Repository root (used to locate bundled offline PDB files under tests/data).
-REPO_ROOT = Path(__file__).resolve().parent
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LOGGING CONFIGURATION
@@ -315,162 +292,6 @@ def check_dependencies() -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PHASE 0 — PROTOCOL VALIDATION (Redocking)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def _extract_native_ligand_from_holo(
-    holo_pdb_path: str,
-    output_ligand_smi: str,
-    output_ligand_pdbqt: str,
-) -> Optional[str]:
-    """
-    Parse the holo structure (6TKO), locate the co-crystallised ligand,
-    write its SMILES to *output_ligand_smi* and its PDBQT to *output_ligand_pdbqt*.
-
-    Returns the SMILES string, or None on failure.
-    """
-    KNOWN_ANTIBIOTIC_NAMES = {
-        "LIG", "INH", "METHI", "VANCO", "CEFTA", "MEROP",
-        "NAT", "BPN",  # common residue names for antibiotic ligands
-    }
-
-    def _is_likely_ligand(resname: str) -> bool:
-        """Return True if resname is not a common buffer/ion/water."""
-        skip_names = {"SO4", "PO4", "ACT", "EDO", "GOL", "EG0", "E2O",
-                      "CL", "NA", "MG", "ZN", "CA", "FE", "FE2", "HOH",
-                      "WAT", "SOL", "ACN", "DMS", "DMF", "N2G", "MPD"}
-        upper = resname.upper()
-        if upper in skip_names:
-            return False
-        if any(upper.startswith(prefix) for prefix in ("LIG", "INH", "BPN", "NAT",
-                                                          "CEF", "MER", "VAN")):
-            return True
-        return False
-
-    try:
-        parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("6TKO", holo_pdb_path)
-
-        ligand_residues = []
-        for model in struct:
-            for chain in model:
-                for residue in chain:
-                    if residue.get_id()[0] in ("H_", "W", "H_M"):
-                        continue
-                    if residue.get_id()[0] == " ":
-                        continue
-                    resname = residue.get_resname().strip()
-                    if resname in ("HOH", "WAT", "SOL"):
-                        continue
-                    ligand_residues.append((chain.get_id(), residue))
-
-        if not ligand_residues:
-            log.warning("  ⚠  No hetero-ligand found in 6TKO.")
-            return None
-
-        # Filter out buffers/ions, prefer known antibiotic names
-        filtered = []
-        for chain_id, res in ligand_residues:
-            resname = res.get_resname().strip().upper()
-            if _is_likely_ligand(resname):
-                filtered.append((chain_id, res))
-
-        if not filtered:
-            log.warning("  ⚠  No known antibiotic/ligand residue found. Falling back to first HETATM.")
-            filtered = ligand_residues  # fallback to original list
-
-        if len(filtered) > 1:
-            # Prefer the one with the highest heavy atom count
-            best = max(filtered, key=lambda x: x[1].get_num_atoms())
-            chain_id, lig_res = best
-            log.info(f"  Selected ligand (most heavy atoms): chain {chain_id}, "
-                     f"residue {lig_res.get_resname()} ({lig_res.get_num_atoms()} atoms)")
-        else:
-            chain_id, lig_res = filtered[0]
-            log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
-
-        # Write ligand as a separate PDB file
-        pdbio = PDBIO()
-        class LigSelect(Select):
-            def accept_residue(self, residue):
-                return residue is lig_res
-        pdbio.set_structure(struct)
-        lig_pdb = output_ligand_pdbqt.replace(".pdbqt", ".pdb")
-        pdbio.save(lig_pdb, LigSelect())
-
-        # Convert to MOL → SMILES via RDKit's PDB parser (or obabel fallback)
-        mol = Chem.MolFromPDBFile(lig_pdb, removeHs=False)
-        if mol is None:
-            log.warning("  ⚠  RDKit could not read ligand PDB, trying obabel…")
-            smi_file = output_ligand_smi
-            try:
-                subprocess.run(
-                    ["obabel", lig_pdb, "-O", smi_file],
-                    capture_output=True, timeout=30,
-                )
-                with open(smi_file) as f:
-                    smi = f.readline().strip()
-                if smi:
-                    return smi
-            except Exception:
-                pass
-            return None
-
-        Chem.SanitizeMol(mol)
-        smi = Chem.MolToSmiles(mol)
-
-        with open(output_ligand_smi, "w") as f:
-            f.write(smi + "\n")
-        log.info(f"  Native ligand SMILES: {smi}")
-
-        # Convert to PDBQT via LigandPreparator
-        try:
-            preparator = LigandPreparator()
-            pdbqt_str = preparator.prepare(mol)
-            with open(output_ligand_pdbqt, "w") as f:
-                f.write(pdbqt_str)
-            log.info(f"  Native ligand PDBQT written to {output_ligand_pdbqt}")
-        except Exception as exc:
-            log.warning(f"  ⚠  LigandPreparator failed for native ligand: {exc}")
-            # Fallback: copy PDB as-is
-            shutil.copy(lig_pdb, output_ligand_pdbqt)
-
-        return smi
-
-    except Exception as exc:
-        log.error(f"  ✗  Native ligand extraction failed: {exc}")
-        return None
-
-
-def _compute_rmsd_docked_vs_crystal(
-    docked_pdb: str, crystal_pdb: str
-) -> Optional[float]:
-    """
-    Align the docked ligand to the crystal ligand and compute heavy-atom RMSD.
-
-    Uses RDKit's AllChem.GetBestRMS after MCS-based atom-order alignment.
-    Returns None if MCS cannot be found or any error occurs.
-    """
-    try:
-        docked_mol = Chem.MolFromPDBFile(docked_pdb, removeHs=False)
-        if docked_mol is None:
-            log.error("  ✗  Could not parse docked PDB as an RDKit Mol.")
-            return None
-
-        crystal_mol = Chem.MolFromPDBFile(crystal_pdb, removeHs=False)
-        if crystal_mol is None:
-            log.error("  ✗  Could not parse crystal PDB as an RDKit Mol.")
-            return None
-
-        rms = AllChem.GetBestRMS(docked_mol, crystal_mol, 0, 0)
-        if rms is None:
-            log.warning("  ⚠  MCS alignment failed — cannot order atoms consistently.")
-            return None
-
-        return rms
-
-    except Exception as exc:
-        log.error(f"  ✗  RMSD calculation failed: {exc}")
-        return None
-
 
 def run_redocking_validation(
     holo_pdb_path: str,
@@ -681,77 +502,8 @@ def clean_pdb_structure(
         raise
 
 
-def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray:
-    """
-    Compute the geometric centroid of Cα atoms for the given list of
-    residue identifiers (format: 'ALA237').
-
-    Args:
-        pdb_path: Path to PDB structure.
-        resid_list: e.g. ["ALA237", "MET241", "TYR159"].
-
-    Returns:
-        (x, y, z) centroid as numpy array of shape (3,).
-    """
-    parser = PDBParser(QUIET=True)
-    struct = parser.get_structure("target", pdb_path)
-
-    # Build set of (resname, seq_num) from input
-    target = set()
-    for entry in resid_list:
-        # Separate alphabetic resname from numeric seq_id
-        resname = "".join(ch for ch in entry if ch.isalpha()).upper()
-        seqnum = int("".join(ch for ch in entry if ch.isdigit()))
-        target.add((resname, seqnum))
-
-    ca_coords = []
-    for model in struct:
-        for chain in model:
-            for residue in chain:
-                rid = residue.get_id()
-                # Ignore hetero atoms
-                if rid[0] != " ":
-                    continue
-                key = (residue.get_resname().strip().upper(), rid[1])
-                if key in target:
-                    if "CA" in residue:
-                        ca_coords.append(residue["CA"].get_vector().get_array())
-                    else:
-                        log.warning(
-                            f"  ⚠  No Cα found for {key[0]}{key[1]}. "
-                            "Using geometric center of all residue atoms."
-                        )
-                        atoms = list(residue.get_atoms())
-                        if atoms:
-                            coords = np.array([a.get_vector().get_array() for a in atoms])
-                            ca_coords.append(coords.mean(axis=0))
-
-    if not ca_coords:
-        log.error(
-            f"  ✗  None of the requested residues {resid_list} were found "
-            f"in structure. Available residues: "
-            f"{[(r.get_resname(), r.get_id()[1]) for r in struct.get_residues()]}"
-        )
-        raise ValueError(f"No matching residues found in {pdb_path}")
-
-    centroid = np.mean(ca_coords, axis=0)
-    return centroid
-
-
-def _centroid_of_pdb_atoms(pdb_path: str) -> Optional[np.ndarray]:
-    """
-    Return the geometric centroid (x, y, z) of all atoms in a PDB file,
-    or None if the file cannot be parsed / contains no atoms.
-    """
-    try:
-        parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("lig", pdb_path)
-        coords = [atom.get_vector().get_array() for atom in struct.get_atoms()]
-        if not coords:
-            return None
-        return np.mean(coords, axis=0)
-    except Exception:
-        return None
+# NOTE: compute_residue_centroid / _centroid_of_pdb_atoms now live in
+# utils.structure_prep and are re-exported above for backward compatibility.
 
 
 def prepare_targets(

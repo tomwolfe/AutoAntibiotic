@@ -1,0 +1,259 @@
+"""
+Structure preparation helpers
+==============================
+
+Low-level structural utilities that operate on PDB / PDBQT files and RDKit
+molecules: native-ligand extraction, RMSD computation, and centroid helpers.
+
+These functions are self-contained and depend only on the standard library,
+RDKit and BioPython (plus :mod:`utils.ligand_prep` for PDBQT preparation).
+Keeping them here breaks the former circular import between
+``discovery_pipeline`` and the ``utils`` package.
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+import subprocess
+from typing import List, Optional
+
+import numpy as np
+
+from rdkit import Chem
+from rdkit.Chem import AllChem
+
+from Bio.PDB import PDBParser, PDBIO, Select
+
+from utils.ligand_prep import LigandPreparator
+
+log = logging.getLogger("AutoAntibiotic")
+
+
+def _extract_native_ligand_from_holo(
+    holo_pdb_path: str,
+    output_ligand_smi: str,
+    output_ligand_pdbqt: str,
+) -> Optional[str]:
+    """
+    Parse the holo structure (6TKO), locate the co-crystallised ligand,
+    write its SMILES to *output_ligand_smi* and its PDBQT to *output_ligand_pdbqt*.
+
+    Returns the SMILES string, or None on failure.
+    """
+    KNOWN_ANTIBIOTIC_NAMES = {
+        "LIG", "INH", "METHI", "VANCO", "CEFTA", "MEROP",
+        "NAT", "BPN",  # common residue names for antibiotic ligands
+    }
+
+    def _is_likely_ligand(resname: str) -> bool:
+        """Return True if resname is not a common buffer/ion/water."""
+        skip_names = {"SO4", "PO4", "ACT", "EDO", "GOL", "EG0", "E2O",
+                      "CL", "NA", "MG", "ZN", "CA", "FE", "FE2", "HOH",
+                      "WAT", "SOL", "ACN", "DMS", "DMF", "N2G", "MPD"}
+        upper = resname.upper()
+        if upper in skip_names:
+            return False
+        if any(upper.startswith(prefix) for prefix in ("LIG", "INH", "BPN", "NAT",
+                                                        "CEF", "MER", "VAN")):
+            return True
+        return False
+
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("6TKO", holo_pdb_path)
+
+        ligand_residues = []
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    if residue.get_id()[0] in ("H_", "W", "H_M"):
+                        continue
+                    if residue.get_id()[0] == " ":
+                        continue
+                    resname = residue.get_resname().strip()
+                    if resname in ("HOH", "WAT", "SOL"):
+                        continue
+                    ligand_residues.append((chain.get_id(), residue))
+
+        if not ligand_residues:
+            log.warning("  ⚠  No hetero-ligand found in 6TKO.")
+            return None
+
+        # Filter out buffers/ions, prefer known antibiotic names
+        filtered = []
+        for chain_id, res in ligand_residues:
+            resname = res.get_resname().strip().upper()
+            if _is_likely_ligand(resname):
+                filtered.append((chain_id, res))
+
+        if not filtered:
+            log.warning("  ⚠  No known antibiotic/ligand residue found. Falling back to first HETATM.")
+            filtered = ligand_residues  # fallback to original list
+
+        if len(filtered) > 1:
+            # Prefer the one with the highest heavy atom count
+            best = max(filtered, key=lambda x: x[1].get_num_atoms())
+            chain_id, lig_res = best
+            log.info(f"  Selected ligand (most heavy atoms): chain {chain_id}, "
+                     f"residue {lig_res.get_resname()} ({lig_res.get_num_atoms()} atoms)")
+        else:
+            chain_id, lig_res = filtered[0]
+            log.info(f"  Native ligand found: chain {chain_id}, residue {lig_res.get_resname()}")
+
+        # Write ligand as a separate PDB file
+        pdbio = PDBIO()
+        class LigSelect(Select):
+            def accept_residue(self, residue):
+                return residue is lig_res
+        pdbio.set_structure(struct)
+        lig_pdb = output_ligand_pdbqt.replace(".pdbqt", ".pdb")
+        pdbio.save(lig_pdb, LigSelect())
+
+        # Convert to MOL → SMILES via RDKit's PDB parser (or obabel fallback)
+        mol = Chem.MolFromPDBFile(lig_pdb, removeHs=False)
+        if mol is None:
+            log.warning("  ⚠  RDKit could not read ligand PDB, trying obabel…")
+            smi_file = output_ligand_smi
+            try:
+                subprocess.run(
+                    ["obabel", lig_pdb, "-O", smi_file],
+                    capture_output=True, timeout=30,
+                )
+                with open(smi_file) as f:
+                    smi = f.readline().strip()
+                if smi:
+                    return smi
+            except Exception:
+                pass
+            return None
+
+        Chem.SanitizeMol(mol)
+        smi = Chem.MolToSmiles(mol)
+
+        with open(output_ligand_smi, "w") as f:
+            f.write(smi + "\n")
+        log.info(f"  Native ligand SMILES: {smi}")
+
+        # Convert to PDBQT via LigandPreparator
+        try:
+            preparator = LigandPreparator()
+            pdbqt_str = preparator.prepare(mol)
+            with open(output_ligand_pdbqt, "w") as f:
+                f.write(pdbqt_str)
+            log.info(f"  Native ligand PDBQT written to {output_ligand_pdbqt}")
+        except Exception as exc:
+            log.warning(f"  ⚠  LigandPreparator failed for native ligand: {exc}")
+            # Fallback: copy PDB as-is
+            shutil.copy(lig_pdb, output_ligand_pdbqt)
+
+        return smi
+
+    except Exception as exc:
+        log.error(f"  ✗  Native ligand extraction failed: {exc}")
+        return None
+
+
+def _compute_rmsd_docked_vs_crystal(
+    docked_pdb: str, crystal_pdb: str
+) -> Optional[float]:
+    """
+    Align the docked ligand to the crystal ligand and compute heavy-atom RMSD.
+
+    Uses RDKit's AllChem.GetBestRMS after MCS-based atom-order alignment.
+    Returns None if MCS cannot be found or any error occurs.
+    """
+    try:
+        docked_mol = Chem.MolFromPDBFile(docked_pdb, removeHs=False)
+        if docked_mol is None:
+            log.error("  ✗  Could not parse docked PDB as an RDKit Mol.")
+            return None
+
+        crystal_mol = Chem.MolFromPDBFile(crystal_pdb, removeHs=False)
+        if crystal_mol is None:
+            log.error("  ✗  Could not parse crystal PDB as an RDKit Mol.")
+            return None
+
+        rms = AllChem.GetBestRMS(docked_mol, crystal_mol, 0, 0)
+        if rms is None:
+            log.warning("  ⚠  MCS alignment failed — cannot order atoms consistently.")
+            return None
+
+        return rms
+
+    except Exception as exc:
+        log.error(f"  ✗  RMSD calculation failed: {exc}")
+        return None
+
+
+def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray:
+    """
+    Compute the geometric centroid of Cα atoms for the given list of
+    residue identifiers (format: 'ALA237').
+
+    Args:
+        pdb_path: Path to PDB structure.
+        resid_list: e.g. ["ALA237", "MET241", "TYR159"].
+
+    Returns:
+        (x, y, z) centroid as numpy array of shape (3,).
+    """
+    parser = PDBParser(QUIET=True)
+    struct = parser.get_structure("target", pdb_path)
+
+    # Build set of (resname, seq_num) from input
+    target = set()
+    for entry in resid_list:
+        # Separate alphabetic resname from numeric seq_id
+        resname = "".join(ch for ch in entry if ch.isalpha()).upper()
+        seqnum = int("".join(ch for ch in entry if ch.isdigit()))
+        target.add((resname, seqnum))
+
+    ca_coords = []
+    for model in struct:
+        for chain in model:
+            for residue in chain:
+                rid = residue.get_id()
+                # Ignore hetero atoms
+                if rid[0] != " ":
+                    continue
+                key = (residue.get_resname().strip().upper(), rid[1])
+                if key in target:
+                    if "CA" in residue:
+                        ca_coords.append(residue["CA"].get_vector().get_array())
+                    else:
+                        log.warning(
+                            f"  ⚠  No Cα found for {key[0]}{key[1]}. "
+                            "Using geometric center of all residue atoms."
+                        )
+                        atoms = list(residue.get_atoms())
+                        if atoms:
+                            coords = np.array([a.get_vector().get_array() for a in atoms])
+                            ca_coords.append(coords.mean(axis=0))
+
+    if not ca_coords:
+        log.error(
+            f"  ✗  None of the requested residues {resid_list} were found "
+            f"in structure. Available residues: "
+            f"{[(r.get_resname(), r.get_id()[1]) for r in struct.get_residues()]}"
+        )
+        raise ValueError(f"No matching residues found in {pdb_path}")
+
+    centroid = np.mean(ca_coords, axis=0)
+    return centroid
+
+
+def _centroid_of_pdb_atoms(pdb_path: str) -> Optional[np.ndarray]:
+    """
+    Return the geometric centroid (x, y, z) of all atoms in a PDB file,
+    or None if the file cannot be parsed / contains no atoms.
+    """
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("lig", pdb_path)
+        coords = [atom.get_vector().get_array() for atom in struct.get_atoms()]
+        if not coords:
+            return None
+        return np.mean(coords, axis=0)
+    except Exception:
+        return None

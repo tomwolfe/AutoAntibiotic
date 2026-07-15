@@ -1,17 +1,14 @@
 """
 Filtering utilities
-====================
+===================
 
 Phase 2.2 of the discovery pipeline: structural, similarity, ADMET and PAINS
 filtering of candidate compounds.
 
 The filtering constants (β-lactam SMARTS, reference antibiotics, similarity
-thresholds, diversity floor) live in ``discovery_pipeline``. They are imported
-locally inside :func:`apply_filters` rather than at module top level. This keeps
-the ``utils`` package free of a circular import (``discovery_pipeline`` imports
-these helpers at load time) and also means test patches such as
-``discovery_pipeline.TanimotoSimilarity`` / ``discovery_pipeline.DIVERSITY_MIN_COUNT``
-are honoured at call time.
+thresholds, diversity floor) live in ``config.constants`` and are imported at
+module top level. This keeps the ``utils`` package free of a circular import
+with ``discovery_pipeline``.
 """
 
 from __future__ import annotations
@@ -22,6 +19,14 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Crippen, QED, FilterCatalog
 from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
 from rdkit.DataStructs import TanimotoSimilarity
+
+from config.constants import (
+    SIMILARITY_THRESHOLD,
+    SIMILARITY_THRESHOLD_RELAXED,
+    DIVERSITY_MIN_COUNT,
+    REFERENCE_ANTIBIOTICS,
+    BETA_LACTAM_SMARTS,
+)
 
 # Shared logger: same name as the one configured in discovery_pipeline.
 log = logging.getLogger("AutoAntibiotic")
@@ -48,17 +53,6 @@ def apply_filters(
     Returns:
         Filtered list of CompoundRecord (with computed ADMET/similarity fields).
     """
-    # Shared constants live in discovery_pipeline; import them locally so that
-    # test patches on the discovery_pipeline module are observed here.
-    from discovery_pipeline import (
-        SIMILARITY_THRESHOLD,
-        REFERENCE_ANTIBIOTICS,
-        BETA_LACTAM_SMARTS,
-        SIMILARITY_THRESHOLD_RELAXED,
-        DIVERSITY_MIN_COUNT,
-        TanimotoSimilarity,
-    )
-
     if similarity_threshold is None:
         similarity_threshold = SIMILARITY_THRESHOLD
 

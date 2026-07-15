@@ -6,12 +6,9 @@ Virtual screening helpers: AutoDock Vina invocation, single/multi-compound
 docking orchestration, and the RDKit Shape-Protrude fallback scorer used when
 Vina is unavailable.
 
-Constants that originate in ``discovery_pipeline`` (e.g. ``VINA_TIMEOUT_S``,
-``N_JOBS``, ``RANDOM_SEED``) are imported locally inside the functions that
-need them. This deliberately avoids a top-level circular import between the
-package modules: ``discovery_pipeline`` imports these helpers at load time,
-while the helpers only reach back into ``discovery_pipeline`` when they are
-actually invoked (by which point the module is fully initialised).
+Docking-related constants (``VINA_TIMEOUT_S``, ``N_JOBS``, ``RANDOM_SEED``)
+live in ``config.constants`` and are imported at module top level, which keeps
+the ``utils`` package free of a circular import with ``discovery_pipeline``.
 """
 
 from __future__ import annotations
@@ -27,6 +24,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
 from .ligand_prep import prepare_ligand_pdbqt
+from config.constants import VINA_TIMEOUT_S, N_JOBS, RANDOM_SEED
 
 # Shared logger: same name as the one configured in discovery_pipeline.
 log = logging.getLogger("AutoAntibiotic")
@@ -45,7 +43,6 @@ def _run_vina_docking(
     or None on failure.
     """
     if timeout is None:
-        from discovery_pipeline import VINA_TIMEOUT_S
         timeout = VINA_TIMEOUT_S
 
     cmd = [
@@ -217,7 +214,6 @@ def _dock_compounds_parallel(
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     if n_jobs is None:
-        from discovery_pipeline import N_JOBS
         n_jobs = N_JOBS
     if dock_func is None:
         dock_func = dock_compound
@@ -303,7 +299,6 @@ def _compute_shape_fallback_score(
     Returns combined normalised score (0–10, lower = better), or None on failure.
     """
     if seed is None:
-        from discovery_pipeline import RANDOM_SEED
         seed = RANDOM_SEED
 
     try:
