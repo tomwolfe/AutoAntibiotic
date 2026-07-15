@@ -161,6 +161,37 @@ def protocol_trust(mode: str, redock_rmsd: Optional[float]) -> str:
     return "Validation Unavailable"
 
 
+# Contract assertion: these exact badge strings are cited verbatim in
+# README.md (the "Outputs / protocol_trust" column description) and SCIENCE.md
+# ("protocol_trust" rules). They are a published contract consumed by the CSV
+# report and must not be reworded without updating both docs. Guard the
+# canonical set so any accidental drift in this module fails loudly.
+_EXPECTED_PROTOCOL_TRUST_STRINGS = {
+    "CI Mode (Skipped)",
+    "CAUTION: High RMSD",          # prefix; full string interpolates the Å value
+    "Validated (Marginal)",
+    "Validated",
+    "Validation Unavailable",
+}
+def _assert_protocol_trust_contract() -> None:
+    """Assert that protocol_trust can only emit the documented badge strings."""
+    samples = [
+        protocol_trust("ci", None),
+        protocol_trust("science", 2.5),
+        protocol_trust("science", 1.8),
+        protocol_trust("science", 1.0),
+        protocol_trust("science", None),
+    ]
+    for s in samples:
+        # "CAUTION: High RMSD" is the only interpolated (prefix) badge.
+        assert s in _EXPECTED_PROTOCOL_TRUST_STRINGS or s.startswith(
+            "CAUTION: High RMSD"
+        ), f"protocol_trust returned an undocumented badge: {s!r}"
+
+
+_assert_protocol_trust_contract()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONFIG LOADING
 # ═══════════════════════════════════════════════════════════════════════════════

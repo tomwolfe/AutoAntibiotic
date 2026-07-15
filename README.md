@@ -277,6 +277,11 @@ If no `config.yaml` exists, the pipeline defaults to `mode: ci` so a new user
 sees results immediately. A real, heavy computational run requires an explicit
 `config.yaml` with `mode: science`.
 
+The allosteric and active-site docking boxes are auto-sized at runtime from the
+resolved residue centroids (see `_auto_box_size` in `discovery_pipeline.py`); the
+hardcoded `ALLOSTERIC_BOX_SIZE` / `ACTIVE_BOX_SIZE` in `config/constants.py` are
+only a fallback used when a site centre cannot be computed.
+
 ### Target-specific residue configuration (`config/targets.yaml`)
 
 The residue lists used to build docking grids and for scientific cross-checks —
