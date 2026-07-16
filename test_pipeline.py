@@ -557,13 +557,15 @@ class TestErrorHandling:
 
         # Force the meeko import inside prepare() to fail.
         with patch.dict(sys.modules, {"meeko": None}):
-            with patch.object(log, "warning") as mock_warn:
-                with pytest.raises(RuntimeError):
-                    preparator.prepare(mol)
-                assert any(
-                    "Meeko failed" in str(call.args[0])
-                    for call in mock_warn.call_args_list
-                ), "Expected log.warning to report the specific 'Meeko failed' message"
+            with patch("utils.ligand_prep.subprocess.run") as mock_run:
+                mock_run.side_effect = FileNotFoundError("obabel not on PATH")
+                with patch.object(log, "warning") as mock_warn:
+                    with pytest.raises(RuntimeError):
+                        preparator.prepare(mol)
+                    assert any(
+                        "Meeko failed" in str(call.args[0])
+                        for call in mock_warn.call_args_list
+                    ), "Expected log.warning to report the specific 'Meeko failed' message"
 
     def test_parallel_dock_handles_worker_crash(self, tmp_path):
         """
@@ -788,13 +790,12 @@ class TestLigandPreparator:
 
     def test_prepare_uses_obabel_as_fallback(self, benzene_mol, tmp_path):
         """LigandPreparator falls back to obabel when meeko is unavailable."""
-        # Mock meeko import to raise ImportError
-        with patch('meeko.MoleculePreparation') as mock_meeko_prep:
-            mock_meeko_prep.side_effect = ImportError("meeko not found")
-            preparator = LigandPreparator()
-            # obabel won't be available in test env, so we expect ValueError (empty output)
-            with pytest.raises((ImportError, RuntimeError, ValueError)):
-                preparator.prepare(benzene_mol)
+        with patch.dict(sys.modules, {"meeko": None}):
+            with patch("utils.ligand_prep.subprocess.run") as mock_run:
+                mock_run.side_effect = FileNotFoundError("obabel not on PATH")
+                preparator = LigandPreparator()
+                with pytest.raises(RuntimeError):
+                    preparator.prepare(benzene_mol)
 
     def test_prepare_empty_input_raises(self):
         """LigandPreparator raises RuntimeError for None input."""
