@@ -65,6 +65,10 @@ class CompoundRecord:
 
     # Selectivity
     selectivity_index: Optional[float] = None
+    # Off-target risk flag (paper §4.1b): True when any *valid* human
+    # off-target binds tightly (energy < -8.0 kcal/mol). Kept separate from
+    # selectivity_index so the raw SI is never artificially zeroed.
+    off_target_risk: bool = False
 
     # Similarity
     max_similarity: float = 0.0

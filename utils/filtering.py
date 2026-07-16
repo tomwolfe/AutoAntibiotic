@@ -26,6 +26,8 @@ from config.constants import (
     DIVERSITY_MIN_COUNT,
     REFERENCE_ANTIBIOTICS,
     BETA_LACTAM_SMARTS,
+    RECALL_MODE,
+    RECALL_QED_FLOOR,
 )
 
 # Shared logger: same name as the one configured in discovery_pipeline.
@@ -35,26 +37,39 @@ log = logging.getLogger("AutoAntibiotic")
 def apply_filters(
     records: "List[CompoundRecord]",
     similarity_threshold: Optional[float] = None,
+    recal_mode: bool = RECALL_MODE,
 ) -> "List[CompoundRecord]":
     """
-    Phase 2.2 — Apply structural, similarity, ADMET, and PAINS filters.
+    Phase2.2 — Apply structural, similarity, ADMET, and PAINS filters.
 
     Filter chain:
         1. Structural exclusion (β-lactam SMARTS).
         2. Similarity filter vs reference antibiotics (Morgan FP, Tc < threshold).
-            3. ADMET: Lipinski Rule of 5 + QED > 0.7.
+            3. ADMET: Lipinski Rule of 5 + QED > 0.7 (or > 0.4 in
+               recall_mode, see below).
         4. PAINS alerts via RDKit FilterCatalog.
         5. Diversity check: if < 100 pass, relax similarity to 0.5.
 
     Args:
         records: Input compound records.
         similarity_threshold: Initial Tanimoto cutoff.
+        recal_mode: When True, relax the filter chain so known PBP2a
+            binders (ceftaroline, meropenem) survive (paper §4.4): the
+            similarity threshold falls back to SIMILARITY_THRESHOLD_RELAXED
+            and the QED floor is lowered from 0.7 to RECALL_QED_FLOOR (0.4).
 
     Returns:
         Filtered list of CompoundRecord (with computed ADMET/similarity fields).
     """
     if similarity_threshold is None:
-        similarity_threshold = SIMILARITY_THRESHOLD
+        # In recall mode start from the relaxed similarity threshold so the known
+        # binders (which are highly similar to the reference antibiotics by
+        # design) are not dropped at step 2.
+        similarity_threshold = (
+            SIMILARITY_THRESHOLD_RELAXED if recal_mode else SIMILARITY_THRESHOLD
+        )
+    # The QED floor applied at the ADMET step.
+    qed_floor = RECALL_QED_FLOOR if recal_mode else 0.7
 
     log.info("─── Phase 2: Filtering ───")
 
@@ -80,7 +95,7 @@ def apply_filters(
     brenk_params.AddCatalog(FilterCatalogParams.FilterCatalogs.BRENK)
     brenk_catalog = FilterCatalog(brenk_params)
 
-    def _filter_pass(threshold: float) -> "List[CompoundRecord]":
+    def _filter_pass(threshold: float, qed_gate: float) -> "List[CompoundRecord]":
         """Run the similarity + ADMET + PAINS filter chain on the original records."""
         passed = []
         skipped_structural = 0
@@ -136,6 +151,14 @@ def apply_filters(
                 skipped_admet += 1
                 continue
 
+            # In recall mode the QED floor is relaxed (0.7 → 0.4) so known
+            # binders with lower drug-likeness still pass (paper §4.4). The
+            # diversity fallback below also lowers this gate when too few
+            # compounds survive the default 0.7 cut.
+            if qed is not None and qed <= qed_gate:
+                skipped_admet += 1
+                continue
+
             # 4. PAINS
             pains_match = pains_catalog.HasMatch(mol)
             record.passes_pains = not pains_match
@@ -153,22 +176,27 @@ def apply_filters(
 
         log.info(f"  Structural exclusion (β-lactam): {skipped_structural} removed.")
         log.info(f"  Similarity filter (Tc < {threshold}): {skipped_similarity} removed.")
-        log.info(f"  ADMET filter (Lipinski + QED > 0.7): {skipped_admet} removed.")
+        log.info(f"  ADMET filter (Lipinski + QED > {qed_gate}): {skipped_admet} removed.")
         log.info(f"  PAINS filter: {skipped_pains} removed.")
         log.info(f"  Brenk alerts: {skipped_brenk} removed.")
         log.info(f"  Passed filters: {len(passed)} compounds.")
         return passed
 
-    passed = _filter_pass(similarity_threshold)
+    passed = _filter_pass(similarity_threshold, qed_floor)
 
-    # Diversity check — if too few passed, relax the similarity threshold and
-    # re-run the same loop on the original records (simple for-loop, no recursion).
+    # Diversity check — if too few passed, relax BOTH the similarity threshold
+    # and the QED floor, then re-run the same loop on the original records
+    # (simple for-loop, no recursion). The QED gate is the dominant filter for
+    # de-novo BRICS libraries, so relaxing similarity alone is insufficient to
+    # reach the ≥5 compounds needed for active-site consensus docking.
     if len(passed) < DIVERSITY_MIN_COUNT:
+        relaxed_qed = min(qed_floor, RECALL_QED_FLOOR)
         log.info(
             f"  Only {len(passed)} compounds passed filters (< {DIVERSITY_MIN_COUNT}). "
-            f"Relaxing similarity threshold to {SIMILARITY_THRESHOLD_RELAXED} and re-filtering."
+            f"Relaxing similarity threshold to {SIMILARITY_THRESHOLD_RELAXED} and "
+            f"QED floor to {relaxed_qed}, then re-filtering."
         )
-        passed = _filter_pass(SIMILARITY_THRESHOLD_RELAXED)
+        passed = _filter_pass(SIMILARITY_THRESHOLD_RELAXED, relaxed_qed)
 
     log.info("─── Phase 2 complete ───")
     return passed

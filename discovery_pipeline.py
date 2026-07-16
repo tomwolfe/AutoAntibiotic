@@ -634,6 +634,26 @@ def run_redocking_validation(
     # threshold) so downstream reporters can display the raw value and emit
     # nuanced trust signals rather than a binary pass/fail.
     validation_ok = rmsd <= RMSD_MARGINAL_MAX if rmsd is not None else False
+
+    # Persist the validation result to work_dir so downstream tooling / the paper
+    # agent can read it without re-running the (expensive) redocking step
+    # (paper §1, validation artifact). The CAUTION/trust badge logic in
+    # config.constants.protocol_trust is intentionally unchanged — scientific
+    # honesty is preserved.
+    try:
+        validation_json = os.path.join(work_dir, "validation_results.json")
+        with open(validation_json, "w") as fh:
+            json.dump({
+                "validation_ok": bool(validation_ok),
+                "redock_rmsd": (None if rmsd is None else float(rmsd)),
+                "mode": mode,
+                "rmsd_marginal_max": RMSD_MARGINAL_MAX,
+                "rmsd_validated_max": RMSD_VALIDATED_MAX,
+            }, fh, indent=2)
+        log.info(f"  Validation results written: {validation_json}")
+    except Exception as exc:
+        log.warning(f"  ⚠  Could not write validation_results.json: {exc}")
+
     return validation_ok, rmsd
 
 
@@ -1124,6 +1144,10 @@ def _consensus_dock(
     by_id: dict = {r.compound_id: r for r in records}
     # Seed with per-compound best energy (None initially).
     best: Dict[str, Optional[float]] = {r.compound_id: None for r in records}
+    # Active-site pose paths returned by the parallel workers. The pose is set
+    # on the parent record inside _dock_compounds_parallel, but we also collect
+    # it here per conformer so the best-energy conformer's pose is retained.
+    best_pose: Dict[str, Optional[str]] = {r.compound_id: None for r in records}
 
     for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):
         if center is None or receptor_pdbqt is None:
@@ -1140,8 +1164,60 @@ def _consensus_dock(
             cur = best.get(rec.compound_id)
             if cur is None or energy < cur:
                 best[rec.compound_id] = energy
+                # Keep the pose from the conformer that produced the best energy
+                # so MM-GBSA / H-bond / mutation analysis use a consistent pose.
+                if getattr(rec, "active_docked_pdbqt", None):
+                    best_pose[rec.compound_id] = rec.active_docked_pdbqt
+
+    # Assign the retained active-site pose back to each parent record.
+    for cid, pose in best_pose.items():
+        if pose is not None:
+            by_id[cid].active_docked_pdbqt = pose
 
     return [(by_id[cid], e) for cid, e in best.items()]
+
+
+_FLEX_BACKBONE_KEEP = {"N", "CA", "C", "O", "OXT", "H", "HA", "HN"}
+
+
+def _strip_flex_sidechains_from_rigid(
+    receptor_pdbqt: str,
+    target: set,
+    out_pdbqt: str,
+) -> bool:
+    """
+    Write a rigid receptor PDBQT with the flexible residues' *side-chain*
+    atoms removed (backbone N/CA/C/O kept).
+
+    Vina's ``--flex`` requires that atoms declared movable in the flex file are
+    NOT also present in the rigid receptor; otherwise the docking aborts with
+    an opaque "unknown error". This produces the companion ``_rigid`` receptor.
+
+    ``target`` is a set of ``(RESNAME, RESSEQ)`` tuples. Returns ``True`` on
+    success.
+    """
+    try:
+        kept = []
+        with open(receptor_pdbqt) as fh:
+            for line in fh:
+                if line.startswith(("ATOM", "HETATM")):
+                    try:
+                        atom_name = line[12:16].strip()
+                        res_name = line[17:20].strip().upper()
+                        res_seq = int(line[22:26])
+                    except (ValueError, IndexError):
+                        kept.append(line.rstrip("\n"))
+                        continue
+                    if (res_name, res_seq) in target and atom_name not in _FLEX_BACKBONE_KEEP:
+                        # Drop movable side-chain atom from the rigid receptor.
+                        continue
+                kept.append(line.rstrip("\n"))
+        with open(out_pdbqt, "w") as fh:
+            fh.write("\n".join(kept) + "\n")
+        return True
+    except Exception as exc:
+        log.warning(f"  ⚠  Failed to strip flex side chains from rigid receptor: {exc}")
+        return False
 
 
 def _prepare_flex_pdbqt(
@@ -1150,23 +1226,27 @@ def _prepare_flex_pdbqt(
     flex_residues: List[str],
     work_dir: str,
     receptor_pdb: Optional[str] = None,
-) -> Optional[str]:
+) -> Optional[tuple]:
     """
-    Build a flexible-residue PDBQT for Vina's ``--flex`` flag.
+    Build a flexible-residue PDBQT (and the companion stripped rigid receptor)
+    for Vina's ``--flex`` flag.
 
-    The flexible residues (e.g. SER403, LYS406, TYR446) are extracted as a
-    separate PDBQT ("root" receptor stripped of those residues) plus a flex
-    PDBQT (the side chains of the flexible residues). We approximate this by
-    writing a flex PDBQT containing *only* the flexible residues using the
-    RDKit/Bio.PDB ``write_receptor_pdbqt`` logic; Vina's ``--flex`` then treats
-    those atoms as movable while the main receptor stays rigid.
+    The flexible residues (e.g. SER403, LYS406, TYR446) are extracted into
+    their own PDB (via Bio.PDB), then converted to a *valid Vina flex PDBQT*
+    (a proper ROOT/BRANCH torsion tree) by
+    :func:`utils.structure_prep.write_flex_pdbqt`. In addition, a companion
+    rigid receptor is written with those residues' side-chain atoms removed —
+    Vina requires the movable atoms to appear ONLY in the flex file, never in
+    the rigid receptor, otherwise docking aborts (paper §3.3).
 
-    Returns the path to the flex PDBQT, or ``None`` on any failure (callers
-    fall back to rigid docking and log a warning).
+    Returns ``(rigid_pdbqt, flex_pdbqt)`` on success, or ``None`` on any
+    failure (callers fall back to rigid docking and log a warning).
     """
     if not flex_residues or not cleaned_pdb or not os.path.exists(cleaned_pdb):
         return None
     try:
+        from utils.structure_prep import write_flex_pdbqt
+
         flex_pdb = os.path.join(work_dir, "PBP2a_flex_residues.pdb")
         # Extract just the flexible residues into their own PDB via Bio.PDB.
         parser = PDBParser(QUIET=True)
@@ -1193,19 +1273,15 @@ def _prepare_flex_pdbqt(
             return None
 
         flex_pdbqt = os.path.join(work_dir, "PBP2a_flex.pdbqt")
-        if write_receptor_pdbqt(flex_pdb, flex_pdbqt):
-            return flex_pdbqt
-        # obabel fallback for the flex file.
-        try:
-            subprocess.run(
-                ["obabel", flex_pdb, "-O", flex_pdbqt, "-h", "--gas"],
-                capture_output=True, timeout=60,
-            )
-            if os.path.exists(flex_pdbqt) and os.path.getsize(flex_pdbqt) > 0:
-                return flex_pdbqt
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-        return None
+        if not write_flex_pdbqt(flex_pdb, flex_pdbqt, flex_residues=flex_residues):
+            return None
+
+        # Companion rigid receptor with movable side chains removed.
+        rigid_pdbqt = os.path.join(work_dir, "PBP2a_rigid_flex.pdbqt")
+        if not _strip_flex_sidechains_from_rigid(receptor_pdbqt, target, rigid_pdbqt):
+            return None
+
+        return rigid_pdbqt, flex_pdbqt
     except Exception as exc:
         log.warning(f"  ⚠  Flexible-residue PDBQT preparation failed: {exc}. Falling back to rigid.")
         return None
@@ -1311,10 +1387,11 @@ def screen_library(
         if use_vina and mode == "science" and active_center is not None:
             primary_pdbqt = receptor_pdbqts[0]
             cleaned_pdb = pb2pa.get("cleaned_pdb")
-            flex_pdbqt = _prepare_flex_pdbqt(
+            flex_prep = _prepare_flex_pdbqt(
                 primary_pdbqt, cleaned_pdb, FLEX_RESIDUES, work_dir,
             )
-            if flex_pdbqt is not None:
+            if flex_prep is not None:
+                rigid_flex_pdbqt, flex_pdbqt = flex_prep
                 log.info(
                     f"  Local flexible docking (--flex) for top {len(top_active)} "
                     f"compounds at the active site…"
@@ -1327,7 +1404,7 @@ def screen_library(
                         rec.mol = mol
                     try:
                         flex_energy = dock_compound(
-                            rec, primary_pdbqt, active_center, active_box,
+                            rec, rigid_flex_pdbqt, active_center, active_box,
                             work_dir, "active_flex", use_vina=True,
                             flex_pdbqt=flex_pdbqt,
                         )
@@ -1809,15 +1886,24 @@ def _run_mutation_scan(
         pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
     ) if pb2pa.get("cleaned_pdb") else ACTIVE_BOX_SIZE
 
-    # Map mutant label → (residue_id, new_resname).
+    # Map mutant label → (residue_id, new 3-letter resname).
+    # Labels use the standard 1-letter mutation code, e.g. "S403A" = Ser403→Ala.
+    _AA1_TO_3 = {
+        "A": "ALA", "R": "ARG", "N": "ASN", "D": "ASP", "C": "CYS",
+        "Q": "GLN", "E": "GLU", "G": "GLY", "H": "HIS", "I": "ILE",
+        "L": "LEU", "K": "LYS", "M": "MET", "F": "PHE", "P": "PRO",
+        "S": "SER", "T": "THR", "W": "TRP", "Y": "TYR", "V": "VAL",
+    }
     mutant_specs = []
     for mut in MUTATION_SCAN_MUTANTS:
-        # e.g. "S403A": orig resname initial 'S' (SER), id 403, new 'ALA'.
-        m = re.match(r"^([A-Z])(\d+)([A-Z]{3})$", mut)
+        # e.g. "S403A": wild-type 'S' (Ser), id 403, mutant 'A' (Ala).
+        m = re.match(r"^([A-Z])(\d+)([A-Z])$", mut)
         if not m:
             continue
         res_id = int(m.group(2))
-        new_name = m.group(3)
+        new_name = _AA1_TO_3.get(m.group(3))
+        if new_name is None:
+            continue
         mutant_specs.append((mut, res_id, new_name))
 
     if not mutant_specs:
@@ -2006,16 +2092,23 @@ def analyze_selectivity_and_resistance(
 
     # ── Compute SI (average human energy over up to 6 off-targets) ──
     for rec in top10:
+        # Collect raw human off-target energies, pairing each with the off-target
+        # attribute so we can flag high-risk binding on *valid* energies only.
+        raw_human = [
+            ("trypsin", rec.human_trypsin_energy),
+            ("ces1", rec.human_ces1_energy),
+            ("albumin", getattr(rec, "human_albumin_energy", None)),
+            ("cyp3a4", getattr(rec, "human_cyp3a4_energy", None)),
+            ("herg", getattr(rec, "human_herg_energy", None)),
+            ("cyp2d6", getattr(rec, "human_cyp2d6_energy", None)),
+        ]
+        # A human off-target energy > 0.0 means no-pose / steric clash — it
+        # carries no binding information and must NOT enter the SI denominator.
+        # We treat it as invalid (NaN) so the SI is computed only from real,
+        # finite binding energies. The *raw* list (including invalid energies)
+        # is still used for the Off_Target_Risk flag below.
         energies_human = [
-            e for e in (
-                rec.human_trypsin_energy,
-                rec.human_ces1_energy,
-                getattr(rec, "human_albumin_energy", None),
-                getattr(rec, "human_cyp3a4_energy", None),
-                getattr(rec, "human_herg_energy", None),
-                getattr(rec, "human_cyp2d6_energy", None),
-            )
-            if e is not None
+            e for _label, e in raw_human if e is not None and e <= 0.0
         ]
         n_human_targets = len(energies_human)
 
@@ -2043,6 +2136,10 @@ def analyze_selectivity_and_resistance(
             continue
 
         si = compute_selectivity_index(pb2pa_best, human_min)
+        # Keep the raw (un-clamped) SI. We NO LONGER hard-zero the index when a
+        # human off-target binds tightly — that erased real selectivity signal
+        # (paper §4.1). Instead the raw SI is preserved and a separate boolean
+        # Off_Target_Risk column records the binary high-risk flag.
         rec.selectivity_index = si
 
         # SI based on a single human target is less reliable — flag it.
@@ -2059,16 +2156,16 @@ def analyze_selectivity_and_resistance(
         else:
             log.info(f"  {rec.compound_id}: SI = {si:.2f} (pass).")
 
-        # Hard flag: high risk off-target binding (any of the human targets)
-        if any(e is not None and e < -8.0 for e in (
-            rec.human_trypsin_energy,
-            rec.human_ces1_energy,
-            getattr(rec, "human_albumin_energy", None),
-            getattr(rec, "human_cyp3a4_energy", None),
-            getattr(rec, "human_herg_energy", None),
-            getattr(rec, "human_cyp2d6_energy", None),
-        )):
-            rec.selectivity_index = 0.0
+        # Off-target risk flag (separate boolean column, paper §4.1b). Only
+        # *valid* (finite, binding) human energies are considered — a >0.0
+        # (no-pose/clash) value is not a real binder and is excluded.
+        rec.off_target_risk = any(
+            e is not None and e < -8.0
+            for _label, e in raw_human
+            if e is not None
+        )
+
+        if rec.off_target_risk:
             if rec.resistance_notes:
                 rec.resistance_notes += " | "
             rec.resistance_notes += "High risk off-target binding"
@@ -2354,6 +2451,7 @@ def _write_status_badge(
 
 def _generate_and_filter_library(
     target_count: int, library: Optional[str], sdf: Optional[str],
+    config: Optional[dict] = None,
 ) -> Tuple[list, list, int, int]:
     """Generate the candidate library and apply the filter chain.
 
@@ -2366,7 +2464,13 @@ def _generate_and_filter_library(
         target_count=target_count, input_csv=library, input_sdf=sdf,
     )
     n_total = len(all_records)
-    filtered = apply_filters(all_records)
+    # Recall mode (config.yaml ``recall_mode: true``) relaxes the filter chain
+    # so established PBP2a binders (ceftaroline, meropenem) survive
+    # filtering (paper §4.4).
+    if config is None:
+        config = load_config()
+    recall_mode = bool(config.get("recall_mode", False))
+    filtered = apply_filters(all_records, recal_mode=recall_mode)
     n_filtered = len(filtered)
 
     if n_filtered == 0:
@@ -2488,7 +2592,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # instead of generating a new library via BRICS. This makes the pipeline
     # easy to integrate with external compound collections.
     all_records, filtered, n_total, n_filtered = _generate_and_filter_library(
-        target_count=target_count, library=library, sdf=sdf,
+        target_count=target_count, library=library, sdf=sdf, config=config,
     )
 
     # ── Phase 3: Virtual screening ──

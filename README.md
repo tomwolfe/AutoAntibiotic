@@ -2,13 +2,20 @@
 
 An end-to-end, reproducible computational pipeline that screens and ranks
 novel inhibitor candidates against the methicillin-resistant *Staphylococcus
-aureus* (MRSA) penicillin-binding protein **PBP2a** (PDB `6TKO`). It combines
+aureus* (MRSA) penicillin-binding protein **PBP2a**. It combines
 structure-based virtual screening, protocol validation by native-ligand
 redocking, ADMET/PAINS filtering, and selectivity/resistance analysis to
 prioritize compounds for experimental follow-up.
 
-> **Protocol validated on 6TKO** (redocking RMSD reported in
-> `output/top_candidates.csv` column `Validation_Status`).
+> **Note on structures:** the repository screens PBP2a using the holo
+> structure **3ZG0** (co-crystallised with ceftaroline, ligand residue
+> **AI8**) and the apo structure **1VQQ**, *not* 6TKO/CEF as some
+> earlier docs stated. See `config/constants.py` (`PDB_IDS`) and
+> `config.yaml` (`native_ligand_resname: AI8`) for the authoritative IDs.
+
+> **Protocol validation:** redocking RMSD is reported in
+> `output/top_candidates.csv` (columns `Protocol_RMSD`, `protocol_trust`)
+> and persisted to `output/workdir/validation_results.json`.
 
 ---
 
@@ -178,17 +185,18 @@ For genuine scientific screening against the real PBP2a structure, create a
 ```yaml
 mode: science
 # REQUIRED for redocking validation against the real holo structure:
-native_ligand_resname: CEF
+native_ligand_resname: AI8
 ```
 
 Science mode prerequisites (all required, otherwise the run aborts or is
 untrustworthy):
 
-1. **Real PDB structures** — place/download real `6TKO`, `3QPD`, `1UTN`, `1YAH`
+1. **Real PDB structures** — place/download real `3ZG0` (holo, ceftaroline
+   ligand `AI8`), `1VQQ` (apo), `1UTN`, `1YAH`
    (the bundled `tests/data/*.pdb` are minimal mocks and are rejected by
    science mode).
 2. **`native_ligand_resname`** set to the exact co-crystallised ligand residue
-   name (e.g. `CEF`). Without it, redocking validation cannot run and the
+   name (e.g. `AI8` for 3ZG0). Without it, redocking validation cannot run and the
    protocol reports `Validation Unavailable`.
 3. **AutoDock Vina** on `PATH` (docking + redocking). Install via `bash
    setup.sh` or the Docker image. If Vina is missing, science-mode runs abort
@@ -291,7 +299,7 @@ binders that experimentally validate, the pipeline layers several
 low-complexity boosts (all RDKit/AutoDock-Vina only, no deep learning, FEP, or
 external services):
 (1) **Consensus rigid docking** — every compound is docked against a small set
-of PBP2a conformer PDBQTs (apo 3QPD, holo 6TKO, plus 1ZOO) and the most
+of PBP2a conformer PDBQTs (apo 1VQQ, holo 3ZG0, plus 4DKI) and the most
 negative energy is kept as `pb2pa_allosteric_energy` / `pb2pa_active_energy`;
 redocking validation likewise reports the best (lowest) RMSD across conformers.
 (2) **Local flexible docking** — in `science` mode the active-site step is also
@@ -374,7 +382,7 @@ Native-ligand auto-detection has been removed. For science redocking you MUST
 provide the exact co-crystallised ligand residue name; it is required:
 
 ```yaml
-native_ligand_resname: CEF
+native_ligand_resname: AI8
 ```
 
 If left absent, native-ligand extraction is skipped and redocking validation

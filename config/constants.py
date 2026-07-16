@@ -190,6 +190,14 @@ SIMILARITY_THRESHOLD = 0.3
 SIMILARITY_THRESHOLD_RELAXED = 0.5
 DIVERSITY_MIN_COUNT = 100
 
+# Recall (known-binder) mode — when True, the filter chain is relaxed so that
+# established PBP2a binders (ceftaroline, meropenem) survive filtering:
+# the similarity threshold uses SIMILARITY_THRESHOLD_RELAXED and the QED gate
+# is lowered from 0.7 to 0.4. Disabled by default; toggle via the
+# ``recall_mode`` key in config.yaml.
+RECALL_MODE = False
+RECALL_QED_FLOOR = 0.4
+
 # Selectivity
 SELECTIVITY_INDEX_THRESHOLD = 2.0
 

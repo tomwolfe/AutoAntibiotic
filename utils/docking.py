@@ -330,13 +330,29 @@ def dock_compound(
     )
 
     # Keep the docked pose for the active site so downstream pose analysis
-    # (binding interactions) can reuse it instead of re-docking.
-    if tag == "active":
+    # (MM-GBSA rerank, H-bond flags, mutation scan) can reuse it instead of
+    # re-docking. Consensus docking uses per-conformer tags ("active_c0"…) and
+    # flexible docking uses "active_flex"; all of these are active-site poses
+    # and must be retained. Mutant scans use "mut_*" and are NOT retained.
+    #
+    # IMPORTANT: only record the pose when the dock actually SUCCEEDED (energy
+    # is not None AND the output file was written). Otherwise a failed dock —
+    # e.g. a flexible ("active_flex") re-dock that Vina rejects — would clobber
+    # a previously-retained good rigid pose with a path to a non-existent file,
+    # silently breaking MM-GBSA / H-bond / mutation analysis downstream.
+    is_active_pose = tag == "active" or tag.startswith("active_")
+    dock_succeeded = (
+        energy is not None
+        and os.path.exists(out_pdbqt)
+        and os.path.getsize(out_pdbqt) > 0
+    )
+    keep_out = is_active_pose and dock_succeeded
+    if keep_out:
         record.active_docked_pdbqt = out_pdbqt
 
     # Cleanup temp files (keep the active-site pose for later analysis)
     for f in (lig_pdbqt, out_pdbqt):
-        if tag == "active" and f == out_pdbqt:
+        if keep_out and f == out_pdbqt:
             continue
         try:
             os.remove(f)
@@ -382,20 +398,18 @@ def rerank_mmff(
         if not pose or not os.path.exists(pose):
             continue
         try:
-            # Load the docked Vina pose (PDBQT) into RDKit.
-            mol = Chem.MolFromPDBQTFile(pose) if hasattr(Chem, "MolFromPDBQTFile") else None
-            if mol is None:
-                mol = Chem.MolFromPDBFile(pose, removeHs=False)
+            # Load the docked Vina pose into RDKit. RDKit cannot parse PDBQT
+            # (an AutoDock-specific format), so convert the pose to a plain PDB
+            # with OpenBabel first, then read that — preserving the docked 3D
+            # binding mode (do NOT re-embed, which discards the pose).
+            mol = _load_pose_mol(pose)
             if mol is None:
                 continue
-            # Ensure hydrogens + a 3D conformer for MMFF relaxation.
+            # Ensure hydrogens on the docked geometry (keep pose coordinates).
             mol = Chem.AddHs(mol, addCoords=True)
-            params = AllChem.ETKDGv3()
-            params.randomSeed = RANDOM_SEED
-            if AllChem.EmbedMolecule(mol, params) != 0:
-                if AllChem.EmbedMolecule(mol) != 0:
-                    continue
-            # Relax the pose with the MMFF94 force field.
+            if mol.GetNumConformers() == 0:
+                continue
+            # Relax the docked pose in place with the MMFF94 force field.
             if AllChem.MMFFOptimizeMolecule(mol) != 0:
                 # Non-fatal: keep the pre-relaxation geometry for scoring.
                 pass
@@ -409,6 +423,37 @@ def rerank_mmff(
                 f"  MM-GBSA-like rerank skipped for {rec.compound_id}: {exc}"
             )
             continue
+
+
+def _load_pose_mol(pose_pdbqt: str):
+    """
+    Load a docked ligand pose (PDBQT) into an RDKit ``Mol`` with 3D coords.
+
+    RDKit has no PDBQT reader, so convert to PDB with OpenBabel and parse that.
+    Returns ``None`` when conversion/parsing fails (caller skips gracefully).
+    """
+    tmp_pdb = pose_pdbqt + ".pose.pdb"
+    try:
+        res = subprocess.run(
+            ["obabel", pose_pdbqt, "-O", tmp_pdb],
+            capture_output=True, timeout=60,
+        )
+        if (res.returncode != 0 or not os.path.exists(tmp_pdb)
+                or os.path.getsize(tmp_pdb) == 0):
+            return None
+        # A PDBQT may contain several MODELs (docking modes); RDKit reads the
+        # first — the best-scoring pose.
+        mol = Chem.MolFromPDBFile(tmp_pdb, removeHs=False, sanitize=True)
+        if mol is None:
+            mol = Chem.MolFromPDBFile(tmp_pdb, removeHs=False, sanitize=False)
+        return mol
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        try:
+            os.remove(tmp_pdb)
+        except OSError:
+            pass
 
 
 def _dock_compounds_parallel(
@@ -472,11 +517,17 @@ def _dock_compounds_parallel(
     # In-process execution keeps small batches deterministic and testable.
     if n_jobs <= 1:
         for i, payload in enumerate(payloads):
-            rec, energy = _dock_worker(
+            rec, energy, pose = _dock_worker(
                 payload, dock_func, receptor_pdbqt, center, box_size, work_dir, tag,
                 use_vina,
             )
-            results.append((by_id[rec.compound_id], energy))
+            parent = by_id[rec.compound_id]
+            results.append((parent, energy))
+            # Propagate the active-site pose path back to the parent record so
+            # downstream pose analysis (MM-GBSA, H-bond flags, mutation scan)
+            # can use it. Only the "active" tag produces a retained pose.
+            if pose is not None:
+                parent.active_docked_pdbqt = pose
             if (i + 1) % 25 == 0:
                 log.info(f"    Docked {i + 1} / {total} ({tag})")
         return results
@@ -490,8 +541,17 @@ def _dock_compounds_parallel(
             for payload in payloads
         }
         for i, future in enumerate(as_completed(futures)):
-            result = future.result()   # worker always returns (rec, energy_or_None)
-            results.append((by_id[result[0].compound_id], result[1]))
+            result = future.result()   # worker returns (rec, energy_or_None, pose)
+            rec, energy, pose = result
+            parent = by_id[rec.compound_id]
+            results.append((parent, energy))
+            # Propagate the active-site pose path back to the parent record; the
+            # consensus dock only keeps the best energy, but the retained pose is
+            # needed for pose-based analysis. Keep the best (most recent valid)
+            # pose — consensus docking uses the same grid, so any conformer's
+            # active pose is usable for interaction analysis.
+            if pose is not None:
+                parent.active_docked_pdbqt = pose
             if (i + 1) % 25 == 0:
                 log.info(f"    Docked {i + 1} / {total} ({tag})")
 
@@ -523,13 +583,17 @@ def _dock_worker(
         energy = dock_func(
             rec, receptor_pdbqt, center, box_size, work_dir, tag, use_vina,
         )
-        return rec, energy
+        # The active-site pose (record.active_docked_pdbqt) is set inside the
+        # worker process (dock_compound, tag == "active"). Because the worker
+        # runs in a separate ProcessPool, the path must be returned explicitly
+        # (the parent record's attribute is not mutated across processes).
+        return rec, energy, rec.active_docked_pdbqt
     except Exception as exc:
         log.warning(
             f"    Docking failed for {compound_id} ({tag}): {exc}. "
             "Returning (record, None) and continuing."
         )
-        return rec, None
+        return rec, None, None
 
 
 

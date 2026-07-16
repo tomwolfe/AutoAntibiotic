@@ -1192,8 +1192,11 @@ class TestExperimentalValidationDefaults:
         with patch("utils.filtering.QED.qed", return_value=0.65):
             # Make the similarity filter pass (low max_sim) and force a valid
             # Lipinski result so the only failing gate is the QED cutoff.
+            # Disable the diversity fallback (which relaxes similarity AND the
+            # QED floor to 0.4) by setting DIVERSITY_MIN_COUNT to 0 so we test
+            # the strict default 0.7 gate in isolation.
             with patch("utils.filtering.TanimotoSimilarity", return_value=0.0):
-                with patch("utils.filtering.DIVERSITY_MIN_COUNT", 10**9):
+                with patch("utils.filtering.DIVERSITY_MIN_COUNT", 0):
                     filtered = apply_filters([record])
         assert len(filtered) == 0, "QED=0.65 must be rejected by the >0.7 gate"
 
@@ -1738,6 +1741,133 @@ class TestConsensusDocking:
         assert results[0][1] == -6.0
 
 
+# ── Test: Task 1 — Active-site pose propagated across workers ───────
+
+class TestActivePosePropagation:
+    def test_worker_returns_pose_tuple(self, tmp_path):
+        """_dock_worker returns (rec, energy, active_docked_pdbqt)."""
+        from utils.docking import _dock_worker
+
+        def fake_dock(rec, *a, **k):
+            rec.active_docked_pdbqt = "/tmp/pose.pdbqt"
+            return -7.0
+
+        # dock_func is the 2nd positional arg; pass fake_dock directly.
+        result = _dock_worker(
+            ("AA-0001", "c1ccccc1"),
+            fake_dock, "r.pdbqt", np.zeros(3),
+            (20.0, 20.0, 20.0), str(tmp_path), "active", True,
+        )
+        assert len(result) == 3, "worker must return a 3-tuple"
+        rec, energy, pose = result
+        assert energy == -7.0
+        assert pose == "/tmp/pose.pdbqt"
+
+    def test_parallel_propagates_pose_to_parent(self, tmp_path):
+        """_dock_compounds_parallel assigns active_docked_pdbqt on the parent."""
+        from utils.docking import _dock_compounds_parallel
+
+        def fake_dock(rec, *a, **k):
+            rec.active_docked_pdbqt = f"/tmp/{rec.compound_id}.pdbqt"
+            return -7.0
+
+        rec = CompoundRecord(
+            compound_id="AA-0001", smiles="c1ccccc1",
+            mol=Chem.MolFromSmiles("c1ccccc1"),
+        )
+        with patch("utils.docking.dock_compound", side_effect=fake_dock):
+            results = _dock_compounds_parallel(
+                [rec], "r.pdbqt", np.zeros(3),
+                (20.0, 20.0, 20.0), str(tmp_path), "active",
+                n_jobs=1,
+            )
+        assert results[0][1] == -7.0
+        # The parent record's pose attribute was mutated by the (in-process) worker.
+        assert rec.active_docked_pdbqt == "/tmp/AA-0001.pdbqt"
+
+    @pytest.mark.parametrize("tag,should_keep", [
+        ("active", True),
+        ("active_c0", True),   # consensus per-conformer — was the bug
+        ("active_c2", True),
+        ("active_flex", True),  # flexible active-site docking
+        ("mut_S403A", False),   # mutant scan — must NOT be retained
+        ("allosteric", False),
+        ("allosteric_c1", False),
+    ])
+    def test_dock_compound_retains_active_pose_for_tag(self, tmp_path, tag, should_keep):
+        """dock_compound must retain the docked-pose file for ALL active-site
+        tags (plain 'active', consensus 'active_c*', flexible 'active_flex'),
+        but not for mutant/allosteric tags. Regression for consensus docking
+        passing 'active_c0' and the pose being dropped (MMGBSA/mutant N/A)."""
+        from utils.docking import dock_compound
+
+        rec = CompoundRecord(
+            compound_id="AA-0001", smiles="c1ccccc1",
+            mol=Chem.MolFromSmiles("c1ccccc1"),
+        )
+
+        def fake_vina(receptor, lig, out, center, box, flex_pdbqt=None):
+            with open(out, "w") as fh:
+                fh.write("MODEL 1\nENDMDL\n")
+            return -7.5
+
+        with patch("utils.docking.prepare_ligand_pdbqt", return_value=True), \
+             patch("utils.docking._run_vina_docking", side_effect=fake_vina):
+            energy = dock_compound(
+                rec, "r.pdbqt", np.zeros(3), (20.0, 20.0, 20.0),
+                str(tmp_path), tag, use_vina=True,
+            )
+        assert energy == -7.5
+        if should_keep:
+            assert rec.active_docked_pdbqt is not None, \
+                f"tag {tag!r} must retain the active-site pose"
+            assert os.path.exists(rec.active_docked_pdbqt), \
+                f"pose file for tag {tag!r} must survive cleanup"
+        else:
+            assert getattr(rec, "active_docked_pdbqt", None) is None, \
+                f"tag {tag!r} must NOT retain a pose"
+
+    def test_failed_flex_dock_does_not_clobber_good_rigid_pose(self, tmp_path):
+        """A failed flexible re-dock (Vina rejects the flex file → energy None,
+        no output written) must NOT overwrite a previously retained good rigid
+        pose. Regression: dock_compound unconditionally set active_docked_pdbqt
+        to a non-existent flex pose, breaking MM-GBSA/H-bond/mutation analysis."""
+        from utils.docking import dock_compound
+
+        rec = CompoundRecord(
+            compound_id="AA-0001", smiles="c1ccccc1",
+            mol=Chem.MolFromSmiles("c1ccccc1"),
+        )
+
+        # First: a successful rigid active-site dock retains a real pose.
+        def good_vina(receptor, lig, out, center, box, flex_pdbqt=None):
+            with open(out, "w") as fh:
+                fh.write("MODEL 1\nENDMDL\n")
+            return -8.0
+
+        with patch("utils.docking.prepare_ligand_pdbqt", return_value=True), \
+             patch("utils.docking._run_vina_docking", side_effect=good_vina):
+            dock_compound(rec, "r.pdbqt", np.zeros(3), (20.0, 20.0, 20.0),
+                          str(tmp_path), "active_c0", use_vina=True)
+        good_pose = rec.active_docked_pdbqt
+        assert good_pose is not None and os.path.exists(good_pose)
+
+        # Then: a failed flex dock (Vina writes nothing, returns None).
+        def failed_vina(receptor, lig, out, center, box, flex_pdbqt=None):
+            return None  # no output file written
+
+        with patch("utils.docking.prepare_ligand_pdbqt", return_value=True), \
+             patch("utils.docking._run_vina_docking", side_effect=failed_vina):
+            dock_compound(rec, "r.pdbqt", np.zeros(3), (20.0, 20.0, 20.0),
+                          str(tmp_path), "active_flex", use_vina=True,
+                          flex_pdbqt="flex.pdbqt")
+
+        # The good rigid pose must survive; not clobbered by the failed flex dock.
+        assert rec.active_docked_pdbqt == good_pose, \
+            "failed flex dock must not clobber the retained rigid pose"
+        assert os.path.exists(rec.active_docked_pdbqt)
+
+
 # ── Test: Task 2 — MM-GBSA-like rerank populates mmgbca_score ───────
 
 class TestMMGBSARerank:
@@ -1760,6 +1890,31 @@ class TestMMGBSARerank:
         rerank_mmff([rec], work_dir=str(tmp_path), use_vina=True)
         assert rec.mmgbca_score is not None, "mmgbca_score should be populated"
         assert isinstance(rec.mmgbca_score, float)
+
+    def test_load_pose_mol_reads_pdbqt_via_obabel(self, tmp_path):
+        """_load_pose_mol converts a real Vina PDBQT pose to an RDKit Mol with a
+        3D conformer. Regression: RDKit has no MolFromPDBQTFile and parsing a
+        PDBQT as PDB returns None, so MM-GBSA was always N/A."""
+        import shutil
+        if shutil.which("obabel") is None:
+            pytest.skip("obabel required")
+        from rdkit.Chem import AllChem
+        from utils.docking import _load_pose_mol
+
+        # Build a genuine PDBQT pose with obabel (partial charges + atom types).
+        mol = Chem.AddHs(Chem.MolFromSmiles("c1ccccc1O"))
+        AllChem.EmbedMolecule(mol, randomSeed=42)
+        pdb = tmp_path / "lig.pdb"
+        Chem.MolToPDBFile(mol, str(pdb))
+        pdbqt = tmp_path / "lig.pdbqt"
+        import subprocess
+        subprocess.run(["obabel", str(pdb), "-O", str(pdbqt), "-xr"],
+                       capture_output=True, timeout=60)
+
+        loaded = _load_pose_mol(str(pdbqt))
+        assert loaded is not None, "pose PDBQT must load into RDKit via obabel"
+        assert loaded.GetNumConformers() >= 1
+        assert loaded.GetNumAtoms() > 0
 
     def test_rerank_skips_without_pose(self, tmp_path):
         """rerank_mmff leaves mmgbca_score None when no pose is present."""
@@ -1838,6 +1993,178 @@ class TestWiderSelectivityPanel:
         assert out[0].selectivity_index == pytest.approx(2.5)
         # 4 human targets → High confidence.
         assert out[0].selectivity_confidence == "High"
+
+    def test_raw_si_not_zeroed_on_tight_offtarget(self, tmp_path):
+        """The old override that set SI = 0.0 when a human off-target
+        bound tightly (energy < -8.0) must be GONE. The raw SI is
+        preserved and the high-risk signal moves to Off_Target_Risk."""
+        records = [
+            CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                           mol=Chem.MolFromSmiles("c1ccccc1"))
+        ]
+        records[0].pb2pa_active_energy = -9.0
+
+        targets = {
+            "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
+            "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
+        }
+        # Trypsin binds tightly (-9.0) → would have zeroed SI before the fix.
+        fixed = {"trypsin": -9.0, "ces1": -3.0}
+
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
+                          dock_func=None, use_vina=True):
+            return [(r, fixed[tag]) for r in recs]
+
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            out = analyze_selectivity_and_resistance(
+                records, targets, str(tmp_path),
+                {"vina": True, "USE_VINA": True},
+            )
+        # Raw SI = 9.0 / 9.0 = 1.0 — must NOT be zeroed.
+        assert out[0].selectivity_index == pytest.approx(1.0)
+        # High-risk flag lives in the separate boolean column now.
+        assert out[0].off_target_risk is True
+
+    def test_invalid_positive_human_energy_ignored(self, tmp_path):
+        """A human off-target energy > 0.0 (no-pose / clash) is treated
+        as invalid and excluded from the SI denominator (paper §4.1b)."""
+        records = [
+            CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                           mol=Chem.MolFromSmiles("c1ccccc1"))
+        ]
+        records[0].pb2pa_active_energy = -9.0
+
+        targets = {
+            "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
+            "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
+        }
+        # Trypsin = +5.0 (no pose / clash → invalid), CES1 = -3.0 (real).
+        fixed = {"trypsin": 5.0, "ces1": -3.0}
+
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
+                          dock_func=None, use_vina=True):
+            return [(r, fixed[tag]) for r in recs]
+
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            out = analyze_selectivity_and_resistance(
+                records, targets, str(tmp_path),
+                {"vina": True, "USE_VINA": True},
+            )
+        # The +5.0 trypsin value is ignored; only CES1 (-3.0) counts.
+        # SI = 9.0 / 3.0 = 3.0 (not 9.0/5.0 nor zeroed).
+        assert out[0].selectivity_index == pytest.approx(3.0)
+        # A clash (>0) is not a real binder, so no off-target risk.
+        assert out[0].off_target_risk is False
+
+
+# ── Test: Flexible-residue PDBQT torsion tree (Vina --flex) ──────────
+
+class TestWriteFlexPdbqt:
+    """write_flex_pdbqt must emit a Vina-valid flexible-residue torsion tree.
+
+    Regression: Vina rejected the flex file with "Unknown or inappropriate tag
+    found in flex residue or ligand" because a ``TORSDOF`` record (ligand-only)
+    was emitted inside the ``BEGIN_RES``/``END_RES`` block, and because polar
+    hydrogens (HD) were missing. This locks in the fix.
+    """
+
+    def _write_ser_flex_pdb(self, path):
+        # Two SER residues (chains A/B) with backbone + OG side chain, no Hs
+        # (matching a crystal PDB slice).
+        lines = [
+            "ATOM      1  N   SER A 403      23.803  25.107  82.919  1.00  0.00           N",
+            "ATOM      2  CA  SER A 403      22.833  25.575  83.912  1.00  0.00           C",
+            "ATOM      3  C   SER A 403      21.357  25.586  83.515  1.00  0.00           C",
+            "ATOM      4  O   SER A 403      20.477  25.627  84.383  1.00  0.00           O",
+            "ATOM      5  CB  SER A 403      23.209  26.984  84.359  1.00  0.00           C",
+            "ATOM      6  OG  SER A 403      24.356  26.948  85.169  1.00  0.00           O",
+            "END",
+        ]
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+    def test_no_torsdof_in_flex_block(self, tmp_path):
+        from utils.structure_prep import write_flex_pdbqt
+
+        pdb = str(tmp_path / "flex.pdb")
+        out = str(tmp_path / "flex.pdbqt")
+        self._write_ser_flex_pdb(pdb)
+        assert write_flex_pdbqt(pdb, out, ["SER403"]) is True
+
+        text = open(out).read()
+        # TORSDOF is a ligand-only tag; Vina rejects it inside a flex residue.
+        assert "TORSDOF" not in text, "flex residue must not carry a TORSDOF record"
+        assert "BEGIN_RES" in text and "END_RES" in text
+        assert "ROOT" in text and "ENDROOT" in text
+
+    def test_side_chain_only_branch_and_backbone_root(self, tmp_path):
+        from utils.structure_prep import write_flex_pdbqt
+
+        pdb = str(tmp_path / "flex.pdb")
+        out = str(tmp_path / "flex.pdbqt")
+        self._write_ser_flex_pdb(pdb)
+        write_flex_pdbqt(pdb, out, ["SER403"])
+        lines = open(out).read().splitlines()
+
+        # Backbone N/CA/C/O live in ROOT; the CA–CB bond opens a BRANCH so only
+        # the side chain is flexible.
+        root_i = lines.index("ROOT")
+        endroot_i = lines.index("ENDROOT")
+        root_atoms = [l[12:16].strip() for l in lines[root_i + 1:endroot_i]
+                      if l.startswith("ATOM")]
+        assert "CA" in root_atoms and "N" in root_atoms
+        assert any(l.startswith("BRANCH") for l in lines)
+
+    def test_polar_hydrogen_present_with_hd_type(self, tmp_path):
+        from utils.structure_prep import write_flex_pdbqt
+        import shutil
+
+        if shutil.which("obabel") is None:
+            pytest.skip("obabel required to add polar hydrogens")
+        pdb = str(tmp_path / "flex.pdb")
+        out = str(tmp_path / "flex.pdbqt")
+        self._write_ser_flex_pdb(pdb)
+        write_flex_pdbqt(pdb, out, ["SER403"])
+        text = open(out).read()
+        # obabel -h adds the OG hydroxyl proton as an HD atom.
+        assert " HD" in text, "polar hydrogen (HD) must be present for H-bonding"
+
+
+# ── Test: Mutation scan parses 1-letter mutant codes ────────────────
+
+class TestMutationScan:
+    def test_one_letter_mutant_codes_populate_delta(self, tmp_path):
+        """_run_mutation_scan must parse 1-letter codes (e.g. 'S403A') and
+        populate mutant_energy_delta. Regression: the parser required a 3-letter
+        suffix so mutant_specs was always empty → Mutant_Energy_Delta = N/A."""
+        import discovery_pipeline as P
+
+        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                             mol=Chem.MolFromSmiles("c1ccccc1"))
+        pose = tmp_path / "AA-0001_active_out.pdbqt"
+        pose.write_text("MODEL 1\nENDMDL\n")
+        rec.active_docked_pdbqt = str(pose)
+        rec.pb2pa_active_energy = -9.0
+
+        pb2pa = {
+            "pdbqt": str(tmp_path / "wt.pdbqt"),
+            "active_center": np.zeros(3),
+            "cleaned_pdb": None,
+        }
+        (tmp_path / "wt.pdbqt").write_text("ATOM\n")
+        targets = {"PBP2a": pb2pa, "mode": "science"}
+        deps = {"USE_VINA": True}
+
+        # Mutant receptor build + docking are mocked; the mutant energy is 1.0
+        # kcal/mol worse than WT, so the average delta is +1.0.
+        with patch("discovery_pipeline._mutate_pdbqt_residue",
+                   return_value=str(tmp_path / "mut.pdbqt")), \
+             patch("discovery_pipeline.dock_compound", return_value=-8.0):
+            P._run_mutation_scan([rec], targets, str(tmp_path), deps)
+
+        assert rec.mutant_energy_delta is not None, \
+            "1-letter mutant code must be parsed → delta populated"
+        assert rec.mutant_energy_delta == pytest.approx(1.0)
 
 
 if __name__ == "__main__":

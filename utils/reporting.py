@@ -120,7 +120,7 @@ def generate_csv_report(
     Columns:
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
-        Selectivity_Confidence, Max_Similarity, Passes_Lipinski,
+        Selectivity_Confidence, Off_Target_Risk, Max_Similarity, Passes_Lipinski,
         QED_Score, Binding_Mode_Notes, Protocol_RMSD, protocol_trust,
         H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446.
 
@@ -232,6 +232,7 @@ def generate_csv_report(
                 "Unassessed" if rec.selectivity_confidence == "None"
                 else rec.selectivity_confidence
             ) + (" (mock)" if is_mock else ""),
+            "Off_Target_Risk": str(getattr(rec, "off_target_risk", False)),
             "Max_Similarity": f"{rec.max_similarity:.3f}",
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",

@@ -17,10 +17,10 @@ unmistakable.
 
 For genuine scientific screening you must:
 
-1. **Use real PDB structures.** Place real downloads (e.g. `6TKO`) in the PDB
-   directory or let the pipeline fetch them. Never feed the bundled mock PDBs
-   to science mode — they are non-physical and will produce meaningless
-   docking/redocking results.
+ 1. **Use real PDB structures.** Place real downloads (e.g. `3ZG0`)
+    in the PDB directory or let the pipeline fetch them. Never feed the
+    bundled mock PDBs to science mode — they are non-physical and will
+    produce meaningless docking/redocking results.
  2. **Install AutoDock Vina.** Docking and native-ligand redocking validation
     require Vina. Install it with one command via `bash setup.sh` (creates the
     `autoantibiotic` conda env) or run everything inside the Docker image, which
@@ -36,7 +36,7 @@ For genuine scientific screening you must:
    > validation still requires Vina and is skipped otherwise.
 
  3. **Set `native_ligand_resname`.** Provide the exact co-crystallised ligand
-    residue name (e.g. `native_ligand_resname: CEF`). Without it, redocking
+    residue name (e.g. `native_ligand_resname: AI8` for 3ZG0). Without it, redocking
     validation cannot run and the protocol reports `Validation Unavailable` —
     i.e. the science run produces *no* physical RMSD and should be interpreted
     with caution.
@@ -66,7 +66,7 @@ To raise the likelihood that the top-ranked candidates are genuine PBP2a
 inhibitors — without adding deep learning, FEP, or new external services —
 the pipeline uses three low-complexity, RDKit/Vina-only measures. **Consensus
 rigid docking** docks every compound against a set of PBP2a conformer PDBQTs
-(apo 3QPD, holo 6TKO, 1ZOO) and keeps the best (most negative) energy;
+(apo 1VQQ, holo 3ZG0, 4DKI) and keeps the best (most negative) energy;
 redocking validation reports the lowest RMSD across those conformers, so a
 single fortuitous crystal pose cannot inflate confidence. **MM-GBSA-like
 rerank** relaxes each top-10 active-site pose with `MMFFOptimizeMolecule`
@@ -77,3 +77,42 @@ four proteins (Trypsin, CES1, Serum Albumin 1AO6, CYP3A4 1W0E), making the
 Selectivity Index (threshold still SI ≥ 2.0) more conservative and harder to
 pass on an artefact. All residue lists and PDB IDs are configurable in
 `config/targets.yaml` / `config/constants.py`.
+
+## Known defects fixed in this revision
+
+The following pipeline defects (reported in the prior `paper_draft.md`) have
+been corrected. These were *engineering* bugs that suppressed real signal —
+no scientific-validity logic (e.g. the `protocol_trust` CAUTION badge) was
+weakened.
+
+1. **Pose loss across parallel workers (§4.3).** `_dock_worker` now returns
+   the active-site pose path alongside `(record, energy)`; `_dock_compounds_parallel`
+   and `_consensus_dock` propagate `active_docked_pdbqt` back to the parent
+   `CompoundRecord`. This lets `MMGBSA_Score`, `Mutant_Energy_Delta`, and the
+   `H_Bond_*` flags populate from the real docked pose.
+
+2. **Selectivity Index hard-zero (§4.1).** The override that set
+   `rec.selectivity_index = 0.0` when any human off-target bound tightly
+   (energy < -8.0) has been removed. The raw SI is preserved. A separate
+   boolean `Off_Target_Risk` column records the high-risk flag. Before the SI
+   denominator is computed, any human off-target energy `> 0.0` (no-pose /
+   steric clash) is treated as invalid (excluded), so the SI is computed only
+   from real binding energies.
+
+3. **Flexible docking broken (§3.3).** The flex PDBQT for SER403/LYS406/
+   TYR446 is now written with `BEGIN_RES` / `END_RES` tags and plain `ATOM`
+   records and **no** `TER`/`REMARK` lines, which is what Vina's strict
+   `--flex` parser requires (the old writer emitted `TER`, causing "Unknown tag"
+   aborts). The flex pose is propagated the same way as the rigid active pose.
+
+4. **Filter relaxation for known binders (§4.4).** `config.yaml` gains
+   `recall_mode: false`. When set `true`, `apply_filters` uses
+   `SIMILARITY_THRESHOLD_RELAXED` and a QED floor of `0.4` (not `0.7`) so
+   ceftaroline / meropenem survive filtering.
+
+5. **Validation artifact (§1).** `run_redocking_validation` now writes
+   `validation_results.json` to `work_dir`. The honest `protocol_trust` CAUTION
+   badge is unchanged.
+
+> Structure note: the repo screens **3ZG0** (holo, ceftaroline ligand
+> **AI8**) and **1VQQ** (apo), *not* 6TKO/CEF as earlier docs claimed.

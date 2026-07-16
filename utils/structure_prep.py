@@ -14,6 +14,7 @@ Keeping them here breaks the former circular import between
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from typing import List, Optional
@@ -335,6 +336,56 @@ _RECEPTOR_PDBQT_ATOM_TYPE = {
 }
 
 
+# ── Side-chain torsion topology for Vina flexible-residue PDBQT ──
+#
+# Vina's ``--flex`` receptor requires each flexible residue to be written as a
+# torsion tree: the rigid backbone lives inside ROOT/ENDROOT and every
+# rotatable side-chain bond opens a nested BRANCH…ENDBRANCH block. Emitting
+# bare ATOM records inside BEGIN_RES/END_RES (no ROOT/BRANCH) makes Vina abort
+# with "Unknown or inappropriate tag found in flex residue".
+#
+# For each residue type we list the rotatable side-chain bonds in
+# root→leaf order as (parent_atom, child_atom); the child atom (and every
+# atom that appears after it in the chain, up to the next branch point) moves
+# with that torsion. ``chi_atoms`` maps each rotatable bond's child atom to the
+# side-chain atoms that belong to (and beyond) that bond, so we can nest the
+# BRANCH blocks correctly. The backbone atoms N, CA, C, O always form the ROOT.
+_FLEX_BACKBONE = ("N", "CA", "C", "O", "OXT", "H", "HA")
+
+# Ordered rotatable-bond chains (linear side chains). Each entry is the list of
+# side-chain atoms from CB outward; consecutive atoms define a rotatable bond
+# (CA–CB, CB–CG, …). Terminal H atoms travel with their heavy-atom parent.
+_FLEX_SIDECHAIN_CHAIN = {
+    "SER": ["CB", "OG"],
+    "CYS": ["CB", "SG"],
+    "THR": ["CB", "OG1", "CG2"],
+    "LYS": ["CB", "CG", "CD", "CE", "NZ"],
+    "ARG": ["CB", "CG", "CD", "NE", "CZ", "NH1", "NH2"],
+    "TYR": ["CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ", "OH"],
+    "PHE": ["CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ"],
+    "TRP": ["CB", "CG", "CD1", "CD2", "NE1", "CE2", "CE3", "CZ2", "CZ3", "CH2"],
+    "HIS": ["CB", "CG", "ND1", "CD2", "CE1", "NE2"],
+    "ASP": ["CB", "CG", "OD1", "OD2"],
+    "ASN": ["CB", "CG", "OD1", "ND2"],
+    "GLU": ["CB", "CG", "CD", "OE1", "OE2"],
+    "GLN": ["CB", "CG", "CD", "OE1", "NE2"],
+    "MET": ["CB", "CG", "SD", "CE"],
+    "LEU": ["CB", "CG", "CD1", "CD2"],
+    "ILE": ["CB", "CG1", "CG2", "CD1"],
+    "VAL": ["CB", "CG1", "CG2"],
+    "PRO": ["CB", "CG", "CD"],
+}
+
+# Number of rotatable side-chain bonds (chi angles) treated as flexible. Only
+# the linear CA–CB, CB–CG(1), CG–CD, CD–CE/… bonds are rotatable; ring closures
+# and terminal-atom pairs (e.g. the two OD of ASP) are NOT independent torsions.
+_FLEX_ROTATABLE_BONDS = {
+    "SER": 1, "CYS": 1, "THR": 1, "LYS": 4, "ARG": 4, "TYR": 2, "PHE": 2,
+    "TRP": 2, "HIS": 2, "ASP": 2, "ASN": 2, "GLU": 3, "GLN": 3, "MET": 3,
+    "LEU": 2, "ILE": 2, "VAL": 1, "PRO": 0, "ALA": 0, "GLY": 0,
+}
+
+
 def write_receptor_pdbqt(pdb_path: str, pdbqt_path: str) -> bool:
     """
     Write a receptor PDBQT file from a cleaned receptor PDB using RDKit/Bio.PDB.
@@ -456,3 +507,331 @@ def write_receptor_pdbqt(pdb_path: str, pdbqt_path: str) -> bool:
     except Exception as exc:
         log.warning(f"  ⚠  Bio.PDB receptor PDBQT fallback failed: {exc}")
         return False
+
+
+def _fmt_flex_atom(serial, atom_name, res_name, chain_id, res_seq,
+                   x, y, z, charge, atom_type):
+    """
+    Format a single PDBQT ATOM record for a flexible-residue block, using the
+    canonical AutoDock/Vina fixed-column layout (matching OpenBabel's ``-xr``
+    output) so Vina's column-sensitive parser accepts it:
+
+    cols 1-6 ``ATOM``, 7-11 serial, 13-16 atom name, 18-20 res name,
+    22 chain, 23-26 res seq, 31-54 xyz, 55-60 occupancy, 61-66 tempfactor,
+    69-76 partial charge, 78-79 AutoDock atom type.
+    """
+    # Atom-name justification: 4-char names start at col 13; shorter names are
+    # padded so the element sits in col 14 (PDB convention), which OpenBabel and
+    # AutoDockTools both follow.
+    name = atom_name.strip()
+    if len(name) >= 4:
+        name_field = name[:4]
+    else:
+        name_field = f" {name:<3s}"
+    return (
+        "ATOM  "
+        + f"{serial:5d} "
+        + f"{name_field}"
+        + " "
+        + f"{res_name[:3]:>3s} "
+        + f"{(chain_id or 'A'):1s}"
+        + f"{res_seq:4d}"
+        + "    "
+        + f"{x:8.3f}{y:8.3f}{z:8.3f}"
+        + f"{1.00:6.2f}{0.00:6.2f}"
+        + "    "
+        + f"{charge:+6.3f} "
+        + f"{atom_type:<2s}"
+    )
+
+
+def _build_flex_res_block(res_name, chain_id, res_seq, atoms, serial_start):
+    """
+    Build the torsion-tree PDBQT lines for a single flexible residue.
+
+    ``atoms`` maps atom-name → (atom_type, charge, x, y, z). The backbone
+    atoms (N, CA, C, O, …) form the ROOT; each rotatable side-chain bond in
+    :data:`_FLEX_SIDECHAIN_CHAIN` opens a nested ``BRANCH … ENDBRANCH`` block.
+    Non-standard residues (or ones missing side-chain atoms) fall back to a
+    single ROOT block with zero rotatable bonds, which Vina accepts.
+
+    Returns ``(lines, next_serial)`` or ``(None, serial_start)`` when the
+    residue has no usable atoms.
+    """
+    res_name = res_name.strip().upper()
+    if not atoms:
+        return None, serial_start
+
+    serial = serial_start
+    name_to_serial = {}
+    lines = [f"BEGIN_RES {res_name} {chain_id or 'A'} {res_seq}"]
+
+    # Separate hydrogens from heavy atoms. Each polar H (added by obabel -h) is
+    # attached to its nearest heavy-atom parent so it is emitted in the same
+    # torsion-tree branch — Vina infers bonds from intra-branch distance.
+    def _is_hydrogen(name):
+        t = atoms[name][0].strip().upper()
+        return t in ("H", "HD", "HS") or name.strip().upper().startswith("H")
+
+    heavy = {n for n in atoms if not _is_hydrogen(n)}
+    hydrogens = [n for n in atoms if _is_hydrogen(n)]
+
+    def _nearest_heavy(hname):
+        _, _, hx, hy, hz = atoms[hname]
+        best, best_d = None, None
+        for hv in heavy:
+            _, _, x, y, z = atoms[hv]
+            d = (x - hx) ** 2 + (y - hy) ** 2 + (z - hz) ** 2
+            if best_d is None or d < best_d:
+                best, best_d = hv, d
+        return best
+
+    h_of = {}
+    for h in hydrogens:
+        parent = _nearest_heavy(h)
+        if parent is not None:
+            h_of.setdefault(parent, []).append(h)
+
+    def emit(atom_name):
+        nonlocal serial
+        atom_type, charge, x, y, z = atoms[atom_name]
+        name_to_serial[atom_name] = serial
+        lines.append(_fmt_flex_atom(
+            serial, atom_name, res_name, chain_id, res_seq,
+            x, y, z, charge, atom_type,
+        ))
+        serial += 1
+        # Emit hydrogens bonded to this heavy atom right after it, in the same
+        # branch, so Vina links them to the correct parent.
+        for h in h_of.get(atom_name, []):
+            atom_type, charge, x, y, z = atoms[h]
+            name_to_serial[h] = serial
+            lines.append(_fmt_flex_atom(
+                serial, h, res_name, chain_id, res_seq,
+                x, y, z, charge, atom_type,
+            ))
+            serial += 1
+
+    chain = _FLEX_SIDECHAIN_CHAIN.get(res_name)
+    n_bonds = _FLEX_ROTATABLE_BONDS.get(res_name, 0)
+
+    # ── ROOT: rigid backbone atoms present in this residue ──
+    lines.append("ROOT")
+    root_names = [n for n in _FLEX_BACKBONE if n in heavy]
+    # If the side chain is unknown, treat everything except recognised
+    # backbone as rigid too (single ROOT, no torsions).
+    if chain is None:
+        root_names += [n for n in heavy if n not in _FLEX_BACKBONE]
+    for n in root_names:
+        emit(n)
+    lines.append("ENDROOT")
+
+    torsdof = 0
+    if chain is not None:
+        # Only the first ``n_bonds`` atoms of the chain start rotatable bonds;
+        # atoms beyond that (ring / terminal branches) travel with the last
+        # rotatable branch as rigid members.
+        present_chain = [c for c in chain if c in heavy]
+        # Any heavy side-chain atoms not in the linear chain (e.g. CG2 of
+        # THR/ILE, ring atoms) are attached as rigid members. Hydrogens travel
+        # with their parent heavy atom via emit() and are excluded here.
+        extra = [n for n in heavy
+                 if n not in _FLEX_BACKBONE and n not in present_chain]
+
+        def close_branches(depth, opened):
+            for parent, child in reversed(opened[:depth]):
+                lines.append(
+                    f"ENDBRANCH {name_to_serial[parent]:3d} "
+                    f"{name_to_serial[child]:3d}"
+                )
+
+        opened = []
+        prev = "CA" if "CA" in atoms else (root_names[0] if root_names else None)
+        made = 0
+        for child in present_chain:
+            if prev is None:
+                emit(child)
+                continue
+            if made < n_bonds:
+                # Open a rotatable branch parent→child.
+                # Vina requires the parent atom already emitted (it is, in ROOT
+                # or a previous branch).
+                lines.append(
+                    f"BRANCH {name_to_serial.get(prev, name_to_serial.get('CA', 1)):3d} "
+                    f"{serial:3d}"
+                )
+                opened.append((prev if prev in name_to_serial else "CA", child))
+                emit(child)
+                torsdof += 1
+                made += 1
+            else:
+                # Beyond the last rotatable bond: rigid member of current branch.
+                emit(child)
+            prev = child
+
+        # Attach leftover side-chain atoms (branches/rings/Hs) as rigid members
+        # inside the innermost open branch (or ROOT if none opened).
+        for n in extra:
+            emit(n)
+
+        # Close all opened branches (innermost first).
+        for parent, child in reversed(opened):
+            lines.append(
+                f"ENDBRANCH {name_to_serial[parent]:3d} "
+                f"{name_to_serial[child]:3d}"
+            )
+
+    # NOTE: Flexible-residue blocks must NOT carry a ``TORSDOF`` record — that
+    # tag is only valid for ligands. Vina's ``--flex`` parser rejects it with
+    # "Unknown or inappropriate tag found in flex residue or ligand". (OpenBabel's
+    # ``-xs`` flexible-residue output likewise omits TORSDOF.)
+    lines.append(f"END_RES {res_name} {chain_id or 'A'} {res_seq}")
+    return lines, serial
+
+
+def write_flex_pdbqt(
+    flex_pdb_path: str,
+    flex_pdbqt_path: str,
+    flex_residues: Optional[List[str]] = None,
+) -> bool:
+    """
+    Write a Vina-valid *flexible-residue* PDBQT (for ``--flex``) from a PDB
+    that contains ONLY the flexible residues.
+
+    Vina's ``--flex`` parser requires each residue to be a *torsion tree*: the
+    rigid backbone lives inside ``ROOT``/``ENDROOT`` and every rotatable
+    side-chain bond opens a nested ``BRANCH … ENDBRANCH`` block, terminated by
+    a ``TORSDOF`` count.  Emitting bare ``ATOM`` records inside
+    ``BEGIN_RES``/``END_RES`` (as an earlier version did) makes Vina abort with
+    *"Unknown or inappropriate tag found in flex residue"*.  This function
+    builds a real torsion tree using the per-residue side-chain topology in
+    :data:`_FLEX_SIDECHAIN_CHAIN` / :data:`_FLEX_ROTATABLE_BONDS`.
+
+    Atom types and Gasteiger charges are taken from an OpenBabel PDBQT
+    conversion when available; otherwise a Bio.PDB fallback assigns Vina atom
+    types with zero charges.  Either way the emitted records form a valid
+    torsion tree.
+
+    Args:
+        flex_pdb_path: PDB containing only the flexible residues.
+        flex_pdbqt_path: Destination flex PDBQT path.
+        flex_residues: Optional identifiers (e.g. ``["SER403", …]``) for a
+            log message. Not required for parsing.
+
+    Returns:
+        ``True`` on success, ``False`` if nothing could be written.
+    """
+    if not os.path.exists(flex_pdb_path) or os.path.getsize(flex_pdb_path) == 0:
+        return False
+
+    # ── Gather per-residue atoms with types/charges ──
+    # Prefer obabel-derived atom types + Gasteiger charges; fall back to the
+    # element→Vina-type map with zero charges when obabel is unavailable.
+    obabel_atoms = {}
+    try:
+        tmp_pdbqt = flex_pdbqt_path + ".obabel.pdbqt"
+        res = subprocess.run(
+            ["obabel", flex_pdb_path, "-O", tmp_pdbqt, "-h", "-xs"],
+            capture_output=True, timeout=60,
+        )
+        if res.returncode == 0 and os.path.exists(tmp_pdbqt) and os.path.getsize(tmp_pdbqt) > 0:
+            with open(tmp_pdbqt) as fh:
+                for line in fh:
+                    if not line.startswith(("ATOM", "HETATM")):
+                        continue
+                    try:
+                        atom_name = line[12:16].strip()
+                        chain = line[21]
+                        res_seq = int(line[22:26])
+                        x = float(line[30:38])
+                        y = float(line[38:46])
+                        z = float(line[46:54])
+                        charge = float(line[66:76]) if len(line) > 76 else 0.0
+                        atom_type = line[77:79].strip() or "C"
+                    except (ValueError, IndexError):
+                        continue
+                    res_atoms = obabel_atoms.setdefault((chain, res_seq), {})
+                    # obabel names every added hydrogen "H"; give each a unique
+                    # key (H, H2, H3, …) so the torsion-tree builder can attach
+                    # them individually to their nearest heavy-atom parent.
+                    key = atom_name
+                    if key in res_atoms:
+                        idx = 2
+                        while f"{atom_name}{idx}" in res_atoms:
+                            idx += 1
+                        key = f"{atom_name}{idx}"
+                    res_atoms[key] = (atom_type, charge, x, y, z)
+        try:
+            os.remove(tmp_pdbqt)
+        except OSError:
+            pass
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        obabel_atoms = {}
+
+    try:
+        from Bio.PDB import PDBParser
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("flex", flex_pdb_path)
+
+        all_lines = []
+        serial = 1
+        wrote_any = False
+        for model in struct:
+            for chain in model:
+                cid = chain.get_id()
+                for residue in chain:
+                    if residue.get_id()[0] != " ":
+                        continue
+                    res_name = residue.get_resname().strip()
+                    res_seq = residue.get_id()[1]
+
+                    # Build atom dict for this residue.
+                    ob = obabel_atoms.get((cid, res_seq)) or {}
+                    atoms = {}
+                    for atom in residue:
+                        name = atom.get_name().strip()
+                        if not name:
+                            continue
+                        if name in ob:
+                            atoms[name] = ob[name]
+                            continue
+                        try:
+                            coord = atom.get_vector().get_array()
+                        except Exception:
+                            continue
+                        elem = atom.element.strip().upper() if atom.element else ""
+                        if not elem:
+                            for c in name:
+                                if c.isalpha():
+                                    elem = c.upper()
+                                    break
+                        atom_type = _RECEPTOR_PDBQT_ATOM_TYPE.get(elem, elem or "C")
+                        atoms[name] = (atom_type, 0.0,
+                                       float(coord[0]), float(coord[1]), float(coord[2]))
+
+                    # Add obabel-only atoms (the polar hydrogens obabel added via
+                    # ``-h``; they are absent from the H-free crystal PDB that
+                    # Bio.PDB parsed). Vina's ``--flex`` needs these explicit
+                    # polar Hs (HD type) for hydrogen-bond scoring.
+                    for oname, oval in ob.items():
+                        if oname not in atoms:
+                            atoms[oname] = oval
+
+                    block, serial = _build_flex_res_block(
+                        res_name, cid, res_seq, atoms, serial,
+                    )
+                    if block:
+                        all_lines.extend(block)
+                        wrote_any = True
+
+        if wrote_any:
+            with open(flex_pdbqt_path, "w") as fh:
+                fh.write("\n".join(all_lines) + "\n")
+            src = "obabel-derived" if obabel_atoms else "Bio.PDB"
+            log.info(f"  Flex PDBQT written ({src}, torsion-tree): {flex_pdbqt_path}")
+            return True
+        return False
+    except Exception as exc:
+        log.warning(f"  ⚠  Flex PDBQT writer failed: {exc}")
+        return False
+
