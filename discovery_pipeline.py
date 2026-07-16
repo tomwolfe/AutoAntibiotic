@@ -574,7 +574,7 @@ def run_redocking_validation(
             "--size_x", f"{redock_box[0]:.1f}",
             "--size_y", f"{redock_box[1]:.1f}",
             "--size_z", f"{redock_box[2]:.1f}",
-            "--exhaustiveness", "8",
+                "--exhaustiveness", "32",
         ]
         try:
             subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
@@ -586,11 +586,13 @@ def run_redocking_validation(
             return False, None
 
         conf_pdb = conf_pdbqt.replace(".pdbqt", ".pdb")
-        # Convert docked PDBQT back to PDB for RMSD calculation
+        # Convert docked PDBQT back to PDB for RMSD calculation.
+        # Vina output already has 3D coordinates, so --gen3d is not needed
+        # and can cause OpenBabel 3.2.x to hang on complex molecules.
         try:
             subprocess.run(
-                ["obabel", conf_pdbqt, "-O", conf_pdb, "--gen3d"],
-                capture_output=True, timeout=30,
+                ["obabel", conf_pdbqt, "-O", conf_pdb],
+                capture_output=True, timeout=60,
             )
         except Exception:
             log.warning("  Could not convert docked PDBQT to PDB. Trying RDKit PDBQT reader.")

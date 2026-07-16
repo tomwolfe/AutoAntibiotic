@@ -148,57 +148,83 @@ def _compute_rmsd_docked_vs_crystal(
     """
     Align the docked ligand to the crystal ligand and compute heavy-atom RMSD.
 
-    Uses RDKit's AllChem.GetBestRMS with proper arguments. Falls back to an
-    MCS-based alignment when atom-order mismatches cause the direct call to
-    fail. Also tries obabel when available for format-standardised comparison.
-    Returns None if alignment cannot be found or any error occurs.
+    Parses both PDB files with RDKit, removes hydrogens, and performs
+    Kabsch-aligned RMSD on the MCS common substructure.  Also tries RDKit's
+    GetBestRMS (Hungarian) as a fast path.
+
+    The crystal PDB (from Bio.PDB extraction) has correct bonding but no
+    hydrogens.  The docked PDB (from obabel conversion of the Vina PDBQT) may
+    have corrupted bonding; the MCS route is robust to that.
     """
     try:
-        docked_mol = Chem.MolFromPDBFile(docked_pdb, removeHs=False)
-        if docked_mol is None:
-            log.error("  ✗  Could not parse docked PDB as an RDKit Mol.")
-            return None
-
-        crystal_mol = Chem.MolFromPDBFile(crystal_pdb, removeHs=False)
-        if crystal_mol is None:
+        # ── Reference: crystal ligand (no hydrogens) ──
+        crystal = Chem.MolFromPDBFile(crystal_pdb, removeHs=True)
+        if crystal is None:
             log.error("  ✗  Could not parse crystal PDB as an RDKit Mol.")
             return None
-
-        # Attempt 1: direct GetBestRMS with no atom-map constraint (handles
-        # common atom-order mismatches via Hungarian assignment).
         try:
-            rms = AllChem.GetBestRMS(docked_mol, crystal_mol)
-            if rms is not None and rms >= 0:
-                return rms
+            Chem.SanitizeMol(crystal)
         except Exception:
             pass
 
-        # Attempt 2: MCS-based alignment for severe atom-order mismatches.
+        # ── Probe: docked ligand (obabel PDB may have unbound Hs) ──
+        docked = Chem.MolFromPDBFile(docked_pdb, removeHs=True)
+        if docked is None:
+            log.error("  ✗  Could not parse docked PDB as an RDKit Mol.")
+            return None
+
+        # Attempt 1: direct GetBestRMS (fast Hungarian path).
+        try:
+            rms = AllChem.GetBestRMS(docked, crystal)
+            if rms is not None and rms >= 0:
+                log.info(f"  RMSD (GetBestRMS) = {rms:.3f} Å")
+                return float(rms)
+        except Exception:
+            pass
+
+        # Attempt 2: MCS-based Kabsch alignment.
         from rdkit.Chem import rdFMCS
-        mcs_result = rdFMCS.FindMCS(
-            [crystal_mol, docked_mol],
+        mcs = rdFMCS.FindMCS(
+            [crystal, docked],
             atomCompare=rdFMCS.AtomCompare.CompareElements,
             bondCompare=rdFMCS.BondCompare.CompareOrder,
             matchValences=True,
             ringMatchesRingOnly=True,
         )
-        if mcs_result.numAtoms >= 4:
-            mcs_smarts = Chem.MolFromSmarts(mcs_result.smartsString)
-            ref_match = crystal_mol.GetSubstructMatch(mcs_smarts)
-            probe_match = docked_mol.GetSubstructMatch(mcs_smarts)
-            if ref_match and probe_match:
-                rms = AllChem.GetBestRMS(
-                    docked_mol, crystal_mol,
-                    map=list(zip(probe_match, ref_match)),
-                )
-                if rms is not None and rms >= 0:
-                    return rms
+        if mcs.numAtoms < 4:
+            log.warning(
+                "  ⚠  Not enough MCS atoms for RMSD alignment "
+                f"({mcs.numAtoms} found)."
+            )
+            return None
 
-        log.warning(
-            "  ⚠  RMSD alignment failed — atom ordering is incompatible "
-            "between docked and crystal poses."
-        )
-        return None
+        mcs_smarts = Chem.MolFromSmarts(mcs.smartsString)
+        ref_match = crystal.GetSubstructMatch(mcs_smarts)
+        dock_match = docked.GetSubstructMatch(mcs_smarts)
+        if not ref_match or not dock_match:
+            log.warning("  ⚠  MCS substructure match failed.")
+            return None
+
+        ref_conf = crystal.GetConformer()
+        dock_conf = docked.GetConformer()
+        ref_pts = np.array([ref_conf.GetAtomPosition(i) for i in ref_match])
+        dock_pts = np.array([dock_conf.GetAtomPosition(i) for i in dock_match])
+
+        # Kabsch alignment
+        ref_cent = ref_pts.mean(axis=0)
+        dock_cent = dock_pts.mean(axis=0)
+        ref_pts_c = ref_pts - ref_cent
+        dock_pts_c = dock_pts - dock_cent
+        H = dock_pts_c.T @ ref_pts_c
+        U, _S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+        aligned = dock_pts_c @ R.T
+        rmsd = float(np.sqrt(np.mean(np.sum((aligned - ref_pts_c) ** 2, axis=1))))
+        log.info(f"  RMSD (Kabsch, {len(ref_match)} atoms) = {rmsd:.3f} Å")
+        return rmsd
 
     except Exception as exc:
         log.error(f"  ✗  RMSD calculation failed: {exc}")
@@ -209,6 +235,10 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
     """
     Compute the geometric centroid of Cα atoms for the given list of
     residue identifiers (format: 'ALA237').
+
+    For homodimers like PBP2a (chains A/B) only the FIRST chain that
+    contains any matching residue is used — averaging across chains
+    produces a meaningless midpoint grid centre.
 
     Args:
         pdb_path: Path to PDB structure.
@@ -235,8 +265,13 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
             target.add((entry.strip().upper(), None))
 
     ca_coords = []
+    found_chain = False
     for model in struct:
+        if found_chain:
+            break
         for chain in model:
+            if found_chain:
+                break
             for residue in chain:
                 rid = residue.get_id()
                 # Only skip hetero atoms when searching for standard residues
@@ -244,22 +279,27 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
                     continue
                 resname = residue.get_resname().strip().upper()
                 if is_hetero_target:
-                    # For non-standard residues (ligands), match by name only
+                    # For non-standard residues (ligands), match by name only.
+                    # Use the FIRST matching residue only.
                     if any(t[0] == resname for t in target):
                         atoms = list(residue.get_atoms())
                         if atoms:
                             coords = np.array([a.get_vector().get_array() for a in atoms])
                             ca_coords.append(coords.mean(axis=0))
+                            found_chain = True
+                            break
                 else:
                     key = (resname, rid[1])
                     if key in target:
                         if "CA" in residue:
                             ca_coords.append(residue["CA"].get_vector().get_array())
+                            found_chain = True
                         else:
                             atoms = list(residue.get_atoms())
                             if atoms:
                                 coords = np.array([a.get_vector().get_array() for a in atoms])
                                 ca_coords.append(coords.mean(axis=0))
+                                found_chain = True
 
     if not ca_coords:
         log.error(

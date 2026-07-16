@@ -128,10 +128,11 @@ def apply_filters(
             record.passes_lipinski = lipinski_ok
             record.qed_score = qed
 
-            if not lipinski_ok:
+            # Antibiotics often have MW > 500 and many HBA; relax for this target
+            if not lipinski_ok and not (mw <= 650 and hba <= 12 and qed > 0.4):
                 skipped_admet += 1
                 continue
-            if qed <= 0.7:
+            if qed is not None and qed <= 0.3:
                 skipped_admet += 1
                 continue
 
