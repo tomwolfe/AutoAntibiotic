@@ -940,7 +940,7 @@ def prepare_targets(
     # ── Compute allosteric + active site centres from cleaned apo ──
     cleaned_pdb = pbp2a_clean_pdb
 
-    log.info("  Computing allosteric site centroid (ALA237, MET241, TYR159)…")
+    log.info("  Computing allosteric site centroid (TYR105, GLN199, GLU237)…")
     try:
         allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES)
     except (ValueError, Exception) as exc:

@@ -669,7 +669,7 @@ class TestRealPDBSmoke:
         # path without any network download.
         real_pdb_dir = tmp_path / "real_pdbs"
         real_pdb_dir.mkdir()
-        for pdb_id in ["3QPD", "6TKO", "1UTN", "3KJZ"]:
+        for pdb_id in ["1VQQ", "3ZG0", "4DKI", "1UTN", "3KJZ"]:
             src = TEST_REAL_PDB_DIR / f"{pdb_id}.pdb"
             if src.exists():
                 shutil.copy(str(src), str(real_pdb_dir / f"{pdb_id}.pdb"))
@@ -1293,21 +1293,25 @@ class TestPrepareTargetsNoneCenter:
 
 
 class TestOfflinePDBLoad:
-    def test_uses_local_3qpd_pdb(self, tmp_path):
+    def test_uses_local_mock_pdb(self, tmp_path):
         """
-        prepare_targets must use the bundled tests/data/3QPD.pdb locally
-        instead of downloading it — fetch_structure must NOT be called for
-        3QPD, and the local path must be the one passed to cleaning.
+        prepare_targets must use the bundled tests/data PDBs locally
+        instead of downloading them — fetch_structure must NOT be called
+        for PDBs that exist under tests/data/ (1VQQ, 3ZG0, 4DKI, 1UTN, 3KJZ).
         """
         from unittest.mock import MagicMock
         import discovery_pipeline as dp
 
         tests_data = Path(__file__).parent / "tests" / "data"
-        local_3qpd = str(tests_data / "3QPD.pdb")
-        assert os.path.exists(local_3qpd), "tests/data/3QPD.pdb must be present"
+        local_ids = ["1VQQ", "3ZG0", "4DKI", "1UTN", "3KJZ"]
+        for pid in local_ids:
+            assert os.path.exists(str(tests_data / f"{pid}.pdb")), \
+                f"tests/data/{pid}.pdb must be present"
 
-        # If fetch_structure were ever called, return a fake path (so it never
-        # raises) and let us assert afterwards which pdb_ids reached it.
+        resolved_local = {}  # pdb_id -> local path
+        for pid in local_ids:
+            resolved_local[pid] = str(tests_data / f"{pid}.pdb")
+
         mock_fetch = MagicMock(
             side_effect=lambda pdb_id, out_dir: os.path.join(out_dir, f"{pdb_id}.pdb")
         )
@@ -1317,7 +1321,13 @@ class TestOfflinePDBLoad:
         def side_clean(in_path, out_path, **kwargs):
             import shutil
             clean_inputs.append(in_path)
-            shutil.copy(in_path, out_path)
+            if os.path.exists(in_path):
+                shutil.copy(in_path, out_path)
+            else:
+                # Off-target PDBs fetched via mock don't exist on disk; create a
+                # minimal placeholder so *clean_pdb_structure* succeeds.
+                with open(out_path, "w") as f:
+                    f.write("ATOM      1  N   ALA A   1      10.000  10.000  10.000  1.00  0.00           N\nEND\n")
             return out_path
 
         with patch.object(dp, "fetch_structure", mock_fetch):
@@ -1332,12 +1342,18 @@ class TestOfflinePDBLoad:
                             config={"mode": "ci"},
                         )
 
-        # 3QPD must be sourced locally, never downloaded.
-        assert not any(
-            call.args[0] == "3QPD" for call in mock_fetch.call_args_list
-        ), "fetch_structure must not be called to download 3QPD when a local copy exists"
-        assert local_3qpd in clean_inputs, (
-            "Local tests/data/3QPD.pdb should be the apo structure passed to cleaning"
+        # Every PDB that has a local tests/data/ copy must be sourced locally,
+        # never downloaded.
+        fetched_ids = [call.args[0] for call in mock_fetch.call_args_list]
+        for pid in local_ids:
+            assert pid not in fetched_ids, \
+                f"fetch_structure must not be called for {pid} when a local copy exists"
+
+        # Verify the local paths were passed to clean_pdb_structure for the
+        # PBP2a conformers (the order-independent check).
+        local_1vqq = resolved_local["1VQQ"]
+        assert local_1vqq in clean_inputs, (
+            "Local tests/data/1VQQ.pdb should be the apo structure passed to cleaning"
         )
 
     def test_science_mode_rejects_mock_pdb(self, tmp_path):
@@ -1347,12 +1363,12 @@ class TestOfflinePDBLoad:
         from discovery_pipeline import ScienceModeMockPDBError
 
         tests_data = Path(__file__).parent / "tests" / "data"
-        local_3qpd = str(tests_data / "3QPD.pdb")
-        assert os.path.exists(local_3qpd), "tests/data/3QPD.pdb must be present"
+        local_mock = str(tests_data / "1VQQ.pdb")
+        assert os.path.exists(local_mock), "tests/data/1VQQ.pdb must be present"
 
         with patch.object(dp, "load_config", return_value={"mode": "science"}):
             with patch.object(dp, "fetch_structure",
-                              return_value=local_3qpd):
+                              return_value=local_mock):
                 with patch.object(dp.log, "error") as mock_err:
                     with pytest.raises(ScienceModeMockPDBError):
                         dp.prepare_targets(
@@ -1485,7 +1501,7 @@ class TestTargetResidueLoading:
             CES1_CATALYTIC_RESIDUES,
         )
 
-        assert ALLOSTERIC_RESIDUES == ["ALA237", "MET241", "TYR159"]
+        assert ALLOSTERIC_RESIDUES == ["TYR105", "GLN199", "GLU237"]
         assert ACTIVE_SITE_RESIDUES == ["SER403"]
         assert CONSERVED_RESIDUES == ["SER403", "LYS406", "TYR446"]
         assert TRYPSIN_CATALYTIC_RESIDUES == ["HIS57", "ASP102", "SER195"]

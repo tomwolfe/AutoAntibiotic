@@ -18,6 +18,7 @@ dependencies = [
     "numpy<2",
     "pyyaml",
     "pytest",
+    "scipy",
 ]
 
 [project.optional-dependencies]
