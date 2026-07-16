@@ -182,7 +182,7 @@ ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
 ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
 
 # Docking
-VINA_TIMEOUT_S = 120
+VINA_TIMEOUT_S = 300
 N_JOBS = max(1, mp.cpu_count() - 1)
 
 # Similarity

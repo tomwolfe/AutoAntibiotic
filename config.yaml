@@ -1,21 +1,2 @@
-# AutoAntibiotic Discovery Pipeline — Configuration
-# -----------------------------------------------------------------------------
-# mode: "ci"      -> CI / mock mode. Redocking validation is skipped and no
-#                    physical RMSD is computed/trusted. This is the SAFE DEFAULT
-#                    (offline, no Vina/real PDBs required) and is what ships here.
-# mode: "science" -> Real scientific validation. Expects REAL PDBs, the native
-#                    ligand resname (for redocking), AND AutoDock Vina on PATH.
-#
-# The mode may also be overridden via an environment variable:
-#   AUTOANTIBIOTIC_MODE=ci|science   (explicit, highest precedence)
-# -----------------------------------------------------------------------------
-
 mode: science
-
-# Native ligand override (REQUIRED for science redocking)
-# -----------------------------------------------------------------------------
-# Redocking validation extracts the native ligand from the holo PDB. Auto
-# auto-detection was removed; you MUST set the exact ligand residue name
-# (case-insensitive), e.g. "CEF". If left absent, native-ligand extraction
-# is skipped and redocking validation cannot run in science mode.
 native_ligand_resname: AI8

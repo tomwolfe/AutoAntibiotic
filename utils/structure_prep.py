@@ -14,6 +14,7 @@ Keeping them here breaks the former circular import between
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from typing import List, Optional
 
@@ -190,33 +191,44 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
 
     # Build set of (resname, seq_num) from input
     target = set()
+    is_hetero_target = False
     for entry in resid_list:
-        # Separate alphabetic resname from numeric seq_id
-        resname = "".join(ch for ch in entry if ch.isalpha()).upper()
-        seqnum = int("".join(ch for ch in entry if ch.isdigit()))
-        target.add((resname, seqnum))
+        # Standard residue format: exactly 3 alpha chars + digits (e.g. "SER403")
+        m = re.match(r"^([A-Za-z]{3})(\d+)$", entry)
+        if m:
+            is_hetero_target = False
+            target.add((m.group(1).upper(), int(m.group(2))))
+        else:
+            # Non-standard residue / ligand (e.g. "AI8"): match only by name
+            is_hetero_target = True
+            target.add((entry.strip().upper(), None))
 
     ca_coords = []
     for model in struct:
         for chain in model:
             for residue in chain:
                 rid = residue.get_id()
-                # Ignore hetero atoms
-                if rid[0] != " ":
+                # Only skip hetero atoms when searching for standard residues
+                if rid[0] != " " and not is_hetero_target:
                     continue
-                key = (residue.get_resname().strip().upper(), rid[1])
-                if key in target:
-                    if "CA" in residue:
-                        ca_coords.append(residue["CA"].get_vector().get_array())
-                    else:
-                        log.warning(
-                            f"  ⚠  No Cα found for {key[0]}{key[1]}. "
-                            "Using geometric center of all residue atoms."
-                        )
+                resname = residue.get_resname().strip().upper()
+                if is_hetero_target:
+                    # For non-standard residues (ligands), match by name only
+                    if any(t[0] == resname for t in target):
                         atoms = list(residue.get_atoms())
                         if atoms:
                             coords = np.array([a.get_vector().get_array() for a in atoms])
                             ca_coords.append(coords.mean(axis=0))
+                else:
+                    key = (resname, rid[1])
+                    if key in target:
+                        if "CA" in residue:
+                            ca_coords.append(residue["CA"].get_vector().get_array())
+                        else:
+                            atoms = list(residue.get_atoms())
+                            if atoms:
+                                coords = np.array([a.get_vector().get_array() for a in atoms])
+                                ca_coords.append(coords.mean(axis=0))
 
     if not ca_coords:
         log.error(
@@ -308,6 +320,7 @@ def write_receptor_pdbqt(pdb_path: str, pdbqt_path: str) -> bool:
                 "ATOM  "
                 + f"{serial:5d} "
                 + f"{atom_name[:4]:<4s}"
+                + " "
                 + f"{res_name[:3]:<3s} "
                 + f"{chain:1s}"
                 + f"{res_seq:4d}"
@@ -352,6 +365,7 @@ def write_receptor_pdbqt(pdb_path: str, pdbqt_path: str) -> bool:
                             "ATOM  "
                             + f"{serial:5d} "
                             + f"{atom_name[:4]:<4s}"
+                            + " "
                             + f"{res_name[:3]:<3s} "
                             + f"{chain.get_id() if hasattr(chain, 'get_id') else 'A':1s}"
                             + f"{res_seq:4d}"

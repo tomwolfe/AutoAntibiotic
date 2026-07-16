@@ -206,6 +206,7 @@ def _auto_box_size(
     center: Optional[np.ndarray],
     default_box: Tuple[float, float, float],
     min_size: float = 15.0,
+    max_size: float = 30.0,
     padding: float = 6.0,
 ) -> Tuple[float, float, float]:
     """
@@ -227,6 +228,7 @@ def _auto_box_size(
         center: Grid centre as a length-3 array (or None).
         default_box: Fallback box dimensions when auto-sizing is impossible.
         min_size: Minimum box edge in Å (enforced even for tiny sites).
+        max_size: Maximum box edge in Å (capped to prevent whole-protein boxes).
         padding: Extra Å added to the measured radius on each side.
 
     Returns:
@@ -255,6 +257,7 @@ def _auto_box_size(
                         if d > max_radius:
                             max_radius = d
         size = max(min_size, 2.0 * (max_radius + padding))
+        size = min(size, max_size)
         return (size, size, size)
     except Exception as exc:
         log.warning(f"  ⚠  Could not auto-size box ({exc}); using default {default_box}.")
@@ -767,28 +770,28 @@ def clean_pdb_structure(
             except Exception as exc:
                 log.warning(f"  RDKit PDB parsing failed for hydrogen addition: {exc}. Skipping.")
 
-        # ── Attempt 3: RDKit PDBQT writer (write_receptor_pdbqt) ──
-        # Produces a correct rigid-receptor PDBQT (no torsions). Preferred over
-        # obabel, which by default generates ligand-style PDBQTs with branch
-        # records that Vina rejects for a rigid receptor.
+        # ── Attempt 3: obabel PDBQT conversion (preferred) ──
+        # Uses the `-xr` flag to produce a rigid-receptor PDBQT.
+        # Without `-xr`, obabel creates a flexible ligand-style PDBQT
+        # (branch records) that Vina rejects for a rigid receptor.
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
-        if write_receptor_pdbqt(out_path, pdbqt_path):
-            return pdbqt_path
-
-        # ── Attempt 4: obabel PDBQT conversion (fallback) ──
-        # If the RDKit writer fails, try obabel with the `-xr` flag to produce
-        # a rigid-receptor PDBQT. Without `-xr`, obabel creates a flexible
-        # ligand-style PDBQT (branch records) that Vina rejects for a receptor.
         try:
             subprocess.run(
                 ["obabel", out_path, "-O", pdbqt_path, "-xr"],
-                capture_output=True, timeout=60,
+                capture_output=True, timeout=300,
             )
             if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
                 log.info(f"  Receptor PDBQT written via obabel (-xr): {pdbqt_path}")
                 return pdbqt_path
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
+
+        # ── Attempt 4: RDKit/Bio.PDB PDBQT writer (fallback) ──
+        # Produces a rigid-receptor PDBQT from first principles. Used as a
+        # fallback when obabel is not on PATH.
+        if write_receptor_pdbqt(out_path, pdbqt_path):
+            log.info(f"  Receptor PDBQT written via RDKit fallback: {pdbqt_path}")
+            return pdbqt_path
 
         # ── All four attempts failed ──
         raise RuntimeError(
