@@ -10,7 +10,7 @@
 #   AUTOANTIBIOTIC_MODE=ci|science   (explicit, highest precedence)
 # -----------------------------------------------------------------------------
 
-mode: ci
+mode: science
 
 # Native ligand override (REQUIRED for science redocking)
 # -----------------------------------------------------------------------------
@@ -20,4 +20,4 @@ mode: ci
 # is skipped and redocking validation cannot run in science mode.
 #
 # Example for a real 6TKO run:
-# native_ligand_resname: CEF
+# native_ligand_resname: AI8

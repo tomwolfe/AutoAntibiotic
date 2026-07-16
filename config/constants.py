@@ -30,22 +30,17 @@ RANDOM_SEED = 42
 # 1ZOO is an additional public PBP2a PDB trivially addable via this list
 # (no new download infrastructure). The first entry is treated as the primary
 # receptor for backwards compatibility.
-PBP2A_CONFORMER_IDS = ["3QPD", "6TKO", "1ZOO"]
+PBP2A_CONFORMER_IDS = ["1VQQ", "3ZG0", "4DKI"]
 PDB_IDS = {
-    "PBP2a_apo": "3QPD",
-    "PBP2a_holo": "6TKO",
-    "PBP2a_conformer_1ZOO": "1ZOO",
+    # PBP2a from MRSA: 1VQQ = apo 1.8Å; 3ZG0 = holo with ceftaroline (CEF);
+    # 4DKI = holo with ceftaroline (alternative conformer).
+    "PBP2a_apo": "1VQQ",
+    "PBP2a_holo": "3ZG0",
+    "PBP2a_conformer_4DKI": "4DKI",
     "trypsin": "1UTN",
     "CES1": "3KJZ",
-    # Wider human off-target panel (Task 3). 1AO6 = human serum albumin,
-    # 1W0E = human CYP3A4. Both are added to the fetch list so they download
-    # alongside the other targets (no mock-free static files required).
     "HUMAN_ALBUMIN": "1AO6",
     "CYP3A4": "1W0E",
-    # Additional (mock-capable / optional) off-target panel entries. HERG is
-    # included behind config; CYP2D6 is mock-capable. Both are merged into the
-    # human selectivity panel when a prepared receptor + grid centre exist, so
-    # they gracefully skip when no real PDB is available (CI/offline).
     "HERG": "7CN1",
     "CYP2D6": "MOCK_CYP2D6",
 }
