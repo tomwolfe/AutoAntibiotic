@@ -38,7 +38,7 @@ PDB_IDS = {
     "PBP2a_holo": "3ZG0",
     "PBP2a_conformer_4DKI": "4DKI",
     "trypsin": "1UTN",
-    "CES1": "3KJZ",
+    "CES1": "1YAH",
     "HUMAN_ALBUMIN": "1AO6",
     "CYP3A4": "1W0E",
     "HERG": "7CN1",

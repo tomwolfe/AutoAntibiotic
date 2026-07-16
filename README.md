@@ -184,7 +184,7 @@ native_ligand_resname: CEF
 Science mode prerequisites (all required, otherwise the run aborts or is
 untrustworthy):
 
-1. **Real PDB structures** — place/download real `6TKO`, `3QPD`, `1UTN`, `3KJZ`
+1. **Real PDB structures** — place/download real `6TKO`, `3QPD`, `1UTN`, `1YAH`
    (the bundled `tests/data/*.pdb` are minimal mocks and are rejected by
    science mode).
 2. **`native_ligand_resname`** set to the exact co-crystallised ligand residue

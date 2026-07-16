@@ -995,7 +995,7 @@ def prepare_targets(
     result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
 
     # ── Clean CES1 ──
-    log.info("  Cleaning Human Carboxylesterase 1 (3KJZ)…")
+    log.info("  Cleaning Human Carboxylesterase 1 (1YAH)…")
     ces1_clean_pdb = os.path.join(work_dir, "CES1_clean.pdb")
     ces1_pdbqt = clean_pdb_structure(
         ces1_path,
@@ -1273,19 +1273,23 @@ def screen_library(
 
     log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
 
-    # ── Select top 50 for active-site docking ──
+    # ── Select top candidates for active-site docking ──
+    # Adaptive threshold: dock at least 5 but at most 50 compounds (or all
+    # available, whichever is smaller). This ensures the active-site step runs
+    # even for modest-sized libraries.
     scored = [r for r, e in allosteric_results if e is not None]
     scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+    active_top_n = min(50, max(5, len(scored)))
 
-    if len(scored) >= 50:
-        top50 = scored[:50]
+    if len(scored) >= 5:
+        top_active = scored[:active_top_n]
         log.info(
-            f"  Docking top {len(top50)} compounds against active site "
+            f"  Docking top {len(top_active)} compounds against active site "
             f"({len(receptor_pdbqts)} PBP2a conformer(s))…"
         )
 
         active_results = _consensus_dock(
-            top50, receptor_pdbqts,
+            top_active, receptor_pdbqts,
             active_center, active_box,
             work_dir, "active",
             use_vina=use_vina,
@@ -1310,10 +1314,10 @@ def screen_library(
             )
             if flex_pdbqt is not None:
                 log.info(
-                    f"  Local flexible docking (--flex) for top {len(top50)} "
+                    f"  Local flexible docking (--flex) for top {len(top_active)} "
                     f"compounds at the active site…"
                 )
-                for rec in top50:
+                for rec in top_active:
                     if rec.mol is None:
                         mol = Chem.MolFromSmiles(rec.smiles)
                         if mol is None:
@@ -1957,7 +1961,7 @@ def analyze_selectivity_and_resistance(
         rec.human_trypsin_energy = energy
 
     # ── Dock vs CES1 (using computed catalytic triad centre) ──
-    log.info("  Docking top 10 vs Human Carboxylesterase 1 (3KJZ)…")
+    log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
     ces1_box = _auto_box_size(
         targets["CES1"].get("cleaned_pdb"), targets["CES1"]["active_center"],
         (20.0, 20.0, 20.0),

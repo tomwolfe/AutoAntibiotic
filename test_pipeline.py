@@ -671,7 +671,7 @@ class TestRealPDBSmoke:
         # path without any network download.
         real_pdb_dir = tmp_path / "real_pdbs"
         real_pdb_dir.mkdir()
-        for pdb_id in ["1VQQ", "3ZG0", "4DKI", "1UTN", "3KJZ"]:
+        for pdb_id in ["1VQQ", "3ZG0", "4DKI", "1UTN", "1YAH"]:
             src = TEST_REAL_PDB_DIR / f"{pdb_id}.pdb"
             if src.exists():
                 shutil.copy(str(src), str(real_pdb_dir / f"{pdb_id}.pdb"))
@@ -913,7 +913,7 @@ class TestIntegrationPipeline:
         pdb_dir = tmp_path / "pdb"
         pdb_dir.mkdir()
 
-        for pdb_id in ["3QPD", "6TKO", "1UTN", "3KJZ"]:
+        for pdb_id in ["3QPD", "6TKO", "1UTN", "1YAH"]:
             src = tests_data / f"{pdb_id}.pdb"
             shutil.copy(str(src), str(pdb_dir / f"{pdb_id}.pdb"))
 
@@ -1298,13 +1298,13 @@ class TestOfflinePDBLoad:
         """
         prepare_targets must use the bundled tests/data PDBs locally
         instead of downloading them — fetch_structure must NOT be called
-        for PDBs that exist under tests/data/ (1VQQ, 3ZG0, 4DKI, 1UTN, 3KJZ).
+        for PDBs that exist under tests/data/ (1VQQ, 3ZG0, 4DKI, 1UTN, 1YAH).
         """
         from unittest.mock import MagicMock
         import discovery_pipeline as dp
 
         tests_data = Path(__file__).parent / "tests" / "data"
-        local_ids = ["1VQQ", "3ZG0", "4DKI", "1UTN", "3KJZ"]
+        local_ids = ["1VQQ", "3ZG0", "4DKI", "1UTN", "1YAH"]
         for pid in local_ids:
             assert os.path.exists(str(tests_data / f"{pid}.pdb")), \
                 f"tests/data/{pid}.pdb must be present"

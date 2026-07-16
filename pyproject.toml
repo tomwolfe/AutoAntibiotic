@@ -28,6 +28,7 @@ dependencies = [
 # manager (e.g. `conda install -c conda-forge openbabel`).
 docking = [
     "meeko",
+    "gemmi",
     "openbabel-wheel",
 ]
 

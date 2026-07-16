@@ -101,20 +101,62 @@ class CompoundRecord:
 #  SCAFFOLDS & CONTROLS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 15 diverse natural product scaffolds (SMILES)
+# 40 diverse scaffolds (natural products, drug-like, antibacterial chemotypes)
+# Enriched for BRICS-compatible bonds to generate a larger fragment pool.
 NATURAL_PRODUCT_SCAFFOLDS = [
-    "O=c1c(O)c2c(oc3cc(O)cc(O)c3c2=O)c(O)c1O",                 # Quercetin
-    "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                # Resveratrol
-    "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",           # Curcumin
-    "COc1cc2c(cc1OC)[n+]1ccc3cc4c(cc3c1CC2)OCO4",              # Berberine
-    "CC1(C)OC2C3C(=O)OC4C(OO5)C3C5C2C4O1",                     # Artemisinin (approximate)
-    "Oc1ccccc1C(=O)O",                                         # Salicylic acid (salicylate)
-    "O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12",                    # 7-Hydroxyflavone (flavonoid core)
-    "CC1OCCCC(=O)C1",                                          # Macrolide-like lactone core (no β-lactam)
-    "Oc1c(O)c(O)cc(C(=O)O)c1",                                 # Gallic acid (phenolic)
-    "CC1=C(C=C(C=C1)O)O",                                      # Hydroquinone
-    "COc1cc2c(cc1OC)C(=O)C3=C(O)C=CC(=C3O2)C",                 # Rottlerin
-    "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",                            # Caffeine
+    # ── Flavonoids / polyphenols ──
+    "O=c1c(O)c2c(oc3cc(O)cc(O)c3c2=O)c(O)c1O",                    # Quercetin
+    "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                   # Resveratrol
+    "O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12",                       # 7-Hydroxyflavone
+    "Oc1ccc2c(c1)OC(C3=CC(=C(C=C3)O)O)C(=O)C2",                   # Eriodictyol
+    "COc1ccc2c(c1)CC(=O)C3=C(C=CC(=C3O)OC)O2",                     # 7-O-methylnaringenin
+    "COc1cc(OC)c2c(c1)OC(C(C2=O)C3=CC=C(C=C3)O)C4=CC=C(C=C4)O",   # 3,5-dihydroxyflavone derivative
+
+    # ── Curcuminoids / diarylheptanoids ──
+    "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",              # Curcumin
+    "COc1cc(OC)c(C=CC(=O)CC(=O)C=Cc2ccc(O)c(OC)c2)cc1O",          # Demethoxycurcumin
+    "Oc1ccc(C=CC(=O)CCC(=O)C=Cc2ccc(O)cc2)cc1",                   # Bisdemethoxycurcumin
+
+    # ── Alkaloids ──
+    "COc1cc2c(cc1OC)[n+]1ccc3cc4c(cc3c1CC2)OCO4",                 # Berberine
+    "COc1cc2c(cc1OC)CCN3C2CC(C1=C3COC1=O)C(=O)OC",               # Yohimbine-like core
+    "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",                               # Caffeine
+    "CN1CCC23C4C5C=CC2(C1)C3=C(C=C5)C(=C4O)OC",                  # Morphine-like core
+    "O=C1OC2CC3C4=C(C=CC=C4)CCN3CC2N1C5=CC=CC=C5",               # Aporphine-like core
+
+    # ── Terpenoids / macrolides ──
+    "CC1(C)OC2C3C(=O)OC4C(OO5)C3C5C2C4O1",                        # Artemisinin (approximate)
+    "CC1OCCCC(=O)C1",                                              # Macrolide-like lactone core
+    "CC1(C)CCC2C(C1=O)C3(C)CCC4C5(C)CCC(=O)C(C)(C)C5CCC4C3CC2",  # Limonoid-like core
+    "O=C1OC2CC3C4C(C3(C)C)CCC4C2(C)C1",                           # Sesquiterpene lactone core
+
+    # ── Antibacterial / PBP2a-relevant chemotypes ──
+    "CC1(C)SC2C(NC(=O)Cc3ccccc3)C(=O)N2C1C(=O)O",                # Penicillin core (6-APA)
+    "CC1=C(C(=O)O)CSCC2C(=O)N3C(=O)C=C(C3C2=O)C(=O)O",            # Cephalosporin core (7-ACA)
+    "CC1C2C(C(=O)N2C(=C1C(=O)O)C(=O)O)SC3CCNC3=O",               # Carbapenem core (thienamycin-like)
+    "CC1(C)SC2C(N)C(=O)N2C1C(=O)O",                               # 6-APA (penicillin nucleus)
+    "O=C1NC2C3SC(C)(C)C(NC3C2=O)C(=O)O",                          # Penam ring system
+
+    # ── Phenolic / catechol ──
+    "Oc1c(O)c(O)cc(C(=O)O)c1",                                    # Gallic acid
+    "Oc1ccccc1C(=O)O",                                            # Salicylic acid
+    "CC1=C(C=C(C=C1)O)O",                                         # Hydroquinone
+    "Oc1ccc(CCc2ccc(O)cc2)cc1",                                   # 4,4'-biphenol
+
+    # ── Macrocyclic / complex ──
+    "COc1cc2c(cc1OC)C(=O)C3=C(O)C=CC(=C3O2)C",                   # Rottlerin
+    "COc1cc2c(cc1OC)C3CC4=C(C=C(C=C4)OC)CCN3C2",                 # Papaverine-like
+    "CC1(C)Oc2ccccc2C(=O)N1",                                     # Dihydrobenzoxazinone
+    "O=C1NC2=CC=CC=C2C(=O)N1",                                     # Isatin
+    "CCCCCCCCCCCC(=O)O",                                           # Lauric acid (fatty acid)
+    "O=C1CCCC2=C1C=CC=C2",                                        # Tetralone
+    "CC1=CC(=O)C2=C(O1)C(=C(C=C2)O)O",                            # Chromone core
+    "C1=CC=C2C(=C1)C3=CC=CC=C3C2",                                 # Fluorene
+    "O=C1CCN2CC3=CC=CC=C3CC2C1",                                  # Benzazepinone
+    "CC1(C)OCC2C3C(C2O1)C(=O)OC3C4=COC=C4",                       # Spiroketal core
+    "O=C1OC2=C(C3=C(C=C2)C=CC=C3)C=C1",                            # Coumarin derivative
+    "CC(=O)Nc1ccc(O)cc1",                                          # Paracetamol (amide phenol)
+    "O=c1[nH]c(=O)n(Cc2ccccc2)cc1C=Cc3ccc(O)cc3",                 # Styrylxanthine
 ]
 
 # Positive control SMILES (to verify pipeline)
@@ -295,10 +337,10 @@ def generate_candidate_library(
         all_fragments = set()
         for mol in scaffold_mols:
             try:
-                fragments = BRICS.BRICSDecompose(mol, minFragmentSize=8)
+                fragments = BRICS.BRICSDecompose(mol, minFragmentSize=6)
                 for frag_smi in fragments:
                     frag_mol = Chem.MolFromSmiles(frag_smi)
-                    if frag_mol is not None and _count_atoms(frag_mol) >= 8:
+                    if frag_mol is not None and _count_atoms(frag_mol) >= 6:
                         all_fragments.add(frag_smi)
             except Exception:
                 continue
@@ -316,9 +358,9 @@ def generate_candidate_library(
             if mol is None:
                 continue
             try:
-                for frag_smi in BRICS.BRICSDecompose(mol, minFragmentSize=8):
+                for frag_smi in BRICS.BRICSDecompose(mol, minFragmentSize=6):
                     frag_mol = Chem.MolFromSmiles(frag_smi)
-                    if frag_mol is not None and _count_atoms(frag_mol) >= 8:
+                    if frag_mol is not None and _count_atoms(frag_mol) >= 6:
                         all_fragments.add(frag_smi)
             except Exception:
                 continue
@@ -331,7 +373,7 @@ def generate_candidate_library(
         if m is not None:
             frag_mols.append(m)
 
-    log.info(f"  Generated {len(frag_mols)} unique fragments (>=8 heavy atoms).")
+    log.info(f"  Generated {len(frag_mols)} unique fragments (>=6 heavy atoms).")
 
     if len(frag_mols) < 2:
         log.warning(
@@ -355,35 +397,58 @@ def generate_candidate_library(
             ))
         return candidates
 
-    # Recombine fragments to create novel analogs via BRICSBuild over all fragments
+    # Recombine fragments to create novel analogs via BRICSBuild
     seen_smiles = set()
     records = []
+    import random as _random
+    _random.seed(seed)
 
     log.info(f"  Building recombinant library via BRICS.BRICSBuild (target ≤ {target_count})…")
-    builder = BRICS.BRICSBuild(list(frag_mols))
-    for product in builder:
-        try:
-            Chem.SanitizeMol(product)
-        except Exception:
-            continue
-        smi = Chem.MolToSmiles(product)
-        if smi in seen_smiles:
-            continue
-        seen_smiles.add(smi)
 
-        # Generate unique ID
-        cid = f"AA-{len(records):04d}"
-        records.append(CompoundRecord(
-            compound_id=cid,
-            smiles=smi,
-            mol=product,
-        ))
-
-        if len(records) % 100 == 0:
-            log.info(f"  Generated {len(records)} / {target_count} candidates…")
-
+    # Multiple shuffled passes to maximise chemical diversity from the fragment pool.
+    # BRICSBuild enumeration order is deterministic; shuffling the fragment list
+    # changes the build order, exposing different recombination paths. If the
+    # first pass does not reach target_count, subsequent passes resample the
+    # remaining unseen combination space with fresh shuffles.
+    # Cap passes at 5 to keep runtime bounded even for very large target_counts.
+    max_passes = min(5, max(1, target_count // max(1, len(frag_mols) * 2)))
+    for _pass in range(max_passes):
         if len(records) >= target_count:
             break
+        records_before = len(records)
+        shuffled = list(frag_mols)
+        _random.shuffle(shuffled)
+        builder = BRICS.BRICSBuild(shuffled)
+        for product in builder:
+            try:
+                Chem.SanitizeMol(product)
+            except Exception:
+                continue
+            smi = Chem.MolToSmiles(product)
+            if smi in seen_smiles:
+                continue
+            if not smi or len(smi) < 10:
+                continue
+            seen_smiles.add(smi)
+
+            cid = f"AA-{len(records):04d}"
+            records.append(CompoundRecord(
+                compound_id=cid,
+                smiles=smi,
+                mol=product,
+            ))
+
+            if len(records) % 100 == 0:
+                log.info(f"  Generated {len(records)} / {target_count} candidates (pass {_pass + 1}/{max_passes})…")
+
+            if len(records) >= target_count:
+                break
+        if len(records) >= target_count:
+            break
+        if len(records) == records_before:
+            log.info(f"  Pass {_pass + 1}/{max_passes}: no new compounds (combinatorial space exhausted).")
+            break
+        log.info(f"  Pass {_pass + 1}/{max_passes}: {len(records)} unique compounds so far; reshuffling…")
 
     # Add controls explicitly (ensures at least controls are always returned)
     for name, smi in CONTROL_SMILES.items():

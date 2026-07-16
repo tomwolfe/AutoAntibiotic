@@ -53,7 +53,12 @@ class LigandPreparator:
             if not hasattr(Chem.Mol, "HasQuery"):
                 Chem.Mol.HasQuery = lambda self: False
 
-            from meeko import MoleculePreparation, PDBQTWriterLegacy
+            # Newer meeko (>=0.4.0) depends on gemmi; suppress any
+            # pre-import noise from optional dependencies.
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                from meeko import MoleculePreparation, PDBQTWriterLegacy
             preparator = MoleculePreparation()
             mol_setups = preparator.prepare(mol)
             if not mol_setups:

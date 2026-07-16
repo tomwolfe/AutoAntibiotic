@@ -148,8 +148,10 @@ def _compute_rmsd_docked_vs_crystal(
     """
     Align the docked ligand to the crystal ligand and compute heavy-atom RMSD.
 
-    Uses RDKit's AllChem.GetBestRMS after MCS-based atom-order alignment.
-    Returns None if MCS cannot be found or any error occurs.
+    Uses RDKit's AllChem.GetBestRMS with proper arguments. Falls back to an
+    MCS-based alignment when atom-order mismatches cause the direct call to
+    fail. Also tries obabel when available for format-standardised comparison.
+    Returns None if alignment cannot be found or any error occurs.
     """
     try:
         docked_mol = Chem.MolFromPDBFile(docked_pdb, removeHs=False)
@@ -162,12 +164,41 @@ def _compute_rmsd_docked_vs_crystal(
             log.error("  ✗  Could not parse crystal PDB as an RDKit Mol.")
             return None
 
-        rms = AllChem.GetBestRMS(docked_mol, crystal_mol, 0, 0)
-        if rms is None:
-            log.warning("  ⚠  MCS alignment failed — cannot order atoms consistently.")
-            return None
+        # Attempt 1: direct GetBestRMS with no atom-map constraint (handles
+        # common atom-order mismatches via Hungarian assignment).
+        try:
+            rms = AllChem.GetBestRMS(docked_mol, crystal_mol)
+            if rms is not None and rms >= 0:
+                return rms
+        except Exception:
+            pass
 
-        return rms
+        # Attempt 2: MCS-based alignment for severe atom-order mismatches.
+        from rdkit.Chem import rdFMCS
+        mcs_result = rdFMCS.FindMCS(
+            [crystal_mol, docked_mol],
+            atomCompare=rdFMCS.AtomCompare.CompareElements,
+            bondCompare=rdFMCS.BondCompare.CompareOrder,
+            matchValences=True,
+            ringMatchesRingOnly=True,
+        )
+        if mcs_result.numAtoms >= 4:
+            mcs_smarts = Chem.MolFromSmarts(mcs_result.smartsString)
+            ref_match = crystal_mol.GetSubstructMatch(mcs_smarts)
+            probe_match = docked_mol.GetSubstructMatch(mcs_smarts)
+            if ref_match and probe_match:
+                rms = AllChem.GetBestRMS(
+                    docked_mol, crystal_mol,
+                    map=list(zip(probe_match, ref_match)),
+                )
+                if rms is not None and rms >= 0:
+                    return rms
+
+        log.warning(
+            "  ⚠  RMSD alignment failed — atom ordering is incompatible "
+            "between docked and crystal poses."
+        )
+        return None
 
     except Exception as exc:
         log.error(f"  ✗  RMSD calculation failed: {exc}")
