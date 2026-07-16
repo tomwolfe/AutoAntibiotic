@@ -307,7 +307,17 @@ def dock_compound(
     lig_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_lig.pdbqt")
     out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
 
-    if not prepare_ligand_pdbqt(record.mol, lig_pdbqt):
+    # Ensure explicit hydrogens and 3D coordinates (required by meeko)
+    mol_for_prep = Chem.AddHs(record.mol)
+    if not mol_for_prep.GetNumConformers():
+        from rdkit.Chem import AllChem
+        params = AllChem.ETKDGv3()
+        params.randomSeed = RANDOM_SEED
+        try:
+            AllChem.EmbedMolecule(mol_for_prep, params)
+        except Exception:
+            pass
+    if not prepare_ligand_pdbqt(mol_for_prep, lig_pdbqt):
         raise RuntimeError(
             f"PDBQT preparation failed for {record.compound_id}; "
             f"this compound will be skipped during screening."

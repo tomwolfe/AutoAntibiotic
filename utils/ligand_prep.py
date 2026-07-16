@@ -72,17 +72,20 @@ class LigandPreparator:
         obabel_error = None
         try:
             import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".pdbqt", delete=True) as tmp:
-                subprocess.run(
-                    ["obabel", "-g", "min", "-O", tmp.name],
-                    input=Chem.MolToMolBlock(mol).encode("utf-8"),
-                    capture_output=True,
-                    timeout=30,
-                )
-                pdbqt_str = tmp.read().decode("utf-8", errors="ignore")
+            import os
+            tmp_path = os.path.join(tempfile.gettempdir(), f"lig_prep_{id(mol)}.pdbqt")
+            subprocess.run(
+                ["obabel", f"-:{Chem.MolToSmiles(mol)}", "--gen3d", "-O", tmp_path],
+                capture_output=True,
+                timeout=30,
+            )
+            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                with open(tmp_path) as f:
+                    pdbqt_str = f.read()
+                os.remove(tmp_path)
                 if pdbqt_str:
                     return pdbqt_str
-                raise ValueError("obabel returned empty output")
+            raise ValueError("obabel returned empty output")
         except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError) as exc:
             obabel_error = str(exc)
             log.warning(f"obabel fallback failed: {exc}")

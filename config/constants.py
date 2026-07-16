@@ -329,11 +329,21 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
             with open(config_file) as fh:
                 data = yaml.safe_load(fh) or {}
-            if isinstance(data, dict) and data.get("mode") in ("ci", "science"):
-                cfg["mode"] = data["mode"]
+            if isinstance(data, dict):
+                if data.get("mode") in ("ci", "science"):
+                    cfg["mode"] = data["mode"]
+                else:
+                    log.warning(
+                        f"  ⚠  {config_path} missing a valid 'mode' (ci/science); "
+                        "defaulting to mode='ci'."
+                    )
+                # Pass through all other config fields (e.g. native_ligand_resname)
+                for k, v in data.items():
+                    if k != "mode":
+                        cfg[k] = v
             else:
                 log.warning(
-                    f"  ⚠  {config_path} missing a valid 'mode' (ci/science); "
+                    f"  ⚠  {config_path} is not a valid YAML dict; "
                     "defaulting to mode='ci'."
                 )
         except ImportError:

@@ -124,8 +124,9 @@ def _extract_native_ligand_from_holo(
 
         # Convert to PDBQT via LigandPreparator
         try:
+            mol_pdbqt = Chem.AddHs(mol)
             preparator = LigandPreparator()
-            pdbqt_str = preparator.prepare(mol)
+            pdbqt_str = preparator.prepare(mol_pdbqt)
             with open(output_ligand_pdbqt, "w") as f:
                 f.write(pdbqt_str)
             log.info(f"  Native ligand PDBQT written to {output_ligand_pdbqt}")

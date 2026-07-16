@@ -767,25 +767,28 @@ def clean_pdb_structure(
             except Exception as exc:
                 log.warning(f"  RDKit PDB parsing failed for hydrogen addition: {exc}. Skipping.")
 
-        # ── Attempt 3: obabel PDBQT conversion (gasteiger charges) ──
+        # ── Attempt 3: RDKit PDBQT writer (write_receptor_pdbqt) ──
+        # Produces a correct rigid-receptor PDBQT (no torsions). Preferred over
+        # obabel, which by default generates ligand-style PDBQTs with branch
+        # records that Vina rejects for a rigid receptor.
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
+        if write_receptor_pdbqt(out_path, pdbqt_path):
+            return pdbqt_path
+
+        # ── Attempt 4: obabel PDBQT conversion (fallback) ──
+        # If the RDKit writer fails, try obabel with the `-xr` flag to produce
+        # a rigid-receptor PDBQT. Without `-xr`, obabel creates a flexible
+        # ligand-style PDBQT (branch records) that Vina rejects for a receptor.
         try:
             subprocess.run(
-                ["obabel", out_path, "-O", pdbqt_path, "-h", "--gas"],
+                ["obabel", out_path, "-O", pdbqt_path, "-xr"],
                 capture_output=True, timeout=60,
             )
             if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
+                log.info(f"  Receptor PDBQT written via obabel (-xr): {pdbqt_path}")
                 return pdbqt_path
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
-
-        # ── Attempt 4: RDKit PDBQT fallback (write_receptor_pdbqt) ──
-        # OpenBabel unavailable (or produced empty output). Use the RDKit-based
-        # PDBQT writer rather than copying the .pdb verbatim — a plain .pdb
-        # renamed to .pdbqt is invalid for Vina and would fail later with an
-        # cryptic error.
-        if write_receptor_pdbqt(out_path, pdbqt_path):
-            return pdbqt_path
 
         # ── All four attempts failed ──
         raise RuntimeError(

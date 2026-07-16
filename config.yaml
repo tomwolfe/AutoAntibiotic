@@ -18,6 +18,4 @@ mode: science
 # auto-detection was removed; you MUST set the exact ligand residue name
 # (case-insensitive), e.g. "CEF". If left absent, native-ligand extraction
 # is skipped and redocking validation cannot run in science mode.
-#
-# Example for a real 6TKO run:
-# native_ligand_resname: AI8
+native_ligand_resname: AI8
