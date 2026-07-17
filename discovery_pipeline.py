@@ -523,6 +523,8 @@ def run_redocking_validation(
     mode: str = "science",
     config: Optional[dict] = None,
     target_pdbqt_paths: Optional[List[str]] = None,
+    cleaned_pdb: Optional[str] = None,
+    flex_residues: Optional[List[str]] = None,
 ) -> Tuple[bool, Optional[float]]:
     """
     Phase 0 — Protocol Validation.
@@ -530,6 +532,14 @@ def run_redocking_validation(
     Extracts the native ligand from 6TKO, docks it back into the prepared
     PBP2a receptor(s), and computes the best (lowest) RMSD to the crystal
     pose across all prepared receptor conformers (consensus redocking).
+
+    To improve pose recovery (and the redocking RMSD, currently marginal at
+    ~1.76 Å), the native ligand is redocked into a *flexible* receptor when
+    *cleaned_pdb* and *flex_residues* are supplied: Vina's ``--flex`` flag is
+    used with the ROOT/BRANCH torsion tree for the conserved catalytic residues
+    (default Ser403/Lys406/Tyr446), built by the existing
+    :func:`_prepare_flex_pdbqt` helper. Falls back to rigid redocking when the
+    flexible receptor cannot be prepared (e.g. OpenBabel / flex writer absent).
 
     Returns (success: bool, rmsd: float | None) where ``rmsd`` is the best
     (lowest) RMSD over all conformers.
@@ -599,14 +609,45 @@ def run_redocking_validation(
     # keep the best (lowest) RMSD. Falls back to the single primary receptor
     # when no explicit conformer list is provided.
     conformer_pdbqts = list(target_pdbqt_paths) if target_pdbqt_paths else [target_pdbqt_path]
+
+    # ── Flexible redocking (Task 3) ───────────────────────────────────────────
+    # Prepare a flexible receptor for the conserved catalytic residues
+    # (Ser403/Lys406/TYR446) ONCE, then pass it to every Vina redock via the
+    # ``--flex`` flag. A flexible receptor lets the side chains re-optimise
+    # around the native ligand, which recovers a tighter (lower) RMSD than the
+    # rigid receptor used previously. When preparation fails, ``flex_pdbqt``
+    # stays None and the loop falls back to rigid docking for every conformer.
+    if flex_residues is None:
+        flex_residues = FLEX_RESIDUES
+    flex_pdbqt = None
+    rigid_flex_pdbqt = None
+    if cleaned_pdb and deps["USE_VINA"]:
+        flex_prep = _prepare_flex_pdbqt(
+            target_pdbqt_path, cleaned_pdb, flex_residues, work_dir,
+        )
+        if flex_prep is not None:
+            rigid_flex_pdbqt, flex_pdbqt = flex_prep
+            log.info(
+                f"  Flexible redocking receptor prepared for {flex_residues} "
+                f"(Vina --flex)."
+            )
+        else:
+            log.warning(
+                "  Flexible redocking receptor could not be prepared; "
+                "falling back to rigid redocking."
+            )
+
     best_rmsd: Optional[float] = None
     for conf_idx, receptor_pdbqt in enumerate(conformer_pdbqts):
         if receptor_pdbqt is None:
             continue
         conf_pdbqt = docked_pdb.replace(".pdb", f"_c{conf_idx}.pdbqt")
+        # Use the flex companion rigid receptor (movable side chains removed)
+        # when flexible docking is active, otherwise the plain rigid receptor.
+        receptor_for_dock = rigid_flex_pdbqt if flex_pdbqt else receptor_pdbqt
         vina_cmd = [
             "vina",
-            "--receptor", receptor_pdbqt,
+            "--receptor", receptor_for_dock,
             "--ligand", lig_pdbqt,
             "--out", conf_pdbqt,
             "--center_x", f"{center[0]:.3f}",
@@ -618,6 +659,8 @@ def run_redocking_validation(
                 "--exhaustiveness", "32",
                 "--num_modes", "3",
         ]
+        if flex_pdbqt is not None:
+            vina_cmd += ["--flex", flex_pdbqt]
         try:
             subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
         except subprocess.TimeoutExpired:
@@ -2472,6 +2515,8 @@ def _run_redocking_phase(
                 mode=targets.get("mode"),
                 config=config,
                 target_pdbqt_paths=targets["PBP2a"].get("receptor_pdbqts"),
+                cleaned_pdb=targets["PBP2a"].get("cleaned_pdb"),
+                flex_residues=FLEX_RESIDUES,
             )
     else:
         validation_ok, redock_rmsd = run_redocking_validation(
@@ -2482,6 +2527,8 @@ def _run_redocking_phase(
             mode=targets.get("mode"),
             config=config,
             target_pdbqt_paths=targets["PBP2a"].get("receptor_pdbqts"),
+            cleaned_pdb=targets["PBP2a"].get("cleaned_pdb"),
+            flex_residues=FLEX_RESIDUES,
         )
         # A failed redocking validation against real PDBs is a diagnostic
         # signal, not a hard gate: log the error, keep validation_ok=False,
@@ -2718,6 +2765,28 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
 
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
+
+    # ── Phase 4.2: MM-GBSA-like rerank of the final top10 selection ──
+    # ``rerank_mmff`` (utils.docking) relaxes each active-site pose with the
+    # MMFF force field and stores the energy on record.mmgbca_score. We then
+    # reorder the final candidate list by that physics-based score (lower =
+    # better), falling back to the PBP2a active-site Vina energy when a record
+    # has no rerank score. This makes the reported Top-10 reflect pose-quality
+    # rather than raw docking energy alone.
+    from utils.docking import rerank_mmff
+    rerank_mmff(top10, work_dir=work_dir, use_vina=deps.get("USE_VINA", False))
+
+    def _final_rank_key(rec: CompoundRecord):
+        score = getattr(rec, "mmgbca_score", None)
+        if score is not None and np.isfinite(score):
+            return (0, score)
+        energy = rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None \
+            else rec.pb2pa_allosteric_energy
+        energy = energy if energy is not None else float("inf")
+        return (1, energy)
+
+    top10 = sorted(top10, key=_final_rank_key)
+    log.info("  Final Top-10 reranked by MM-GBSA-like (MMFF) score where available.")
 
     # ── Phase 3.5: Negative selection against human off-targets ──
     # Compounds that bind HERG or CYP3A4 tightly (E < -8.0 kcal/mol) are removed
