@@ -122,7 +122,8 @@ def generate_csv_report(
         Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
         Selectivity_Confidence, Off_Target_Risk, Max_Similarity, Passes_Lipinski,
         QED_Score, Binding_Mode_Notes, Protocol_RMSD, protocol_trust,
-        H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446.
+        H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446, Human_OffTarget_Max_Energy,
+        HIGH_TOXICITY_RISK.
 
     Returns path to CSV.
     """
@@ -214,6 +215,18 @@ def generate_csv_report(
                 f"{getattr(rec, 'human_cyp2d6_energy', None):.2f}"
                 if getattr(rec, "human_cyp2d6_energy", None) is not None
                 else "N/A"
+            ),
+            "Human_OffTarget_Max_Energy": (
+                f"{getattr(rec, 'human_offtarget_max_energy', None):.2f}"
+                if getattr(rec, "human_offtarget_max_energy", None) is not None
+                else "N/A"
+            ),
+            # Phase 3.5: explicit high-toxicity warning flag. Any candidate with
+            # a Selectivity Index < 1.0 (it binds humans at least as tightly as
+            # the bacterial target) is flagged HIGH_TOXICITY_RISK so the report
+            # calls attention to it in red-equivalent bold text downstream.
+            "HIGH_TOXICITY_RISK": str(
+                rec.selectivity_index is not None and rec.selectivity_index < 1.0
             ),
             "Mutant_Energy_Delta": (
                 f"{getattr(rec, 'mutant_energy_delta', None):.2f}"

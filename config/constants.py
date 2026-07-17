@@ -183,6 +183,11 @@ ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
 
 # Docking
 VINA_TIMEOUT_S = 600
+# Flexible (Vina --flex) docking is more expensive than rigid docking. Phase 3.5
+# mandates that the Top-50 active-site candidates are ranked by their flexible
+# energy, so flex jobs get a dedicated (larger) timeout instead of falling back
+# to rigid docking when Vina would otherwise time out.
+FLEX_VINA_TIMEOUT_S = 1800
 N_JOBS = max(1, mp.cpu_count() - 1)
 
 # Similarity

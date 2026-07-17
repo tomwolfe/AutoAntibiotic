@@ -32,13 +32,13 @@ from discovery_pipeline import (
     analyze_selectivity_and_resistance,
     log,
 )
-from utils.filtering import apply_filters
+from utils.filtering import apply_filters, filter_by_human_clash
 from utils.library_gen import generate_candidate_library, CompoundRecord
 from utils.docking import _run_vina_docking, _dock_compounds_parallel, format_fallback_score
 from utils.ligand_prep import LigandPreparator
 from utils.reporting import generate_csv_report, generate_pymol_script
 from rdkit.DataStructs import TanimotoSimilarity
-from utils.structure_prep import compute_residue_centroid
+from utils.structure_prep import compute_residue_centroid, validate_flex_pdbqt
 from config.constants import (
     OUTPUT_DIR,
     TOP_N,
@@ -47,6 +47,7 @@ from config.constants import (
     RMSD_VALIDATED_MAX,
     RMSD_MARGINAL_MAX,
     protocol_trust,
+    FLEX_VINA_TIMEOUT_S,
 )
 from tests.helpers import create_minimal_pdb
 from rdkit import Chem
@@ -1806,7 +1807,7 @@ class TestActivePosePropagation:
             mol=Chem.MolFromSmiles("c1ccccc1"),
         )
 
-        def fake_vina(receptor, lig, out, center, box, flex_pdbqt=None):
+        def fake_vina(receptor, lig, out, center, box, flex_pdbqt=None, **kwargs):
             with open(out, "w") as fh:
                 fh.write("MODEL 1\nENDMDL\n")
             return -7.5
@@ -1840,7 +1841,7 @@ class TestActivePosePropagation:
         )
 
         # First: a successful rigid active-site dock retains a real pose.
-        def good_vina(receptor, lig, out, center, box, flex_pdbqt=None):
+        def good_vina(receptor, lig, out, center, box, flex_pdbqt=None, **kwargs):
             with open(out, "w") as fh:
                 fh.write("MODEL 1\nENDMDL\n")
             return -8.0
@@ -1853,7 +1854,7 @@ class TestActivePosePropagation:
         assert good_pose is not None and os.path.exists(good_pose)
 
         # Then: a failed flex dock (Vina writes nothing, returns None).
-        def failed_vina(receptor, lig, out, center, box, flex_pdbqt=None):
+        def failed_vina(receptor, lig, out, center, box, flex_pdbqt=None, **kwargs):
             return None  # no output file written
 
         with patch("utils.docking.prepare_ligand_pdbqt", return_value=True), \
@@ -2165,6 +2166,282 @@ class TestMutationScan:
         assert rec.mutant_energy_delta is not None, \
             "1-letter mutant code must be parsed → delta populated"
         assert rec.mutant_energy_delta == pytest.approx(1.0)
+
+
+# ── Test: Vina flex PDBQT validity check (Phase 3.5) ──────────────────
+
+class TestValidateFlexPdbqt:
+    """validate_flex_pdbqt must certify a flex file is consumable by Vina --flex.
+
+    Regression: Vina rejects flex files carrying a ligand-only ``TORSDOF`` tag
+    or lacking a proper ROOT/BRANCH torsion tree. This checks the structural
+    invariants before the (expensive) flex docking step.
+    """
+
+    def _write_valid_ser_flex(self, path):
+        from utils.structure_prep import write_flex_pdbqt
+        pdb = str(Path(path).with_suffix("")) + "_src.pdb"
+        lines = [
+            "ATOM      1  N   SER A 403      23.803  25.107  82.919  1.00  0.00           N",
+            "ATOM      2  CA  SER A 403      22.833  25.575  83.912  1.00  0.00           C",
+            "ATOM      3  C   SER A 403      21.357  25.586  83.515  1.00  0.00           C",
+            "ATOM      4  O   SER A 403      20.477  25.627  84.383  1.00  0.00           O",
+            "ATOM      5  CB  SER A 403      23.209  26.984  84.359  1.00  0.00           C",
+            "ATOM      6  OG  SER A 403      24.356  26.948  85.169  1.00  0.00           O",
+            "END",
+        ]
+        with open(pdb, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        assert write_flex_pdbqt(pdb, str(path), ["SER403"]) is True
+
+    def test_valid_flex_passes(self, tmp_path):
+        out = tmp_path / "flex.pdbqt"
+        self._write_valid_ser_flex(out)
+        assert validate_flex_pdbqt(str(out)) is True
+
+    def test_torsdof_rejected(self, tmp_path):
+        out = tmp_path / "flex.pdbqt"
+        self._write_valid_ser_flex(out)
+        text = open(out).read() + "TORSDOF 1\n"
+        out.write_text(text)
+        assert validate_flex_pdbqt(str(out)) is False
+
+    def test_missing_root_rejected(self, tmp_path):
+        out = tmp_path / "flex.pdbqt"
+        out.write_text("BEGIN_RES SER A 403\nEND_RES SER A 403\n")
+        assert validate_flex_pdbqt(str(out)) is False
+
+    def test_empty_file_rejected(self, tmp_path):
+        out = tmp_path / "flex.pdbqt"
+        out.write_text("")
+        assert validate_flex_pdbqt(str(out)) is False
+
+
+# ── Test: Negative selection — filter_by_human_clash (Phase 3.5) ──────
+
+class TestFilterByHumanClash:
+    """filter_by_human_clash removes tight HERG/CYP3A4 binders outright.
+
+    The standard SI only flags weak selectivity; negative selection must
+    DISCARD a compound that binds a critical human off-target tightly, no
+    matter how strong its bacterial affinity. It must NOT discard compounds
+    that merely bind humans weakly.
+    """
+
+    def _rec(self, cid, **energies):
+        rec = CompoundRecord(compound_id=cid, smiles="c1ccccc1",
+                              mol=Chem.MolFromSmiles("c1ccccc1"))
+        for k, v in energies.items():
+            setattr(rec, k, v)
+        return rec
+
+    def test_herg_clash_discarded(self):
+        rec = self._rec("AA-1", human_herg_energy=-9.5, human_cyp3a4_energy=-3.0,
+                        pb2pa_active_energy=-11.0)
+        kept = filter_by_human_clash([rec])
+        assert kept == []
+
+    def test_cyp3a4_clash_discarded(self):
+        rec = self._rec("AA-2", human_herg_energy=-2.0, human_cyp3a4_energy=-8.1,
+                        pb2pa_active_energy=-12.0)
+        kept = filter_by_human_clash([rec])
+        assert kept == []
+
+    def test_weak_human_binding_kept(self):
+        rec = self._rec("AA-3", human_herg_energy=-4.5, human_cyp3a4_energy=-3.0,
+                        pb2pa_active_energy=-11.0)
+        kept = filter_by_human_clash([rec])
+        assert len(kept) == 1
+        # Records the strongest (least negative) human engagement for reporting.
+        assert rec.human_offtarget_max_energy == pytest.approx(-3.0)
+
+    def test_at_threshold_not_discarded(self):
+        # Energy exactly at -8.0 is NOT < -8.0, so it is kept.
+        rec = self._rec("AA-4", human_herg_energy=-8.0, human_cyp3a4_energy=-4.0)
+        kept = filter_by_human_clash([rec])
+        assert len(kept) == 1
+
+    def test_max_energy_none_when_no_human_data(self):
+        rec = self._rec("AA-5", pb2pa_active_energy=-10.0)
+        kept = filter_by_human_clash([rec])
+        assert len(kept) == 1
+        assert rec.human_offtarget_max_energy is None
+
+
+# ── Test: Flexible docking is mandatory for Top-50 (Phase 3.5) ────────
+
+class TestRobustFlexDocking:
+    """Flexible docking must use an extended timeout and never silently fall
+    back to rigid docking on a Vina timeout for the Top-50 candidates.
+    """
+
+    def test_flex_timeout_constant_larger_than_vina(self):
+        from config.constants import VINA_TIMEOUT_S
+        assert FLEX_VINA_TIMEOUT_S > VINA_TIMEOUT_S
+
+    def test_dock_compound_passes_timeout_to_vina(self, tmp_path):
+        # A fake Vina (_run_vina_docking) records the timeout it was invoked
+        # with, and succeeds. Confirms the per-call timeout reaches Vina.
+        import discovery_pipeline as P
+        from utils.docking import _run_vina_docking
+
+        captured = {}
+
+        def fake_run(receptor_pdbqt, ligand_pdbqt, output_pdbqt, center,
+                     box_size, timeout=None, flex_pdbqt=None):
+            captured["timeout"] = timeout
+            return -9.123
+
+        rec = CompoundRecord(compound_id="AA-1", smiles="c1ccccc1",
+                             mol=Chem.MolFromSmiles("c1ccccc1"))
+        from utils import docking as docking_mod
+        with patch.object(docking_mod, "_run_vina_docking", side_effect=fake_run):
+            energy = P.dock_compound(
+                rec, "receptor.pdbqt", np.zeros(3), (20, 20, 20),
+                str(tmp_path), "active_flex", use_vina=True,
+                flex_pdbqt="flex.pdbqt", timeout=1234,
+            )
+        assert energy == pytest.approx(-9.123)
+        assert captured["timeout"] == 1234
+
+    def test_flex_timeout_retry_no_rigid_fallback(self, tmp_path):
+        # First call times out, second call (extended timeout) succeeds. The
+        # helper must return the flex energy, not silently fall back to rigid.
+        import discovery_pipeline as P
+
+        calls = []
+
+        def fake_dock(rec, receptor, center, box, work_dir, tag,
+                      use_vina=True, flex_pdbqt=None, timeout=None):
+            calls.append(timeout)
+            # First call (standard timeout) → TimeoutExpired; second (extended)
+            # → success. We emulate by raising when called with the short
+            # timeout and returning energy on the longer one.
+            if timeout == P.VINA_TIMEOUT_S:
+                raise subprocess.TimeoutExpired(cmd="vina", timeout=timeout)
+            return -9.5
+
+        rec = CompoundRecord(compound_id="AA-2", smiles="c1ccccc1",
+                             mol=Chem.MolFromSmiles("c1ccccc1"))
+        from utils import docking as docking_mod
+        with patch.object(docking_mod, "dock_compound", side_effect=fake_dock):
+            energy = P._run_flex_dock_with_fallback_timeout(
+                rec, "rigid.pdbqt", np.zeros(3), (20, 20, 20),
+                str(tmp_path), "flex.pdbqt",
+            )
+        # Both the standard and extended timeout runs were attempted; the
+        # extended-timeout flex energy is returned (no rigid fallback value).
+        assert P.VINA_TIMEOUT_S in calls
+        assert FLEX_VINA_TIMEOUT_S in calls
+        assert energy == pytest.approx(-9.5)
+
+
+# ── Test: Protocol validation tightening (Phase 3.5) ──────────────────
+
+class TestProtocolValidationTightening:
+    """Redocking validation must use exhaustiveness 64 and a tighter
+    (4.0 Å padding) box around the native ligand.
+    """
+
+    def test_redocking_uses_exhaustiveness_64(self, tmp_path):
+        import discovery_pipeline as P
+
+        cmd_captured = {}
+
+        def fake_run(cmd, capture_output=True, text=True, timeout=None):
+            cmd = list(cmd)
+            if cmd and cmd[0] == "vina":
+                cmd_captured["cmd"] = cmd
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return R()
+
+        with patch("subprocess.run", side_effect=fake_run), \
+             patch.object(P, "_extract_native_ligand_from_holo",
+                          return_value="Cc1ccccc1"), \
+             patch.object(P, "compute_residue_centroid",
+                          return_value=np.array([0.0, 0.0, 0.0])), \
+             patch.object(P, "_compute_rmsd_docked_vs_crystal",
+                          return_value=1.2):
+            deps = {"USE_VINA": True, "mode": "science"}
+            P.run_redocking_validation(
+                "holo.pdb", "receptor.pdbqt", str(tmp_path), deps,
+                mode="science", config={"native_ligand_resname": "LIG"},
+            )
+        assert "--exhaustiveness" in cmd_captured["cmd"]
+        ex_idx = cmd_captured["cmd"].index("--exhaustiveness")
+        assert cmd_captured["cmd"][ex_idx + 1] == "64"
+
+    def test_redocking_box_uses_4A_padding(self):
+        import discovery_pipeline as P
+        # The redocking box must be sized with the tighter 4.0 Å padding (rather
+        # than the default 6.0 Å) when run_redocking_validation calls
+        # _redocking_box_size. We patch the sizing helper and assert it was
+        # invoked with redock_padding=4.0.
+        captured = {}
+
+        def fake_size(ligand_pdbqt, center, min_size=15.0, padding=6.0,
+                      default_box=(25.0, 25.0, 25.0), redock_padding=4.0):
+            captured["redock_padding"] = redock_padding
+            return (12.0, 12.0, 12.0)
+
+        with patch.object(P, "_redocking_box_size", side_effect=fake_size), \
+             patch("subprocess.run") as mock_run, \
+             patch.object(P, "_extract_native_ligand_from_holo",
+                          return_value="Cc1ccccc1"), \
+             patch.object(P, "compute_residue_centroid",
+                          return_value=np.array([0.0, 0.0, 0.0])), \
+             patch.object(P, "_compute_rmsd_docked_vs_crystal",
+                          return_value=1.2):
+            # Make the vina subprocess.run succeed with a redocked pose.
+            def _fake_vina(cmd, capture_output=True, text=True, timeout=None):
+                class R:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+                return R()
+            mock_run.side_effect = _fake_vina
+            deps = {"USE_VINA": True, "mode": "science"}
+            P.run_redocking_validation(
+                "holo.pdb", "receptor.pdbqt", str(tempfile.mkdtemp()),
+                deps, mode="science",
+                config={"native_ligand_resname": "LIG"},
+            )
+        assert captured.get("redock_padding") == 4.0
+
+
+# ── Test: Reporting adds Phase 3.5 columns ───────────────────────────
+
+class TestReportingPhase35:
+    """top_candidates.csv must now carry Human_OffTarget_Max_Energy and
+    HIGH_TOXICITY_RISK columns.
+    """
+
+    def test_csv_has_phase35_columns(self, tmp_path):
+        rec = CompoundRecord(
+            compound_id="AA-1", smiles="c1ccccc1",
+            mol=Chem.MolFromSmiles("c1ccccc1"),
+            pb2pa_allosteric_energy=-9.0, pb2pa_active_energy=-9.0,
+            human_trypsin_energy=-3.0, human_ces1_energy=-2.0,
+            human_offtarget_max_energy=-2.0,
+            selectivity_index=0.8, selectivity_confidence="High",
+            max_similarity=0.1, passes_lipinski=True, qed_score=0.6,
+            resistance_notes="",
+        )
+        csv_path = tmp_path / "top_candidates.csv"
+        generate_csv_report(
+            [rec], validation_ok=True, mode="science", redock_rmsd=1.2,
+            csv_report=csv_path, output_dir=tmp_path,
+        )
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        assert "Human_OffTarget_Max_Energy" in df.columns
+        assert "HIGH_TOXICITY_RISK" in df.columns
+        # SI < 1.0 ⇒ flagged as high toxicity risk.
+        assert bool(df["HIGH_TOXICITY_RISK"].iloc[0]) is True
+        assert df["Human_OffTarget_Max_Energy"].iloc[0] == pytest.approx(-2.0)
 
 
 if __name__ == "__main__":

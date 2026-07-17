@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
+
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Crippen, QED, FilterCatalog
 from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
@@ -200,3 +202,112 @@ def apply_filters(
 
     log.info("─── Phase 2 complete ───")
     return passed
+
+
+# ── Phase 3.5: Negative selection (human off-target clash) ───────────────────
+#
+# Human off-target attribute names whose energies are inspected, plus the
+# critical cardiotoxicity / drug-metabolism targets that trigger immediate
+# removal when bound tightly. Energies are Vina kcal/mol (negative = binding).
+_HUMAN_OFFTARGET_ATTRS = (
+    "human_trypsin_energy",
+    "human_ces1_energy",
+    "human_albumin_energy",
+    "human_cyp3a4_energy",
+    "human_herg_energy",
+    "human_cyp2d6_energy",
+)
+
+# Targets whose tight binding is an absolute deal-breaker (regardless of how
+# well the compound binds the bacterial target). HERG → cardiotoxicity;
+# CYP3A4 → drug–drug metabolism liability.
+_HARD_CLASH_TARGETS = {
+    "human_herg_energy": "HERG (cardiotoxicity)",
+    "human_cyp3a4_energy": "CYP3A4 (drug metabolism)",
+}
+
+# Energy below which a compound is considered to *tightly* bind a human
+# off-target (kcal/mol). Stronger binding than this ⇒ immediate discard.
+_HARD_CLASH_ENERGY = -8.0
+
+# Energy above which the compound is considered to ignore the human off-target
+# (essentially no binding). Used only for reporting the max off-target energy.
+_WEAK_BIND_ENERGY = -5.0
+
+
+def filter_by_human_clash(
+    records: "List[CompoundRecord]",
+    hard_clash_energy: float = _HARD_CLASH_ENERGY,
+    hard_clash_targets: Optional[dict] = None,
+) -> "List[CompoundRecord]":
+    """
+    Phase 3.5 — Negative selection against human off-targets.
+
+    The standard Selectivity Index (``|E_bacteria| / |E_human|``) *penalises*
+    strong bacterial binders whenever they also bind human proteins weakly.
+    Negative selection is stricter: we want compounds that *ignore* human
+    proteins, not merely ones that bind bacteria slightly better.
+
+    Rule:
+        1. For every human off-target, collect the (valid, binding) energy.
+        2. If the compound binds HERG **or** CYP3A4 with energy
+           ``< hard_clash_energy`` (default -8.0 kcal/mol), it is DISCARDED
+           immediately — no matter how strong its bacterial affinity. It is
+           removed from the candidate list, not just flagged.
+        3. Otherwise the compound is kept. The maximum (least negative) human
+           off-target energy is recorded on ``rec.human_offtarget_max_energy``
+           so the report can surface how strongly the compound engages humans.
+
+    Args:
+        records: Candidate records (with human off-target energies populated).
+        hard_clash_energy: Discard threshold for HERG/CYP3A4 (kcal/mol).
+        hard_clash_targets: Mapping ``{attr: label}`` of deal-breaker targets.
+            Defaults to HERG and CYP3A4.
+
+    Returns:
+        Filtered list with hard-clash compounds removed. A list of discarded
+        ``compound_id`` strings is logged for traceability.
+    """
+    if hard_clash_targets is None:
+        hard_clash_targets = _HARD_CLASH_TARGETS
+
+    kept = []
+    discarded = []
+    for rec in records:
+        # Collect all valid human off-target energies (finite + binding).
+        energies = [
+            e for e in (
+                getattr(rec, attr, None) for attr in _HUMAN_OFFTARGET_ATTRS
+            )
+            if e is not None and np.isfinite(e) and e < 0.0
+        ]
+        # Record the strongest (most negative) human engagement for reporting.
+        rec.human_offtarget_max_energy = max(energies) if energies else None
+
+        # Hard clash: tight binding to a deal-breaker off-target ⇒ discard.
+        hard_clash = False
+        for attr, label in hard_clash_targets.items():
+            e = getattr(rec, attr, None)
+            if e is not None and np.isfinite(e) and e < hard_clash_energy:
+                hard_clash = True
+                log.info(
+                    f"  Negative selection: discarding {rec.compound_id} — "
+                    f"tight binding to {label} (E = {e:.2f} kcal/mol < "
+                    f"{hard_clash_energy:.2f})."
+                )
+                break
+
+        if hard_clash:
+            discarded.append(rec.compound_id)
+            continue
+        kept.append(rec)
+
+    if discarded:
+        log.info(
+            f"  Negative selection removed {len(discarded)} compound(s) for "
+            f"human off-target clash: {', '.join(discarded)}"
+        )
+    log.info(
+        f"  Negative selection kept {len(kept)} / {len(records)} compound(s)."
+    )
+    return kept

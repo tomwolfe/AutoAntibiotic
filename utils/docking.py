@@ -258,6 +258,7 @@ def dock_compound(
     tag: str = "",
     use_vina: bool = True,
     flex_pdbqt: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> Optional[float]:
     """
     Full docking pipeline for a single compound: PDBQT prep → Vina → parse.
@@ -279,6 +280,10 @@ def dock_compound(
         flex_pdbqt: Optional flexible-residue PDBQT passed to Vina's ``--flex``
             for local flexible docking (active-site step). Ignored when Vina is
             unavailable.
+        timeout: Optional per-call Vina timeout override (seconds). Used to give
+            flexible (``--flex``) docking jobs a larger timeout than rigid jobs
+            so they do not fall back to rigid docking on a transient timeout
+            (Phase 3.5: robust flexible docking).
 
     Returns:
         Best binding energy (Vina) or fallback score, or None on failure.
@@ -326,6 +331,7 @@ def dock_compound(
     energy = _run_vina_docking(
         receptor_pdbqt, lig_pdbqt, out_pdbqt,
         center, box_size,
+        timeout=timeout,
         flex_pdbqt=flex_pdbqt,
     )
 

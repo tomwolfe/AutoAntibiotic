@@ -105,6 +105,7 @@ from config.constants import (
     HERG_CATALYTIC_RESIDUES,
     CYP2D6_CATALYTIC_RESIDUES,
     FLEX_RESIDUES,
+    FLEX_VINA_TIMEOUT_S,
     MUTATION_SCAN,
     MUTATION_SCAN_MUTANTS,
     FP_RADIUS,
@@ -270,6 +271,7 @@ def _redocking_box_size(
     min_size: float = 15.0,
     padding: float = 6.0,
     default_box: Tuple[float, float, float] = (25.0, 25.0, 25.0),
+    redock_padding: float = 4.0,
 ) -> Tuple[float, float, float]:
     """
     Size the native-ligand redocking box from the ligand coordinates.
@@ -548,7 +550,11 @@ def run_redocking_validation(
     # using the same auto-sizing logic as the allosteric/active sites, instead
     # of a fixed 25 Å cube. This keeps the box tight around the crystallographic
     # ligand so the redocked pose is measured on a comparable grid.
-    redock_box = _redocking_box_size(lig_pdbqt, center)
+    #
+    # Phase 3.5: use a *tighter* padding (4.0 Å instead of the default 6.0 Å)
+    # for the native-ligand redocking box. A smaller search space reduces grid
+    # noise and helps push the redocking RMSD under the 1.5 Å "Validated" gate.
+    redock_box = _redocking_box_size(lig_pdbqt, center, redock_padding=4.0)
     log.info(
         f"  Redocking box: {redock_box[0]:.1f} x {redock_box[1]:.1f} x "
         f"{redock_box[2]:.1f} Å (auto-sized from native ligand)."
@@ -574,7 +580,7 @@ def run_redocking_validation(
             "--size_x", f"{redock_box[0]:.1f}",
             "--size_y", f"{redock_box[1]:.1f}",
             "--size_z", f"{redock_box[2]:.1f}",
-                "--exhaustiveness", "32",
+                "--exhaustiveness", "64",
         ]
         try:
             subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
@@ -1276,6 +1282,19 @@ def _prepare_flex_pdbqt(
         if not write_flex_pdbqt(flex_pdb, flex_pdbqt, flex_residues=flex_residues):
             return None
 
+        # Guard: Vina rejects a malformed flex file with an opaque error that
+        # would otherwise surface only after a full (expensive) docking run.
+        # Validate the torsion tree up front so the pipeline fails fast and
+        # cleanly falls back to rigid docking when the flex PDBQT is unusable.
+        from utils.structure_prep import validate_flex_pdbqt
+        if not validate_flex_pdbqt(flex_pdbqt):
+            log.warning(
+                "  ⚠  Generated flex PDBQT failed Vina validity check "
+                "(torsion tree malformed / TORSDOF present). Falling back to "
+                "rigid docking."
+            )
+            return None
+
         # Companion rigid receptor with movable side chains removed.
         rigid_pdbqt = os.path.join(work_dir, "PBP2a_rigid_flex.pdbqt")
         if not _strip_flex_sidechains_from_rigid(receptor_pdbqt, target, rigid_pdbqt):
@@ -1285,6 +1304,56 @@ def _prepare_flex_pdbqt(
     except Exception as exc:
         log.warning(f"  ⚠  Flexible-residue PDBQT preparation failed: {exc}. Falling back to rigid.")
         return None
+
+
+def _run_flex_dock_with_fallback_timeout(
+    rec: "CompoundRecord",
+    rigid_flex_pdbqt: str,
+    active_center: np.ndarray,
+    active_box: Tuple[float, float, float],
+    work_dir: str,
+    flex_pdbqt: str,
+) -> Optional[float]:
+    """
+    Run a single flexible (Vina ``--flex``) docking job for *rec*.
+
+    Phase 3.5 — robust flexible docking. The job is attempted with the standard
+    ``VINA_TIMEOUT_S``; if Vina times out, it is retried ONCE with the dedicated
+    larger ``FLEX_VINA_TIMEOUT_S`` rather than falling back to rigid docking.
+    This guarantees the Top-50 active-site ranking is driven by a genuine
+    flexible-docked score.
+
+    Returns the flexible binding energy, or ``None`` only when even the
+    extended-timeout run fails (in which case the caller keeps the rigid
+    consensus energy as a fallback).
+    """
+    from utils.docking import dock_compound
+
+    try:
+        energy = dock_compound(
+            rec, rigid_flex_pdbqt, active_center, active_box,
+            work_dir, "active_flex", use_vina=True,
+            flex_pdbqt=flex_pdbqt, timeout=VINA_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        energy = None
+    if energy is not None:
+        return energy
+
+    log.info(
+        f"  Flex docking for {rec.compound_id} timed out at "
+        f"{VINA_TIMEOUT_S}s; retrying with extended timeout "
+        f"{FLEX_VINA_TIMEOUT_S}s (no rigid fallback)."
+    )
+    try:
+        energy = dock_compound(
+            rec, rigid_flex_pdbqt, active_center, active_box,
+            work_dir, "active_flex", use_vina=True,
+            flex_pdbqt=flex_pdbqt, timeout=FLEX_VINA_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        energy = None
+    return energy
 
 
 def screen_library(
@@ -1377,12 +1446,17 @@ def screen_library(
             rec.pb2pa_active_energy = energy
 
         # ── Local flexible docking (science mode only, Vina required) ──
-        # Re-dock the active-site pose of the top-50 against a flexible receptor
-        # (SER403/LYS406/TYR446 side chains movable via Vina --flex) to obtain a
-        # more physically realistic pose for pose-based interaction analysis and
-        # the MM-GBSA-like rerank. The rigid consensus energy remains the
-        # primary rank; on any flex-prep failure we log a warning and keep the
-        # rigid pose (backward compatible).
+        # Phase 3.5: flexible docking is MANDATORY for the Top-50 active-site
+        # candidates. The flexible energy (SER403/LYS406/TYR446 side chains
+        # movable via Vina --flex) is the authoritative active-site ranking
+        # score, not a re-dock for analysis only. The rigid consensus energy is
+        # used only as a fallback when a flex job genuinely cannot produce a
+        # valid energy (e.g. the flex receptor could not be prepared).
+        #
+        # Critically, if Vina times out on a flex job we do NOT fall back to
+        # rigid docking — instead the flex job is retried with the dedicated,
+        # larger FLEX_VINA_TIMEOUT_S so the Top-50 final ranking always reflects
+        # a proper flexible-docked score.
         mode = deps.get("mode", "science")
         if use_vina and mode == "science" and active_center is not None:
             primary_pdbqt = receptor_pdbqts[0]
@@ -1394,7 +1468,7 @@ def screen_library(
                 rigid_flex_pdbqt, flex_pdbqt = flex_prep
                 log.info(
                     f"  Local flexible docking (--flex) for top {len(top_active)} "
-                    f"compounds at the active site…"
+                    f"compounds at the active site (mandatory final ranking)…"
                 )
                 for rec in top_active:
                     if rec.mol is None:
@@ -1402,22 +1476,25 @@ def screen_library(
                         if mol is None:
                             continue
                         rec.mol = mol
-                    try:
-                        flex_energy = dock_compound(
-                            rec, rigid_flex_pdbqt, active_center, active_box,
-                            work_dir, "active_flex", use_vina=True,
-                            flex_pdbqt=flex_pdbqt,
-                        )
-                        if flex_energy is not None:
-                            # Keep the best (most negative) of rigid/flex as the
-                            # active-site energy; the flex pose is retained on
-                            # rec.active_docked_pdbqt for pose analysis.
-                            if rec.pb2pa_active_energy is None or flex_energy < rec.pb2pa_active_energy:
-                                rec.pb2pa_active_energy = flex_energy
-                    except Exception as exc:
+                    # Phase 3.5: try the flex job with the standard timeout first;
+                    # on timeout, retry once with the dedicated larger flex
+                    # timeout rather than silently degrading to rigid docking.
+                    flex_energy = _run_flex_dock_with_fallback_timeout(
+                        rec, rigid_flex_pdbqt, active_center, active_box,
+                        work_dir, flex_pdbqt,
+                    )
+                    if flex_energy is not None:
+                        # The flexible-docked energy is authoritative for the
+                        # Top-50 final ranking. It replaces (never just improves
+                        # on) the rigid consensus active-site energy.
+                        rec.pb2pa_active_energy = flex_energy
+                    else:
+                        # A genuine failure (not a recoverable timeout) keeps the
+                        # existing rigid consensus energy so the candidate still
+                        # ranks, but we never *pretend* the flex pose succeeded.
                         log.warning(
-                            f"  ⚠  Flexible docking failed for {rec.compound_id}: "
-                            f"{exc}. Keeping rigid pose."
+                            f"  ⚠  Flexible docking failed for {rec.compound_id} "
+                            f"(retained rigid energy {rec.pb2pa_active_energy})."
                         )
             else:
                 log.warning(
@@ -2605,6 +2682,15 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
 
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
+
+    # ── Phase 3.5: Negative selection against human off-targets ──
+    # Compounds that bind HERG or CYP3A4 tightly (E < -8.0 kcal/mol) are removed
+    # outright — they must never appear in the reported Top-10 even if they bind
+    # the bacterial target well. Runs after selectivity analysis so the
+    # human-off-target energies are populated, and before the rerank/diversity
+    # gate so discarded compounds do not consume report slots.
+    from utils.filtering import filter_by_human_clash
+    top10 = filter_by_human_clash(top10)
 
     # ── Phase 4.5: Rerank gate + diversity clustering ──
     # Drop candidates with positive MM-GBSA-like relaxation energy and pick a

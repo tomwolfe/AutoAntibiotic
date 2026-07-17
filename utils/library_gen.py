@@ -70,6 +70,12 @@ class CompoundRecord:
     # selectivity_index so the raw SI is never artificially zeroed.
     off_target_risk: bool = False
 
+    # Phase 3.5 — Negative selection: the most negative (strongest) human
+    # off-target binding energy observed across the human panel (kcal/mol),
+    # populated by utils.filtering.filter_by_human_clash. None when the compound
+    # has no valid human off-target energies. Surfaced in the CSV report.
+    human_offtarget_max_energy: Optional[float] = None
+
     # Similarity
     max_similarity: float = 0.0
 

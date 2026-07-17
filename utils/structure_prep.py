@@ -835,3 +835,72 @@ def write_flex_pdbqt(
         log.warning(f"  ⚠  Flex PDBQT writer failed: {exc}")
         return False
 
+
+# Vina's ``--flex`` parser accepts only the following block-level tags. Any
+# other tag (notably the ligand-only ``TORSDOF``) makes Vina abort with
+# "Unknown or inappropriate tag found in flex residue or ligand". We enumerate
+# them here so :func:`validate_flex_pdbqt` can reject files that would crash
+# Vina before the (expensive) docking step is launched.
+_FLEX_VALID_TAGS = {
+    "BEGIN_RES", "END_RES", "ROOT", "ENDROOT", "BRANCH", "ENDBRANCH", "ATOM",
+    "HETATM", "REMARK", "TER", "END",
+}
+
+
+def validate_flex_pdbqt(flex_pdbqt_path: str) -> bool:
+    """
+    Validate that a flexible-residue PDBQT is consumable by Vina's ``--flex``.
+
+    A valid flex PDBQT must:
+        * contain at least one ``BEGIN_RES`` / ``END_RES`` pair,
+        * carry a ROOT block whose atoms are also linked by BRANCH/ENDBRANCH
+          tags (a proper torsion tree),
+        * contain NO ``TORSDOF`` record (that tag is ligand-only and Vina
+          rejects it inside a flex residue), and
+        * use only tags recognised by Vina's flex parser.
+
+    Returns ``True`` when the file is a valid flex PDBQT, ``False`` otherwise.
+    Used by the pipeline (and the unit tests) to catch malformed flex files
+    early, before Vina timeouts on an invalid input.
+
+    Args:
+        flex_pdbqt_path: Path to the candidate flex PDBQT.
+
+    Returns:
+        ``True`` if the file passes every structural check, else ``False``.
+    """
+    if not os.path.exists(flex_pdbqt_path) or os.path.getsize(flex_pdbqt_path) == 0:
+        return False
+    try:
+        with open(flex_pdbqt_path) as fh:
+            lines = fh.readlines()
+    except OSError:
+        return False
+
+    # TORSDOF is a ligand-only tag; its presence inside a flex residue makes
+    # Vina abort. Reject immediately.
+    if any("TORSDOF" in line for line in lines):
+        return False
+
+    has_res = False
+    has_root = False
+    has_branch = False
+    for line in lines:
+        stripped = line.strip()
+        tag = stripped.split()[0] if stripped else ""
+        # Unknown block-level tag → invalid for Vina --flex.
+        if tag and tag.isupper() and tag not in _FLEX_VALID_TAGS:
+            return False
+        if tag == "BEGIN_RES":
+            has_res = True
+        elif tag == "ROOT":
+            has_root = True
+        elif tag == "BRANCH":
+            has_branch = True
+
+    # A flex file with no residues, or with no rigid backbone ROOT, or with no
+    # rotatable BRANCH, is not a usable torsion tree.
+    if not (has_res and has_root and has_branch):
+        return False
+    return True
+
