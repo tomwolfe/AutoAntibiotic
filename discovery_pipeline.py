@@ -2368,6 +2368,7 @@ def _run_redocking_phase(
             deps=deps,
             mode=targets.get("mode"),
             config=config,
+            target_pdbqt_paths=targets["PBP2a"].get("receptor_pdbqts"),
         )
         # A failed redocking validation against real PDBs is a diagnostic
         # signal, not a hard gate: log the error, keep validation_ok=False,
