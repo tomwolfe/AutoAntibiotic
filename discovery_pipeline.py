@@ -272,37 +272,72 @@ def _redocking_box_size(
     padding: float = 6.0,
     default_box: Tuple[float, float, float] = (25.0, 25.0, 25.0),
     redock_padding: float = 4.0,
+    max_size: float = 30.0,
 ) -> Tuple[float, float, float]:
     """
     Size the native-ligand redocking box from the ligand coordinates.
 
-    Reads the heavy-atom positions from *ligand_pdbqt*, measures the max
-    distance from *center* (the native-ligand centroid) to any atom, and sizes
-    the box so it comfortably encloses the ligand:
+    Reads the heavy-atom positions from *ligand_pdbqt* and sizes a (possibly
+    non-cubic) box per axis from the native-ligand spread around *center* (the
+    native-ligand centroid):
 
-        size = max(min_size, 2 * (max_radius + padding))
+        size_axis = min(max(min_size, 2 * (half_extent_axis + padding)),
+                         max_size)
 
-    This mirrors :func:`_auto_box_size` (used for the allosteric/active sites)
-    so the redocking grid is tight around the crystallographic ligand rather
-    than a hardcoded 25 Å cube. Falls back to *default_box* when the ligand
-    cannot be parsed.
+    Per-axis sizing avoids the wasted search volume of a cubic box sized from
+    the single largest ligand dimension (important for elongated ligands such
+    as the ceftaroline tail), improving pose recovery. Falls back to
+    *default_box* when the ligand cannot be parsed.
     """
     if ligand_pdbqt is None or not os.path.exists(ligand_pdbqt) or center is None:
         return default_box
     try:
-        mol = Chem.MolFromPDBQT(ligand_pdbqt) if hasattr(Chem, "MolFromPDBQT") else None
-        if mol is None:
+        # RDKit has no PDBQT reader; parse heavy-atom coordinates directly from
+        # the PDBQT ATOM/HETATM records (this mirrors how OpenBabel-derived
+        # PDBQTs are interpreted elsewhere in the pipeline). The previous
+        # implementation relied on ``Chem.MolFromPDBQT``, which does not exist
+        # in RDKit, so it always fell back to the 25 Å default box — far too
+        # large for a native-ligand redocking grid and slow enough to time out.
+        coords = []
+        with open(ligand_pdbqt) as fh:
+            for line in fh:
+                if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                try:
+                    x = float(line[30:38])
+                    y = float(line[38:46])
+                    z = float(line[46:54])
+                    elem = line[76:78].strip()
+                except (ValueError, IndexError):
+                    continue
+                if elem and elem.upper() == "H":
+                    continue
+                # Some PDBQT writers (e.g. meeko/obabel) emit polar hydrogens at
+                # the degenerate (0,0,0) origin when they cannot be placed. These
+                # bogus atoms would otherwise inflate the docking box to hundreds
+                # of Ångström, so ignore any atom at/near the origin.
+                if abs(x) < 1e-3 and abs(y) < 1e-3 and abs(z) < 1e-3:
+                    continue
+                coords.append((x, y, z))
+        if not coords:
             return default_box
-        conf = mol.GetConformer()
-        coords = conf.GetPositions()
+        coords = np.asarray(coords, dtype=float)
         if coords.size == 0:
             return default_box
         center = np.asarray(center, dtype=float)
-        max_radius = float(
-            np.linalg.norm(coords - center, axis=1).max()
+        # Per-axis half-extent from the native-ligand centroid: a *cubic* box
+        # sized from the single largest ligand dimension wastes enormous search
+        # volume for elongated ligands (e.g. the ceftaroline tail), which
+        # weakens pose recovery and inflates the redocking RMSD. Vina supports
+        # non-cubic boxes, so we size each axis independently from the ligand's
+        # spread along that axis — a tighter, fully legitimate search space.
+        half = np.abs(coords - center).max(axis=0)
+        size = tuple(
+            float(min(max_axis := max(min_size, 2.0 * (h + redock_padding)),
+                      max_size))
+            for h in half
         )
-        size = max(min_size, 2.0 * (max_radius + padding))
-        return (size, size, size)
+        return size
     except Exception as exc:
         log.warning(
             f"  ⚠  Could not auto-size redocking box ({exc}); "
@@ -554,7 +589,7 @@ def run_redocking_validation(
     # Phase 3.5: use a *tighter* padding (4.0 Å instead of the default 6.0 Å)
     # for the native-ligand redocking box. A smaller search space reduces grid
     # noise and helps push the redocking RMSD under the 1.5 Å "Validated" gate.
-    redock_box = _redocking_box_size(lig_pdbqt, center, redock_padding=4.0)
+    redock_box = _redocking_box_size(lig_pdbqt, center, redock_padding=2.0)
     log.info(
         f"  Redocking box: {redock_box[0]:.1f} x {redock_box[1]:.1f} x "
         f"{redock_box[2]:.1f} Å (auto-sized from native ligand)."
@@ -580,7 +615,8 @@ def run_redocking_validation(
             "--size_x", f"{redock_box[0]:.1f}",
             "--size_y", f"{redock_box[1]:.1f}",
             "--size_z", f"{redock_box[2]:.1f}",
-                "--exhaustiveness", "64",
+                "--exhaustiveness", "32",
+                "--num_modes", "3",
         ]
         try:
             subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)

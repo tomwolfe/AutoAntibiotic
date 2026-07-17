@@ -510,7 +510,14 @@ def generate_interaction_diagram(
 
     try:
         drawer = _draw.MolDraw2DCairo(500, 500)
-        drawer.drawOptions().highlightColor = _draw.Color(1.0, 0.0, 0.0)
+        # Highlight ligand atoms engaging the key catalytic residues. The
+        # highlight color is set via the drawer's draw-options when the RDKit
+        # build exposes ``rdMolDraw2D.Color``; otherwise we rely on the
+        # default highlight color so the diagram still renders.
+        try:
+            drawer.drawOptions().highlightColor = _draw.Color(1.0, 0.0, 0.0)
+        except AttributeError:
+            pass
         drawer.DrawMolecule(
             mol,
             highlightAtoms=highlight_atoms,

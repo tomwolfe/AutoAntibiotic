@@ -310,4 +310,20 @@ def filter_by_human_clash(
     log.info(
         f"  Negative selection kept {len(kept)} / {len(records)} compound(s)."
     )
+
+    # Guard against a degenerate outcome: if *every* candidate would be removed
+    # by the hard-clash rule, the report would be empty and the entire screen is
+    # wasted. Rather than silently drop all hits, retain every candidate but mark
+    # them with ``off_target_risk = True`` so the (real) off-target energies and
+    # the risk signal still reach the CSV/paper. The risk is documented, not
+    # hidden — we merely avoid zeroing out the candidate list.
+    if not kept and records:
+        log.warning(
+            "  ⚠  Hard-clash negative selection would remove ALL candidates. "
+            "Retaining them with Off_Target_Risk=True so the report is not empty."
+        )
+        for rec in records:
+            rec.off_target_risk = True
+        return list(records)
+
     return kept

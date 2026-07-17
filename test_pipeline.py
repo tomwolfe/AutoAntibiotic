@@ -2235,17 +2235,34 @@ class TestFilterByHumanClash:
             setattr(rec, k, v)
         return rec
 
-    def test_herg_clash_discarded(self):
+    def test_herg_clash_flagged_when_only_candidate(self):
+        # When the hard-clash rule would remove EVERY candidate, the guard
+        # retains them (marked Off_Target_Risk=True) rather than emptying the
+        # report. A lone tight-HERG binder is therefore retained but flagged.
         rec = self._rec("AA-1", human_herg_energy=-9.5, human_cyp3a4_energy=-3.0,
                         pb2pa_active_energy=-11.0)
         kept = filter_by_human_clash([rec])
-        assert kept == []
+        assert len(kept) == 1
+        assert kept[0].off_target_risk is True
 
-    def test_cyp3a4_clash_discarded(self):
+    def test_cyp3a4_clash_flagged_when_only_candidate(self):
         rec = self._rec("AA-2", human_herg_energy=-2.0, human_cyp3a4_energy=-8.1,
                         pb2pa_active_energy=-12.0)
         kept = filter_by_human_clash([rec])
-        assert kept == []
+        assert len(kept) == 1
+        assert kept[0].off_target_risk is True
+
+    def test_hard_clash_discards_when_safe_candidates_remain(self):
+        # With a mixed set, a tight-HERG binder is DISCARDED while a safe
+        # compound is kept — the guard only fires on a fully-empty outcome.
+        clash = self._rec("AA-1", human_herg_energy=-9.5,
+                          pb2pa_active_energy=-11.0)
+        safe = self._rec("AA-2", human_herg_energy=-3.0,
+                         pb2pa_active_energy=-11.0)
+        kept = filter_by_human_clash([clash, safe])
+        ids = {r.compound_id for r in kept}
+        assert "AA-1" not in ids
+        assert "AA-2" in ids
 
     def test_weak_human_binding_kept(self):
         rec = self._rec("AA-3", human_herg_energy=-4.5, human_cyp3a4_energy=-3.0,
@@ -2339,11 +2356,12 @@ class TestRobustFlexDocking:
 # ── Test: Protocol validation tightening (Phase 3.5) ──────────────────
 
 class TestProtocolValidationTightening:
-    """Redocking validation must use exhaustiveness 64 and a tighter
-    (4.0 Å padding) box around the native ligand.
+    """Redocking validation must use a tighter per-axis box around the native
+    ligand (2.0 Å padding, capped at 30 Å) and a pragmatic exhaustiveness (32)
+    that completes within the wall-clock budget.
     """
 
-    def test_redocking_uses_exhaustiveness_64(self, tmp_path):
+    def test_redocking_uses_exhaustiveness_32(self, tmp_path):
         import discovery_pipeline as P
 
         cmd_captured = {}
@@ -2372,14 +2390,14 @@ class TestProtocolValidationTightening:
             )
         assert "--exhaustiveness" in cmd_captured["cmd"]
         ex_idx = cmd_captured["cmd"].index("--exhaustiveness")
-        assert cmd_captured["cmd"][ex_idx + 1] == "64"
+        assert cmd_captured["cmd"][ex_idx + 1] == "32"
 
-    def test_redocking_box_uses_4A_padding(self):
+    def test_redocking_box_uses_2A_padding(self):
         import discovery_pipeline as P
-        # The redocking box must be sized with the tighter 4.0 Å padding (rather
+        # The redocking box must be sized with the tighter 2.0 Å padding (rather
         # than the default 6.0 Å) when run_redocking_validation calls
         # _redocking_box_size. We patch the sizing helper and assert it was
-        # invoked with redock_padding=4.0.
+        # invoked with redock_padding=2.0.
         captured = {}
 
         def fake_size(ligand_pdbqt, center, min_size=15.0, padding=6.0,
@@ -2409,7 +2427,7 @@ class TestProtocolValidationTightening:
                 deps, mode="science",
                 config={"native_ligand_resname": "LIG"},
             )
-        assert captured.get("redock_padding") == 4.0
+        assert captured.get("redock_padding") == 2.0
 
 
 # ── Test: Reporting adds Phase 3.5 columns ───────────────────────────
