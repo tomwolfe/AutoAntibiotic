@@ -1,3 +1,6 @@
+paper*
+benchmarks/
+figures/
 # Pipeline outputs (PDBs, PDBQTs, CSVs, PNGs, logs, working intermediates)
 output/
 

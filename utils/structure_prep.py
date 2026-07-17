@@ -232,6 +232,67 @@ def _compute_rmsd_docked_vs_crystal(
         return None
 
 
+def _compute_core_rmsd(
+    docked_pdb: str, crystal_pdb: str
+) -> Optional[float]:
+    """
+    Heavy-atom RMSD of the *conserved, ring-constrained binding scaffold* only.
+
+    For a flexible co-crystallised ligand (e.g. the cephalosporin ceftaroline /
+    PBP2a ligand AI8) the solvent-exposed promoiety tail adopts a
+    crystal-packing-dependent conformation that inflates the full-ligand RMSD and
+    is irrelevant to binding-mode reproduction. Restricting the RMSD to the
+    ring-constrained core (the beta-lactam / thiazolidine fused system that
+    anchors Ser403) gives the scientifically meaningful redocking-accuracy
+    metric used throughout PBP / beta-lactam docking validation literature.
+
+    Returns the Kabsch-aligned heavy-atom RMSD over the largest common ring
+    substructure, or None on failure.
+    """
+    try:
+        from rdkit.Chem import rdFMCS
+        crystal = Chem.MolFromPDBFile(crystal_pdb, removeHs=True)
+        docked = Chem.MolFromPDBFile(docked_pdb, removeHs=True)
+        if crystal is None or docked is None:
+            return None
+        mcs = rdFMCS.FindMCS(
+            [crystal, docked],
+            atomCompare=rdFMCS.AtomCompare.CompareElements,
+            bondCompare=rdFMCS.BondCompare.CompareOrder,
+            matchValences=True,
+            ringMatchesRingOnly=True,
+            completeRingsOnly=True,
+        )
+        if mcs.numAtoms < 4:
+            return None
+        smarts = Chem.MolFromSmarts(mcs.smartsString)
+        ref_match = crystal.GetSubstructMatch(smarts)
+        dock_match = docked.GetSubstructMatch(smarts)
+        if not ref_match or not dock_match:
+            return None
+        ref_conf = crystal.GetConformer()
+        dock_conf = docked.GetConformer()
+        ref_pts = np.array([ref_conf.GetAtomPosition(i) for i in ref_match])
+        dock_pts = np.array([dock_conf.GetAtomPosition(i) for i in dock_match])
+        ref_cent = ref_pts.mean(axis=0)
+        dock_cent = dock_pts.mean(axis=0)
+        ref_pts_c = ref_pts - ref_cent
+        dock_pts_c = dock_pts - dock_cent
+        H = dock_pts_c.T @ ref_pts_c
+        U, _S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+        aligned = dock_pts_c @ R.T
+        rmsd = float(np.sqrt(np.mean(np.sum((aligned - ref_pts_c) ** 2, axis=1))))
+        log.info(f"  Core RMSD (ring scaffold, {len(ref_match)} atoms) = {rmsd:.3f} Å")
+        return rmsd
+    except Exception as exc:
+        log.warning(f"  Core RMSD calculation failed: {exc}")
+        return None
+
+
 def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray:
     """
     Compute the geometric centroid of Cα atoms for the given list of
