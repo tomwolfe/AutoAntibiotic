@@ -698,7 +698,7 @@ class TestRealPDBSmoke:
                 ))
             return recs
 
-        def mock_filters(records):
+        def mock_filters(records, **kwargs):
             return list(records)
 
         def mock_screen_library(records, targets, work_dir, deps):
