@@ -946,7 +946,7 @@ class TestIntegrationPipeline:
             return mock_targets
 
         # Mock apply_filters to return all records unchanged
-        def mock_apply_filters(records):
+        def mock_apply_filters(records, similarity_threshold=None, recal_mode=False):
             return list(records)
 
         # Mock analyze_selectivity_and_resistance to return records unchanged
@@ -1065,7 +1065,7 @@ class TestMainRedockingGate:
                                 with patch("discovery_pipeline.generate_candidate_library",
                                             side_effect=mock_gen):
                                     with patch("discovery_pipeline.apply_filters",
-                                                side_effect=lambda r: list(r)):
+                                                side_effect=lambda r, **kw: list(r)):
                                         with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                                             with patch("discovery_pipeline.CSV_REPORT",
                                                         output_dir / "top_candidates.csv"):
@@ -1115,7 +1115,7 @@ class TestMainRedockingGate:
                             with patch("discovery_pipeline.generate_candidate_library",
                                         side_effect=mock_gen):
                                 with patch("discovery_pipeline.apply_filters",
-                                            side_effect=lambda r: list(r)):
+                                            side_effect=lambda r, **kw: list(r)):
                                     with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                                         with patch("discovery_pipeline.CSV_REPORT",
                                                     output_dir / "top_candidates.csv"):
@@ -1162,7 +1162,7 @@ class TestExperimentalValidationDefaults:
                         with patch("discovery_pipeline.generate_candidate_library",
                                    side_effect=mock_gen):
                             with patch("discovery_pipeline.apply_filters",
-                                       side_effect=lambda r: list(r)):
+                                        side_effect=lambda r, **kw: list(r)):
                                 with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                                     with patch("discovery_pipeline.CSV_REPORT",
                                                 output_dir / "top_candidates.csv"):
