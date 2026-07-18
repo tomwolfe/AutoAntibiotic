@@ -238,10 +238,22 @@ _CEPHALOSPORIN_CORE = "CC1=C(C(=O)O)CSCC2C(=O)N3C(=O)C=C(C3C2=O)C(=O)O"
 _PENAM_CORE = "CC1(C)SC2C(N)C(=O)N2C1C(=O)O"
 _CARBAPENEM_CORE = "CC1C2C(C(=O)N2C(=C1C(=O)O)C(=O)O)SC3CCNC3=O"
 
+# Non-β-lactam PBP2a-related chemotypes added to the seed pool to broaden the
+# recombinant library beyond the β-lactam space. These are real, public SMILES
+# representing (a) a macolactin-A-like pyridone fragment, (b) a corbomycin-like
+# aglycone, and (c) a public non-β-lactam allosteric PBP2a chemotype. None are
+# β-lactams, so they enrich the non-β-lactam novelty axis of the screen.
+_MACOLACTIN_FRAGMENT = "CC1=CC(=O)NC(=O)1C2=CC=CC=C2"
+_CORBOMYCIN_AGLYCONE = "COc1ccc2c(c1)OC(C)C(=O)N2"
+_NON_BETA_LACTAM_PBP2A = "CN1C(=O)C(N=C1C(=O)O)SCC2=CC=CC=C2"
+
 DEFAULT_SEED_SMILES = list(CONTROL_SMILES.values()) + [
     _CEPHALOSPORIN_CORE,
     _PENAM_CORE,
     _CARBAPENEM_CORE,
+    _MACOLACTIN_FRAGMENT,
+    _CORBOMYCIN_AGLYCONE,
+    _NON_BETA_LACTAM_PBP2A,
 ]
 
 

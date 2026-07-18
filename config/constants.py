@@ -42,7 +42,7 @@ PDB_IDS = {
     "HUMAN_ALBUMIN": "1AO6",
     "CYP3A4": "1W0E",
     "HERG": "7CN1",
-    "CYP2D6": "MOCK_CYP2D6",
+    "CYP2D6": "1C5X",
 }
 
 # Reference antibiotics for similarity filtering (SMILES)
