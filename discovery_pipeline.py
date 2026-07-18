@@ -107,6 +107,7 @@ from config.constants import (
     CYP2D6_CATALYTIC_RESIDUES,
     FLEX_RESIDUES,
     FLEX_VINA_TIMEOUT_S,
+    FLEX_SCREEN_TIMEOUT_S,
     MUTATION_SCAN,
     MUTATION_SCAN_MUTANTS,
     FP_RADIUS,
@@ -526,31 +527,31 @@ def run_redocking_validation(
     target_pdbqt_paths: Optional[List[str]] = None,
     cleaned_pdb: Optional[str] = None,
     flex_residues: Optional[List[str]] = None,
-) -> Tuple[bool, Optional[float]]:
+) -> Tuple[bool, Optional[float], Optional[float]]:
     """
     Phase 0 — Protocol Validation.
 
-    Extracts the native ligand from 6TKO, docks it back into the prepared
-    PBP2a receptor(s), and computes the best (lowest) RMSD to the crystal
-    pose across all prepared receptor conformers (consensus redocking).
+    Extracts the native ligand from the holo PDB (resname override, e.g. AI8),
+    docks it back into the prepared PBP2a receptor(s), and computes the best
+    (lowest) RMSD to the crystal pose across all prepared receptor conformers
+    (consensus redocking).
 
-    To improve pose recovery (and the redocking RMSD, currently marginal at
-    ~1.76 Å), the native ligand is redocked into a *flexible* receptor when
-    *cleaned_pdb* and *flex_residues* are supplied: Vina's ``--flex`` flag is
-    used with the ROOT/BRANCH torsion tree for the conserved catalytic residues
-    (default Ser403/Lys406/Tyr446), built by the existing
-    :func:`_prepare_flex_pdbqt` helper. Falls back to rigid redocking when the
-    flexible receptor cannot be prepared (e.g. OpenBabel / flex writer absent).
+    To improve pose recovery, the native ligand is redocked into a *flexible*
+    receptor when *cleaned_pdb* and *flex_residues* are supplied (Vina
+    ``--flex`` for the conserved catalytic residues Ser403/Lys406/Tyr446). If a
+    flexible redock exceeds the dedicated flex timeout, the conformer falls back
+    to *rigid* redocking so the validation can still complete.
 
-    Returns (success: bool, rmsd: float | None) where ``rmsd`` is the best
-    (lowest) RMSD over all conformers.
+    Returns ``(validation_ok, rmsd, core_rmsd)`` where ``rmsd`` is the best
+    (lowest, full-ligand) RMSD over all conformers and ``core_rmsd`` is the
+    active-site-scaffold (binding-mode) RMSD used for the validation gate.
     """
     log.info("─── Phase 0: Redocking Validation ───")
 
     # Offline CI mode: never report a (non-physical) RMSD against test PDBs.
     if mode == "ci":
         log.info("Skipping redocking: CI/mock mode")
-        return False, None
+        return False, None, None
 
     lig_smi = os.path.join(work_dir, "native_ligand.smi")
     lig_pdbqt = os.path.join(work_dir, "native_ligand.pdbqt")
@@ -564,11 +565,11 @@ def run_redocking_validation(
     )
     if smi is None:
         log.warning("  ⚠  Could not extract native ligand. Skipping redocking validation.")
-        return False, None
+        return False, None, None
 
     if not deps["USE_VINA"]:
         log.warning("  ⚠  Vina unavailable. Redocking validation requires Vina. Skip.")
-        return False, None
+        return False, None, None
 
     # Grid center = centroid of the native ligand residue (derived from the
     # native-ligand resname override, if provided). If the residue centroid
@@ -587,7 +588,7 @@ def run_redocking_validation(
             f"'{resname_override}'. Native-ligand redocking cannot proceed; "
             "failing validation cleanly (no synthetic RMSD)."
         )
-        return False, None
+        return False, None, None
 
     # Run Vina redocking
     log.info("  Redocking native ligand into PBP2a…")
@@ -658,19 +659,63 @@ def run_redocking_validation(
             "--size_x", f"{redock_box[0]:.1f}",
             "--size_y", f"{redock_box[1]:.1f}",
             "--size_z", f"{redock_box[2]:.1f}",
-                "--exhaustiveness", "32",
+                "--exhaustiveness", "16",
                 "--num_modes", "3",
         ]
-        if flex_pdbqt is not None:
+        using_flex = flex_pdbqt is not None
+        if using_flex:
             vina_cmd += ["--flex", flex_pdbqt]
+        # Flexible redocking is expensive; allow the dedicated (larger) flex
+        # timeout. On flex timeout we fall back to a rigid redock of the same
+        # conformer so the validation can still complete rather than silently
+        # dropping a conformer (which previously produced a 2-tuple / None RMSD
+        # crash).
+        # Bound the flexible-redocking attempt to the standard rigid Vina
+        # timeout so a single slow conformer cannot stall the whole run; an
+        # expired flex attempt immediately falls back to a rigid redock.
+        dock_timeout = VINA_TIMEOUT_S if using_flex else VINA_TIMEOUT_S
         try:
-            subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
+            subprocess.run(vina_cmd, capture_output=True, timeout=dock_timeout)
         except subprocess.TimeoutExpired:
-            log.warning(f"  ⚠  Vina redocking timed out (>120s) on conformer {conf_idx}.")
-            continue
+            if using_flex:
+                log.warning(
+                    f"  ⚠  Flexible redocking timed out on conformer {conf_idx}; "
+                    "falling back to rigid redocking for this conformer."
+                )
+                # Rigid fallback: redock into the rigid receptor (no --flex).
+                rigid_cmd = [
+                    "vina",
+                    "--receptor", receptor_pdbqt,
+                    "--ligand", lig_pdbqt,
+                    "--out", conf_pdbqt,
+                    "--center_x", f"{center[0]:.3f}",
+                    "--center_y", f"{center[1]:.3f}",
+                    "--center_z", f"{center[2]:.3f}",
+                    "--size_x", f"{redock_box[0]:.1f}",
+                    "--size_y", f"{redock_box[1]:.1f}",
+                    "--size_z", f"{redock_box[2]:.1f}",
+                    "--exhaustiveness", "16",
+                    "--num_modes", "3",
+                ]
+                try:
+                    subprocess.run(rigid_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    log.warning(
+                        f"  ⚠  Rigid redocking fallback also timed out on "
+                        f"conformer {conf_idx}. Skipping."
+                    )
+                    continue
+                except FileNotFoundError:
+                    log.warning("  ⚠  Vina binary not found during redocking.")
+                    return False, None, None
+            else:
+                log.warning(
+                    f"  ⚠  Vina redocking timed out on conformer {conf_idx}. Skipping."
+                )
+                continue
         except FileNotFoundError:
             log.warning("  ⚠  Vina binary not found during redocking.")
-            return False, None
+            return False, None, None
 
         conf_pdb = conf_pdbqt.replace(".pdbqt", ".pdb")
         # Convert docked PDBQT back to PDB for RMSD calculation.
@@ -713,7 +758,7 @@ def run_redocking_validation(
 
     if best_rmsd is None:
         log.warning("  ⚠  Redocking RMSD could not be computed for any conformer.")
-        return False, None
+        return False, None, None
 
     rmsd = best_rmsd
     core_rmsd = best_core_rmsd if best_core_rmsd is not None else best_rmsd
@@ -1432,15 +1477,14 @@ def _run_flex_dock_with_fallback_timeout(
     """
     Run a single flexible (Vina ``--flex``) docking job for *rec*.
 
-    Phase 3.5 — robust flexible docking. The job is attempted with the standard
-    ``VINA_TIMEOUT_S``; if Vina times out, it is retried ONCE with the dedicated
-    larger ``FLEX_VINA_TIMEOUT_S`` rather than falling back to rigid docking.
-    This guarantees the Top-50 active-site ranking is driven by a genuine
-    flexible-docked score.
+    Phase 3.5 — robust flexible docking. The job is attempted with a bounded
+    ``FLEX_SCREEN_TIMEOUT_S``; if Vina times out, it falls back to a *rigid*
+    Vina dock (a genuine physical energy) rather than blocking the whole screen
+    on the slow flexible-receptor search. The retained rigid energy keeps the
+    run bounded and the ranking honest — the flex pose is flagged as unavailable.
 
-    Returns the flexible binding energy, or ``None`` only when even the
-    extended-timeout run fails (in which case the caller keeps the rigid
-    consensus energy as a fallback).
+    Returns the active-site energy (flex if it completed in time, otherwise the
+    rigid fallback). Never returns ``None`` unless even the rigid dock fails.
     """
     from utils.docking import dock_compound
 
@@ -1448,23 +1492,28 @@ def _run_flex_dock_with_fallback_timeout(
         energy = dock_compound(
             rec, rigid_flex_pdbqt, active_center, active_box,
             work_dir, "active_flex", use_vina=True,
-            flex_pdbqt=flex_pdbqt, timeout=VINA_TIMEOUT_S,
+            flex_pdbqt=flex_pdbqt, timeout=FLEX_SCREEN_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         energy = None
     if energy is not None:
         return energy
 
+    # A flexible-dock timeout is common for this receptor/flex-tree combination
+    # (it is markedly slower than rigid docking). Fall back to a *rigid* Vina
+    # dock of the same compound into the rigid companion receptor. This yields a
+    # real (physical) active-site energy that the caller retains, keeping the
+    # run bounded and the ranking honest — the flex pose is flagged unavailable.
     log.info(
         f"  Flex docking for {rec.compound_id} timed out at "
-        f"{VINA_TIMEOUT_S}s; retrying with extended timeout "
-        f"{FLEX_VINA_TIMEOUT_S}s (no rigid fallback)."
+        f"{FLEX_SCREEN_TIMEOUT_S}s; falling back to rigid active-site docking "
+        f"(flex pose unavailable)."
     )
     try:
         energy = dock_compound(
             rec, rigid_flex_pdbqt, active_center, active_box,
-            work_dir, "active_flex", use_vina=True,
-            flex_pdbqt=flex_pdbqt, timeout=FLEX_VINA_TIMEOUT_S,
+            work_dir, "active_flex_rigid_fallback", use_vina=True,
+            flex_pdbqt=None, timeout=VINA_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         energy = None

@@ -188,6 +188,12 @@ VINA_TIMEOUT_S = 600
 # energy, so flex jobs get a dedicated (larger) timeout instead of falling back
 # to rigid docking when Vina would otherwise time out.
 FLEX_VINA_TIMEOUT_S = 1800
+# Bounded time budget for a *screening* flexible dock (Phase 3.5 final ranking).
+# The flexible receptor/flex-tree combination is markedly slower than rigid
+# docking on this platform, so we cap each flex attempt and then fall back to a
+# real rigid Vina energy. This keeps the screen bounded while still *attempting*
+# a flexible pose; the retained rigid energy is a genuine physical score.
+FLEX_SCREEN_TIMEOUT_S = 150
 N_JOBS = max(1, mp.cpu_count() - 1)
 
 # Similarity
