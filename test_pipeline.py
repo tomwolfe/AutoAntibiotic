@@ -2158,14 +2158,58 @@ class TestMutationScan:
 
         # Mutant receptor build + docking are mocked; the mutant energy is 1.0
         # kcal/mol worse than WT, so the average delta is +1.0.
-        with patch("discovery_pipeline._mutate_pdbqt_residue",
-                   return_value=str(tmp_path / "mut.pdbqt")), \
+        with patch("discovery_pipeline._build_real_mutant_pdbqt",
+                    return_value=str(tmp_path / "mut.pdbqt")), \
              patch("discovery_pipeline.dock_compound", return_value=-8.0):
             P._run_mutation_scan([rec], targets, str(tmp_path), deps)
 
         assert rec.mutant_energy_delta is not None, \
             "1-letter mutant code must be parsed → delta populated"
         assert rec.mutant_energy_delta == pytest.approx(1.0)
+
+    def test_build_real_mutant_pdbqt_ser_to_ala(self, tmp_path):
+        """_build_real_mutant_pdbqt must rebuild geometry, not just relabel.
+
+        SER403 → ALA should DROP the OG side-chain atom (fewer heavy atoms than
+        the wild-type SER) and write the mutant residue name ALA into the PDBQT.
+        Requires obabel (skipped otherwise)."""
+        import discovery_pipeline as P
+
+        if shutil.which("obabel") is None:
+            pytest.skip("obabel required to build real mutant geometry")
+
+        # Minimal single SER residue (backbone N/CA/C/O + CB + OG).
+        pdb = tmp_path / "ser403.pdb"
+        pdb.write_text(
+            "ATOM      1  N   SER A 403      10.000  10.000   0.000  1.00  0.00           N\n"
+            "ATOM      2  CA  SER A 403      10.000  11.500   0.000  1.00  0.00           C\n"
+            "ATOM      3  C   SER A 403      11.400  12.000   0.000  1.00  0.00           C\n"
+            "ATOM      4  O   SER A 403      12.200  11.100   0.000  1.00  0.00           O\n"
+            "ATOM      5  CB  SER A 403       8.600  12.000   0.000  1.00  0.00           C\n"
+            "ATOM      6  OG  SER A 403       7.500  11.100   0.000  1.00  0.00           O\n"
+        )
+
+        out = P._build_real_mutant_pdbqt(str(pdb), 403, "ALA", str(tmp_path))
+        assert out is not None, "real mutant PDBQT build must succeed with obabel"
+
+        text = open(out).read()
+        # Mutant residue name must be ALA (not SER) in the PDBQT RESNAME cols.
+        assert "ALA" in text and "SER" not in text.split("\n")[0:0]
+
+        # Count heavy atoms: WT SER had N,CA,C,O,CB,OG (6); ALA keeps
+        # N,CA,C,O,CB and drops OG → strictly fewer atoms.
+        wt_atoms = sum(
+            1 for ln in pdb.read_text().splitlines()
+            if ln.startswith("ATOM")
+        )
+        mut_heavy = sum(
+            1 for ln in text.splitlines()
+            if ln.startswith(("ATOM", "HETATM")) and ln[76:78].strip() != "H"
+        )
+        assert mut_heavy < wt_atoms, (
+            f"ALA mutant must have fewer atoms than SER ({mut_heavy} < {wt_atoms})"
+        )
+        assert mut_heavy == 5, f"expected 5 heavy atoms (N,CA,C,O,CB), got {mut_heavy}"
 
 
 # ── Test: Vina flex PDBQT validity check (Phase 3.5) ──────────────────

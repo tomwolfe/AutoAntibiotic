@@ -226,11 +226,23 @@ def _save_brics_cache(cache_path: str, fragments: List[str]) -> None:
 # compounds without editing source.
 EXTERNAL_LIB_CSV_ENV = "AUTOANTIBIOTIC_LIB_CSV"
 
-# Known β-lactam binders used to bias BRICS recombination: their fragments are
-# decomposed and allowed into the fragment pool so the recombinant library is
-# enriched toward credible PBP2a-binding chemotypes. Defaults to ceftaroline &
-# meropenem (from CONTROL_SMILES); overridable via ``seed_smiles``.
-DEFAULT_SEED_SMILES = list(CONTROL_SMILES.values())
+# Known β-lactam / PBP2a-binding fragments used to bias BRICS recombination:
+# their BRICS fragments are allowed into the fragment pool so the recombinant
+# library is enriched toward credible PBP2a-binding chemotypes — and, because
+# most literature hits are allosteric, a broader seed chemotype set raises the
+# chance of an active-site competitor surviving enrichment. Defaults to
+# ceftaroline & meropenem (from CONTROL_SMILES) plus a cephalosporin-core
+# fragment and two public ceftaroline-class β-lactam cores; overridable via
+# ``seed_smiles``. BRICSBuild logic and minFragmentSize (6) are unchanged.
+_CEPHALOSPORIN_CORE = "CC1=C(C(=O)O)CSCC2C(=O)N3C(=O)C=C(C3C2=O)C(=O)O"
+_PENAM_CORE = "CC1(C)SC2C(N)C(=O)N2C1C(=O)O"
+_CARBAPENEM_CORE = "CC1C2C(C(=O)N2C(=C1C(=O)O)C(=O)O)SC3CCNC3=O"
+
+DEFAULT_SEED_SMILES = list(CONTROL_SMILES.values()) + [
+    _CEPHALOSPORIN_CORE,
+    _PENAM_CORE,
+    _CARBAPENEM_CORE,
+]
 
 
 def generate_candidate_library(

@@ -25,7 +25,12 @@ from rdkit.Chem.Draw import rdMolDraw2D
 
 from Bio.PDB import PDBParser
 
-from config.constants import OUTPUT_DIR, CSV_REPORT, protocol_trust
+from config.constants import (
+    OUTPUT_DIR,
+    CSV_REPORT,
+    protocol_trust,
+    SELECTIVITY_INDEX_THRESHOLD,
+)
 
 # A module-level logger sharing the pipeline's "AutoAntibiotic" logger name so
 # that handlers configured in discovery_pipeline capture these messages too.
@@ -249,7 +254,13 @@ def generate_csv_report(
             "Max_Similarity": f"{rec.max_similarity:.3f}",
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
-            "Binding_Mode_Notes": rec.resistance_notes.replace("; ", " | "),
+            "Binding_Mode_Notes": (
+                rec.resistance_notes.replace("; ", " | ")
+                + (" (below SI gate)"
+                   if rec.selectivity_index is not None
+                   and rec.selectivity_index < SELECTIVITY_INDEX_THRESHOLD
+                   else "")
+            ),
             "Protocol_RMSD": protocol_rmsd_str,
             "protocol_trust": protocol_trust_val,
             "H_Bond_Ser403": str(h_ser),

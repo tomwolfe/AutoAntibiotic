@@ -318,7 +318,10 @@ proteins (Trypsin, CES1, Serum Albumin [1AO6], CYP3A4 [1W0E], hERG [7CN1], and
 CYP2D6); new residue lists live in `config/targets.yaml`
 (`ALBUMIN_CATALYTIC_RESIDUES`, `CYP3A4_CATALYTIC_RESIDUES`,
 `HERG_CATALYTIC_RESIDUES`, `CYP2D6_CATALYTIC_RESIDUES`) with sane defaults in
-`config/constants.py`, and the SI threshold stays at 2.0. (5) **Quantitative
+`config/constants.py`, and the SI threshold stays at 2.0. **hERG and CYP2D6 are
+optional off-targets and are skipped in offline/CI runs** (CYP2D6 uses a MOCK
+placeholder PDB by default); their energies are flagged "(mock)" in the report and
+must not be read as a physically real panel. (5) **Quantitative
 mutation scan** — toggle `mutation_scan: true` in `config/targets.yaml` (default
 on); for the top candidates the active-site pose is re-docked against three PBP2a
 mutants (S403A, K406A, Y446A) built by mutating the apo PDBQT, and the mean

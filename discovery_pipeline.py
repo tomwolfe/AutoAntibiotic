@@ -1159,8 +1159,18 @@ def prepare_targets(
         ("Human Ether-à-go-go (hERG)", "HERG", HERG_CATALYTIC_RESIDUES, "herg", True),
         ("Human CYP2D6", "CYP2D6", CYP2D6_CATALYTIC_RESIDUES, "cyp2d6", True),
     ):
+        pdb_id = PDB_IDS.get(pdb_key)
+        # Off-target honesty: surface clearly when an off-target is a mock
+        # placeholder (no real PDB) or an optional target was skipped, so the
+        # report's selectivity confidence ("mock") is not mistaken for a real
+        # panel run (paper §4.1b). No behaviour changes — just a loud log line.
+        if pdb_id and str(pdb_id).startswith("MOCK_"):
+            log.warning(
+                f"  ⚠  {label} ({pdb_key}) uses a MOCK placeholder PDB "
+                f"({pdb_id}); its off-target energies are not physically real."
+            )
         try:
-            pdb_path = _resolve_structure(PDB_IDS[pdb_key])
+            pdb_path = _resolve_structure(pdb_id)
         except Exception as exc:
             if optional:
                 log.warning(
@@ -2031,6 +2041,258 @@ def _mutate_pdbqt_residue(
         return None
 
 
+# Standard L-amino-acid residue SMILES (neutral, free N-terminus / carboxyl) used
+# to generate real mutant side-chain geometry. Optically-active forms are written
+# so obabel/RDKit produce a physically reasonable 3D residue.
+_AA_RESIDUE_SMILES = {
+    "ALA": "N[C@@H](C)C(=O)O",
+    "ARG": "N[C@@H](CCCCN=C(N)N)C(=O)O",
+    "ASN": "N[C@@H](CC(=O)N)C(=O)O",
+    "ASP": "N[C@@H](CC(=O)O)C(=O)O",
+    "CYS": "N[C@@H](CS)C(=O)O",
+    "GLN": "N[C@@H](CCC(=O)N)C(=O)O",
+    "GLU": "N[C@@H](CCC(=O)O)C(=O)O",
+    "GLY": "NCC(=O)O",
+    "HIS": "N[C@@H](Cc1c[nH]cn1)C(=O)O",
+    "ILE": "N[C@@H](C(C)CC)C(=O)O",
+    "LEU": "N[C@@H](CC(C)C)C(=O)O",
+    "LYS": "N[C@@H](CCCCN)C(=O)O",
+    "MET": "N[C@@H](CCSC)C(=O)O",
+    "PHE": "N[C@@H](Cc1ccccc1)C(=O)O",
+    "PRO": "O=C(O)[C@H]1CCCN1",
+    "SER": "N[C@@H](CO)C(=O)O",
+    "THR": "N[C@@H](C(O)C)C(=O)O",
+    "TRP": "N[C@@H](Cc1c2ccccc2ncn1)C(=O)O",
+    "TYR": "N[C@@H](Cc1ccc(O)cc1)C(=O)O",
+    "VAL": "N[C@@H](C(C)C)C(=O)O",
+}
+
+# Backbone atoms whose coordinates are always inherited from the wild-type
+# residue to keep the mutant embedded in the native protein frame.
+_BACKBONE_ATOMS = {"N", "CA", "C", "O"}
+
+# Atom names never present in an in-protein residue (free-term caps produced by
+# the residue SMILES generator, e.g. the C-terminal OXT) must be dropped so the
+# rebuilt residue matches the wild-type backbone frame (1 fewer atom for SER→ALA).
+_DROP_ATOM_NAMES = {"OXT"}
+
+
+def _generate_residue_pdb(resname: str, work_dir: str) -> Optional[str]:
+    """
+    Generate a 3D PDB of a single amino-acid residue *resname* into *work_dir*.
+
+    Prefers ``obabel --gen3d``; falls back to RDKit (AddHs + EmbedMolecule +
+    MMFF optimise) when obabel is unavailable. Returns the PDB path or None.
+    """
+    smi = _AA_RESIDUE_SMILES.get(resname)
+    if not smi:
+        return None
+    out = os.path.join(work_dir, f"_aa_{resname}.pdb")
+    try:
+        res = subprocess.run(
+            ["obabel", "-:" + smi, "-O", out, "--gen3d"],
+            capture_output=True, timeout=60,
+        )
+        if res.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+            return out
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    try:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            return None
+        mol = Chem.AddHs(mol)
+        from rdkit.Chem import AllChem
+        if AllChem.EmbedMolecule(mol, randomSeed=RANDOM_SEED) != 0:
+            return None
+        AllChem.MMFFOptimizeMolecule(mol)
+        Chem.MolToPDBFile(mol, out)
+        return out
+    except Exception:
+        return None
+
+
+def _parse_pdb_heavy_atoms(path: str) -> List[Tuple[str, str, Tuple[float, float, float]]]:
+    """Return ``(atom_name, element, (x,y,z))`` for heavy atoms in a PDB."""
+    atoms = []
+    with open(path) as fh:
+        for line in fh:
+            if not line.startswith(("ATOM", "HETATM")):
+                continue
+            name = line[12:16].strip()
+            elem = (line[76:78].strip() or (name[0] if name else "C"))
+            if not name:
+                continue
+            try:
+                x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+            except (ValueError, IndexError):
+                continue
+            if elem.upper() == "H":
+                continue
+            atoms.append((name, elem, (x, y, z)))
+    return atoms
+
+
+def _kabsch_align(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """
+    Return a 3x3 rotation matrix R that best maps *src* onto *dst* (Kabsch).
+
+    Both arrays are (n,3) with corresponding points. A pure rotation (no
+    scaling/translation) is returned; the caller centres before applying.
+    """
+    src_c = src - src.mean(axis=0)
+    dst_c = dst - dst.mean(axis=0)
+    H = src_c.T @ dst_c
+    U, _S, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    D = np.diag([1.0, 1.0, d])
+    R = Vt.T @ D @ U.T
+    return R
+
+
+def _build_real_mutant_pdbqt(
+    wt_cleaned_pdb: str,
+    residue_id: int,
+    new_resname: str,
+    work_dir: str,
+) -> Optional[str]:
+    """
+    Build a mutant receptor PDBQT with *real* rebuilt side-chain geometry.
+
+    Loads the wild-type cleaned PDB (Bio.PDB), keeps the target residue's
+    backbone (N/CA/C/O) in its native protein frame, and replaces the side
+    chain with the mutant's geometry. The mutant residue is generated 3D via
+    obabel ``--gen3d`` (RDKit fallback), its backbone is Kabsch-superposed onto
+    the wild-type backbone, and the transformed side-chain atoms are merged back
+    in. The rebuilt single-residue PDB is then converted to a Vina PDBQT via the
+    existing :func:`clean_pdb_structure` (obabel ``-xr``) path.
+
+    This replaces the coarse string-replace mutation (which only swapped the
+    residue name in the PDBQT columns) with a structurally meaningful model, so
+    the reported mutant ΔG reflects a real change in side-chain volume/chemistry
+    rather than a label swap. Returns the mutant PDBQT path, or ``None`` if the
+    mutant cannot be built (callers should fall back to the string-replace).
+    """
+    if not wt_cleaned_pdb or not os.path.exists(wt_cleaned_pdb):
+        return None
+    try:
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("wt", wt_cleaned_pdb)
+
+        # Locate the target residue (standard polymer residue, seq == residue_id).
+        wt_res = None
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    if residue.get_id()[0] != " ":
+                        continue
+                    if residue.get_id()[1] == residue_id:
+                        wt_res = residue
+                        break
+                if wt_res is not None:
+                    break
+            if wt_res is not None:
+                break
+        if wt_res is None:
+            log.warning(
+                f"  ⚠  Real mutant build: residue {residue_id} not found in "
+                f"{wt_cleaned_pdb}; skipping."
+            )
+            return None
+
+        # Wild-type backbone coordinates (N/CA/C/O) must exist to anchor the mutant.
+        wt_bb = {}
+        for atom in wt_res:
+            nm = atom.get_name().strip()
+            if nm in _BACKBONE_ATOMS:
+                wt_bb[nm] = tuple(float(v) for v in atom.get_vector())
+        if len(wt_bb) < 3:
+            log.warning(
+                f"  ⚠  Real mutant build: incomplete backbone for {residue_id}; "
+                "skipping."
+            )
+            return None
+
+        # Generate the mutant residue geometry.
+        mut_pdb = _generate_residue_pdb(new_resname, work_dir)
+        if mut_pdb is None:
+            return None
+        mut_atoms = _parse_pdb_heavy_atoms(mut_pdb)
+        if not mut_atoms:
+            return None
+        mut_atoms = [a for a in mut_atoms if a[0] not in _DROP_ATOM_NAMES]
+
+        mut_bb = {nm: c for nm, el, c in mut_atoms if nm in _BACKBONE_ATOMS}
+        bb_keys = [k for k in ("N", "CA", "C", "O") if k in wt_bb and k in mut_bb]
+        if len(bb_keys) < 3:
+            return None
+
+        # Superpose mutant backbone onto wild-type backbone.
+        src = np.array([mut_bb[k] for k in bb_keys], dtype=float)
+        dst = np.array([wt_bb[k] for k in bb_keys], dtype=float)
+        R = _kabsch_align(src, dst)
+        src_c = src - src.mean(axis=0)
+        dst_c = dst - dst.mean(axis=0)
+        t = dst_c.mean(axis=0) - R @ src_c.mean(axis=0)
+
+        # Map of mutant side-chain coordinates (transformed into WT frame).
+        mut_side = {}
+        for nm, el, c in mut_atoms:
+            if nm in _BACKBONE_ATOMS:
+                continue
+            p = np.array(c, dtype=float)
+            mut_side[nm] = (tuple((R @ (p - src.mean(axis=0)) + t).tolist()), el)
+
+        # Assemble the output single-residue PDB: backbone (WT coords) first in
+        # WT order, then any mutant side-chain atoms not already present. Atom
+        # names are RIGHT-justified in the standard PDB columns (e.g. " N  ",
+        # " CA ") so obabel -xr and RDKit parse the residue unambiguously (a
+        # left-justified name with a polar side-chain atom such as OG otherwise
+        # fails to parse and yields an empty PDBQT).
+        chain_id = wt_res.get_parent().get_id()
+        out_lines = [
+            "REMARK  AutoAntibiotic real mutant build "
+            f"{wt_res.get_resname().strip()}->{new_resname}@{residue_id}"
+        ]
+        serial = 1
+        written = set()
+        bb_order = [nm for nm in ("N", "CA", "C", "O") if nm in wt_bb]
+        for nm in bb_order:
+            el = wt_res[nm].element if nm in wt_res else nm[0]
+            x, y, z = wt_bb[nm]
+            out_lines.append(
+                f"ATOM  {serial:5d} {nm:>4s} {new_resname:>3s} {chain_id:>1s}"
+                f"{residue_id:4d}    {x:8.3f}{y:8.3f}{z:8.3f}"
+                f"  1.00  0.00          {el:>2s}"
+            )
+            written.add(nm)
+            serial += 1
+        for nm, (c, el) in mut_side.items():
+            if nm in written:
+                continue
+            x, y, z = c
+            out_lines.append(
+                f"ATOM  {serial:5d} {nm:>4s} {new_resname:>3s} {chain_id:>1s}"
+                f"{residue_id:4d}    {x:8.3f}{y:8.3f}{z:8.3f}"
+                f"  1.00  0.00          {el:>2s}"
+            )
+            written.add(nm)
+            serial += 1
+
+        frag_pdb = os.path.join(work_dir, f"PBP2a_mut_{residue_id}{new_resname}.pdb")
+        with open(frag_pdb, "w") as fh:
+            fh.write("\n".join(out_lines) + "\n")
+
+        # Convert to Vina PDBQT via the existing cleaning path (obabel -xr). Pass
+        # the .pdb fragment and let clean_pdb_structure derive its own .pdbqt
+        # (it internally rewrites ".pdb" → ".pdbqt"; a pre-suffixed path would
+        # double the extension and break obabel's format detection).
+        return clean_pdb_structure(frag_pdb, frag_pdb)
+    except Exception as exc:
+        log.warning(f"  ⚠  Real mutant build failed ({exc}); skipping.")
+        return None
+
+
 def _run_mutation_scan(
     top10: List[CompoundRecord],
     targets: dict,
@@ -2115,7 +2377,13 @@ def _run_mutation_scan(
 
         deltas = []
         for label, res_id, new_name in mutant_specs:
-            mut_pdbqt = _mutate_pdbqt_residue(wt_pdbqt, work_dir, res_id, new_name)
+            # Prefer a structurally real mutant (rebuilt side chain). Fall back to
+            # the coarse string-replace only when the real build is impossible.
+            mut_pdbqt = _build_real_mutant_pdbqt(
+                pb2pa.get("cleaned_pdb"), res_id, new_name, work_dir,
+            )
+            if mut_pdbqt is None:
+                mut_pdbqt = _mutate_pdbqt_residue(wt_pdbqt, work_dir, res_id, new_name)
             if mut_pdbqt is None:
                 continue
             try:
