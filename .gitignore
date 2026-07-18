@@ -24,6 +24,9 @@ env/
 # macOS
 .DS_Store
 
+# Run log
+run_log.txt
+
 # IDE / editor
 .vscode/
 .idea/
