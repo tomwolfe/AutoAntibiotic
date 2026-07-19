@@ -410,7 +410,7 @@ class TestRedockingValidation:
                     work_dir=str(tmp_path),
                     deps=deps,
                 )
-        assert result == (False, None), f"Expected (False, None), got {result}"
+        assert result == (False, None, None), f"Expected (False, None, None), got {result}"
 
 
 class TestMockRedockingSkip:
@@ -440,7 +440,7 @@ class TestMockRedockingSkip:
                     work_dir=str(tmp_path),
                     deps=deps,
                 )
-        assert result == (False, None), f"Expected (False, None), got {result}"
+        assert result == (False, None, None), f"Expected (False, None, None), got {result}"
 
 
 # ── Test: Redocking box auto-size ─────────────────────────────────────────
@@ -723,7 +723,7 @@ class TestRealPDBSmoke:
                             with patch("discovery_pipeline.fetch_structure",
                                         side_effect=mock_fetch_structure):
                                 with patch("discovery_pipeline.run_redocking_validation",
-                                            return_value=(False, None)):
+                                            return_value=(False, None, None)):
                                     with patch("discovery_pipeline.OUTPUT_DIR", output_dir):
                                         with patch("discovery_pipeline.CSV_REPORT",
                                                     output_dir / "top_candidates.csv"):
@@ -1056,7 +1056,7 @@ class TestMainRedockingGate:
             with patch("discovery_pipeline.prepare_targets",
                         return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
-                            return_value=(False, None)):
+                            return_value=(False, None, None)):
                     with patch("discovery_pipeline.load_config",
                                 return_value={"mode": "ci"}):
                         with patch("discovery_pipeline.screen_library",
@@ -1109,7 +1109,7 @@ class TestMainRedockingGate:
             with patch("discovery_pipeline.prepare_targets",
                         return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
-                            return_value=(False, None)):
+                            return_value=(False, None, None)):
                     with patch("discovery_pipeline.screen_library",
                                 side_effect=mock_screen_library):
                         with patch.dict(os.environ, {"AUTOANTIBIOTIC_FORCE": "1"}):
@@ -1157,7 +1157,7 @@ class TestExperimentalValidationDefaults:
             with patch("discovery_pipeline.prepare_targets",
                        return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
-                           return_value=(False, None)):
+                           return_value=(False, None, None)):
                     with patch.dict(os.environ, {}, clear=False):
                         os.environ.pop("AUTOANTIBIOTIC_FORCE", None)
                         with patch("discovery_pipeline.generate_candidate_library",
@@ -1987,12 +1987,16 @@ class TestWiderSelectivityPanel:
                 {"vina": True, "USE_VINA": True},
             )
 
-        # human_min should be the best (most negative) across all 4 = -4.0.
-        # SI = |PBP2a| / |human_min| = 10.0 / 4.0 = 2.5.
+        # human_min across all 4 = -4.0 → OLD pan-panel SI = 10.0/4.0 = 2.5
+        # (preserved as Selectivity_Index_PanPanel for transparency).
         assert out[0].human_albumin_energy == -2.0
         assert out[0].human_cyp3a4_energy == -1.0
+        assert out[0].selectivity_index_panpanel == pytest.approx(2.5)
+        # NEW primary SI uses ONLY the selectivity panel (trypsin=-4.0,
+        # ces1=-3.0) → min = -4.0 → SI = 10.0/4.0 = 2.5. (The liability panel
+        # albumin/cyp3a4 are excluded from the denominator.)
         assert out[0].selectivity_index == pytest.approx(2.5)
-        # 4 human targets → High confidence.
+        # 2 selectivity-panel targets valid → High confidence.
         assert out[0].selectivity_confidence == "High"
 
     def test_raw_si_not_zeroed_on_tight_offtarget(self, tmp_path):
@@ -2056,6 +2060,94 @@ class TestWiderSelectivityPanel:
         assert out[0].selectivity_index == pytest.approx(3.0)
         # A clash (>0) is not a real binder, so no off-target risk.
         assert out[0].off_target_risk is False
+
+
+class TestMechanismRestrictedSelectivity:
+    """Task 1 — SI uses ONLY the selectivity panel (trypsin, CES1) in its
+    denominator; a tight LIABILITY-panel binder (CYP3A4) must NOT lower SI but
+    MUST set Off_Target_Risk=True. Also covers SI_vs_Ceftaroline."""
+
+    def _run(self, tmp_path, pb2pa_e, trypsin_e, ces1_e, cyp3a4_e,
+             albumin_e=None, herg_e=None, cyp2d6_e=None):
+        records = [
+            CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                           mol=Chem.MolFromSmiles("c1ccccc1"))
+        ]
+        records[0].pb2pa_active_energy = pb2pa_e
+
+        # Build a targets dict for every panel member used.
+        targets = {
+            "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
+            "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
+        }
+        fixed = {"trypsin": trypsin_e, "ces1": ces1_e}
+        for key, e in (("cyp3a4", cyp3a4_e), ("albumin", albumin_e),
+                       ("herg", herg_e), ("cyp2d6", cyp2d6_e)):
+            if e is not None:
+                targets[key] = {"pdbqt": f"{key}.pdbqt",
+                                "active_center": np.zeros(3)}
+                fixed[key] = e
+
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
+                          dock_func=None, use_vina=True):
+            return [(r, fixed[tag]) for r in recs]
+
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            return analyze_selectivity_and_resistance(
+                records, targets, str(tmp_path),
+                {"vina": True, "USE_VINA": True},
+            )
+
+    def test_liability_cyp3a4_does_not_lower_si(self, tmp_path):
+        """A tight CYP3A4 energy (-9.5) must NOT lower the mechanism-restricted
+        SI (denominator stays trypsin/CES1), but MUST set Off_Target_Risk."""
+        out = self._run(tmp_path, pb2pa_e=-9.0, trypsin_e=-3.0, ces1_e=-4.0,
+                        cyp3a4_e=-9.5)
+        rec = out[0]
+        # SI denominator = min(trypsin=-3, ces1=-4) = -4.0 → SI = 9/4 = 2.25.
+        # A CYP3A4 of -9.5 must NOT pull the denominator to -9.5.
+        assert rec.selectivity_index == pytest.approx(2.25)
+        assert rec.off_target_risk is True
+        # The liability energy still reaches its own column (honest reporting).
+        assert rec.human_cyp3a4_energy == -9.5
+        # Pan-panel SI (OLD) DOES include cyp3a4 as denominator = 9/9.5 = 0.95.
+        assert rec.selectivity_index_panpanel == pytest.approx(9.0 / 9.5)
+
+    def test_passes_gate_with_mechanism_restricted_si(self, tmp_path):
+        """When trypsin/CES1 bind weakly, the NEW SI can exceed the 2.0 gate even
+        though the OLD pan-panel SI fails (liability panel dominates)."""
+        out = self._run(tmp_path, pb2pa_e=-9.0, trypsin_e=-2.0, ces1_e=-2.0,
+                        cyp3a4_e=-10.0)
+        rec = out[0]
+        # NEW SI = 9/2 = 4.5 → passes the mechanism-restricted gate.
+        assert rec.selectivity_index == pytest.approx(4.5)
+        assert rec.selectivity_index >= 2.0
+        # OLD pan-panel SI = 9/10 = 0.9 → would have failed the old gate.
+        assert rec.selectivity_index_panpanel == pytest.approx(0.9)
+        # But the candidate is still flagged as a liability risk (honest).
+        assert rec.off_target_risk is True
+
+    def test_si_vs_ceftaroline_transparency(self, tmp_path):
+        """SI_vs_Ceftaroline = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E (7.3),
+        computed with NO covalent bonus. Matches the configured control energy."""
+        from config.constants import CEFTAROLINE_CONTROL_E
+        out = self._run(tmp_path, pb2pa_e=-7.3, trypsin_e=-2.0, ces1_e=-3.0,
+                        cyp3a4_e=None)
+        rec = out[0]
+        assert rec.si_vs_ceftaroline == pytest.approx(
+            abs(-7.3) / CEFTAROLINE_CONTROL_E)
+        # Stronger PBP2a binder → higher SI_vs_Ceftaroline; no warhead bonus.
+        assert rec.si_covalent is None
+        assert rec.warhead_type == "none"
+
+    def test_si_vs_ceftaroline_populated_for_all(self, tmp_path):
+        """SI_vs_Ceftaroline is populated whenever a PBP2a energy exists,
+        independently of human panel availability."""
+        out = self._run(tmp_path, pb2pa_e=-10.0, trypsin_e=-3.0, ces1_e=-4.0,
+                        cyp3a4_e=-9.0)
+        assert out[0].si_vs_ceftaroline is not None
+        assert out[0].si_vs_ceftaroline == pytest.approx(10.0 / 7.3)
+
 
 
 # ── Test: Flexible-residue PDBQT torsion tree (Vina --flex) ──────────
@@ -2405,7 +2497,7 @@ class TestProtocolValidationTightening:
     that completes within the wall-clock budget.
     """
 
-    def test_redocking_uses_exhaustiveness_32(self, tmp_path):
+    def test_redocking_uses_exhaustiveness_16(self, tmp_path):
         import discovery_pipeline as P
 
         cmd_captured = {}
@@ -2434,14 +2526,14 @@ class TestProtocolValidationTightening:
             )
         assert "--exhaustiveness" in cmd_captured["cmd"]
         ex_idx = cmd_captured["cmd"].index("--exhaustiveness")
-        assert cmd_captured["cmd"][ex_idx + 1] == "32"
+        assert cmd_captured["cmd"][ex_idx + 1] == "16"
 
-    def test_redocking_box_uses_2A_padding(self):
+    def test_redocking_box_uses_3A_padding(self):
         import discovery_pipeline as P
-        # The redocking box must be sized with the tighter 2.0 Å padding (rather
+        # The redocking box must be sized with the tighter 3.0 Å padding (rather
         # than the default 6.0 Å) when run_redocking_validation calls
         # _redocking_box_size. We patch the sizing helper and assert it was
-        # invoked with redock_padding=2.0.
+        # invoked with redock_padding=3.0.
         captured = {}
 
         def fake_size(ligand_pdbqt, center, min_size=15.0, padding=6.0,
@@ -2471,7 +2563,7 @@ class TestProtocolValidationTightening:
                 deps, mode="science",
                 config={"native_ligand_resname": "LIG"},
             )
-        assert captured.get("redock_padding") == 2.0
+        assert captured.get("redock_padding") == 3.0
 
 
 # ── Test: Reporting adds Phase 3.5 columns ───────────────────────────

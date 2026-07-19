@@ -28,6 +28,30 @@ targets:
   HERG_CATALYTIC_RESIDUES: ["SER624", "TYR652", "PHE656"]
   CYP2D6_CATALYTIC_RESIDUES: ["ASP301", "GLU216", "SER304"]
 
+# ── Selectivity panel split (Task 1) ───────────────────────────────────────
+# The human off-target panel is split into two groups with distinct scientific
+# roles (see CHANGELOG / paper §Methods):
+#
+#   SELECTIVITY_PANEL_TARGETS — mechanistically relevant human serine hydrolases
+#     (Trypsin, CES1). These have narrow, sterically gated catalytic sites that
+#     the seed library was explicitly designed to avoid. The PRIMARY Selectivity
+#     Index (SI) uses ONLY this panel as its denominator, so it measures the
+#     property the design intent actually targets.
+#
+#   LIABILITY_PANEL_TARGETS — promiscuous sinks (CYP3A4, albumin, hERG, CYP2D6)
+#     that bind any aromatic acid at -9 to -10.5 kcal/mol. They MUST NEVER enter
+#     the SI denominator; they feed the Off_Target_Risk flag and are reported as
+#     their own energy columns.
+#
+# The OLD pan-panel SI (all human off-targets in the denominator) is preserved as
+# a separate column (Selectivity_Index_PanPanel) for full transparency.
+selectivity:
+  SELECTIVITY_PANEL_TARGETS: ["trypsin", "CES1"]
+  LIABILITY_PANEL_TARGETS: ["cyp3a4", "albumin", "herg", "cyp2d6"]
+  # Ceftaroline control active-site energy (kcal/mol) used for the supplementary
+  # transparency metric SI_vs_Ceftaroline = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E.
+  CEFTAROLINE_CONTROL_E: 7.3
+
 # ── Mutation scan (reduced-resistance probability) ──────────────────────────
 # When true, top candidates are redocked against PBP2a mutant receptors
 # (S403A, K406A, Y446A) built by mutating the apo PDBQT. The energy delta vs

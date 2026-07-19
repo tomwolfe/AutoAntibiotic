@@ -121,6 +121,9 @@ from config.constants import (
     SIMILARITY_THRESHOLD_RELAXED,
     DIVERSITY_MIN_COUNT,
     SELECTIVITY_INDEX_THRESHOLD,
+    SELECTIVITY_PANEL_TARGETS,
+    LIABILITY_PANEL_TARGETS,
+    CEFTAROLINE_CONTROL_E,
     RMSD_VALIDATED_MAX,
     RMSD_MARGINAL_MAX,
     OUTPUT_DIR,
@@ -2600,80 +2603,128 @@ def analyze_selectivity_and_resistance(
         for rec, energy in results:
             setattr(rec, attr, energy)
 
-    # ── Compute SI (average human energy over up to 6 off-targets) ──
+    # ── Compute SI with the mechanism-restricted / liability-panel split (Task 1) ──
+    # The human off-target panel is split into two data-driven groups:
+    #   * SELECTIVITY_PANEL_TARGETS (trypsin, CES1) — mechanistically relevant
+    #     human serine hydrolases with narrow catalytic sites the seed library
+    #     was explicitly designed to avoid. The PRIMARY Selectivity_Index uses
+    #     ONLY this panel as its denominator (gates SI vs trypsin/CES1 >= 2.0).
+    #   * LIABILITY_PANEL_TARGETS (cyp3a4, albumin, herg, cyp2d6) — promiscuous
+    #     sinks that bind any aromatic acid at -9 to -10.5 kcal/mol. They MUST
+    #     NEVER enter the SI denominator; they feed Off_Target_Risk and are
+    #     reported as their own energy columns.
+    # The OLD pan-panel SI (all 6 off-targets in the denominator) is preserved
+    # as Selectivity_Index_PanPanel for full transparency.
     for rec in top10:
         # Collect raw human off-target energies, pairing each with the off-target
         # attribute so we can flag high-risk binding on *valid* energies only.
         raw_human = [
-            ("trypsin", rec.human_trypsin_energy),
-            ("ces1", rec.human_ces1_energy),
-            ("albumin", getattr(rec, "human_albumin_energy", None)),
-            ("cyp3a4", getattr(rec, "human_cyp3a4_energy", None)),
-            ("herg", getattr(rec, "human_herg_energy", None)),
-            ("cyp2d6", getattr(rec, "human_cyp2d6_energy", None)),
+            ("trypsin", "human_trypsin_energy", rec.human_trypsin_energy),
+            ("ces1", "human_ces1_energy", rec.human_ces1_energy),
+            ("albumin", "human_albumin_energy", getattr(rec, "human_albumin_energy", None)),
+            ("cyp3a4", "human_cyp3a4_energy", getattr(rec, "human_cyp3a4_energy", None)),
+            ("herg", "human_herg_energy", getattr(rec, "human_herg_energy", None)),
+            ("cyp2d6", "human_cyp2d6_energy", getattr(rec, "human_cyp2d6_energy", None)),
         ]
+        # Case-insensitive membership tests so config keys ("CES1") and the
+        # internal panel labels ("ces1") match regardless of capitalisation.
+        sel_panel = {s.lower() for s in SELECTIVITY_PANEL_TARGETS}
         # A human off-target energy > 0.0 means no-pose / steric clash — it
-        # carries no binding information and must NOT enter the SI denominator.
-        # We treat it as invalid (NaN) so the SI is computed only from real,
-        # finite binding energies. The *raw* list (including invalid energies)
-        # is still used for the Off_Target_Risk flag below.
+        # carries no binding information and must NOT enter any SI denominator.
+        # We treat it as invalid so the SI is computed only from real, finite,
+        # binding (negative) energies. The *raw* list (including invalid
+        # energies) is still used for the Off_Target_Risk flag below.
         energies_human = [
-            e for _label, e in raw_human if e is not None and e <= 0.0
+            e for _l, _a, e in raw_human if e is not None and e <= 0.0
         ]
         n_human_targets = len(energies_human)
 
-        # Track how many human off-targets provided valid energies and
-        # record the resulting selectivity confidence.
-        if n_human_targets >= 2:
+        # Confidence is keyed on the SELECTIVITY panel: High if >= 2
+        # selectivity-panel targets provided valid energies.
+        panel_valid = [
+            e for label, _a, e in raw_human
+            if label in sel_panel and e is not None and e <= 0.0
+        ]
+        if len(panel_valid) >= 2:
             rec.selectivity_confidence = CompoundRecord.CONF_HIGH
-        elif n_human_targets == 1:
+        elif len(panel_valid) == 1:
             rec.selectivity_confidence = CompoundRecord.CONF_LOW
         else:
             rec.selectivity_confidence = CompoundRecord.CONF_NONE
 
-        if not energies_human:
-            log.warning(f"  {rec.compound_id}: No human docking data. SI = N/A.")
-            rec.selectivity_index = None
-            continue
-
-        human_min = min(energies_human)
         pb2pa_best = (
             rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None
             else rec.pb2pa_allosteric_energy
         )
-        if pb2pa_best is None:
-            rec.selectivity_index = 1.0
+
+        # ── Supplementary transparency metric: SI_vs_Ceftaroline ──
+        # = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E. This is a PURE ratio of the
+        # measured bacterial affinity against a fixed reference control energy.
+        # NO covalent bonus or post-hoc energy adjustment is ever applied —
+        # Vina cannot model covalent bond formation, so the raw (non-covalent)
+        # PBP2a energy is used as-is (integrity rule).
+        rec.si_vs_ceftaroline = (
+            abs(pb2pa_best) / CEFTAROLINE_CONTROL_E
+            if pb2pa_best is not None
+            else None
+        )
+
+        if not energies_human:
+            log.warning(f"  {rec.compound_id}: No human docking data. SI = N/A.")
+            rec.selectivity_index = None
+            rec.selectivity_index_panpanel = None
             continue
 
-        si = compute_selectivity_index(pb2pa_best, human_min)
-        # Keep the raw (un-clamped) SI. We NO LONGER hard-zero the index when a
-        # human off-target binds tightly — that erased real selectivity signal
-        # (paper §4.1). Instead the raw SI is preserved and a separate boolean
-        # Off_Target_Risk column records the binary high-risk flag.
-        rec.selectivity_index = si
+        # OLD pan-panel SI (preserved, transparent) — denominator = tightest of
+        # ALL valid human off-targets.
+        rec.selectivity_index_panpanel = compute_selectivity_index(
+            pb2pa_best, min(energies_human)
+        )
 
-        # SI based on a single human target is less reliable — flag it.
-        if n_human_targets == 1:
+        # NEW primary (mechanism-restricted) SI — denominator = tightest of the
+        # SELECTIVITY_PANEL_TARGETS only. If the selectivity panel provided no
+        # valid energy, the gate cannot be evaluated and SI is left N/A.
+        if panel_valid:
+            si = compute_selectivity_index(pb2pa_best, min(panel_valid))
+            # Keep the raw (un-clamped) SI. We NO LONGER hard-zero the index when
+            # a human off-target binds tightly — that erased real selectivity
+            # signal (paper §4.1). The raw SI is preserved and a separate boolean
+            # Off_Target_Risk column records the binary high-risk flag.
+            rec.selectivity_index = si
+        else:
+            rec.selectivity_index = None
+
+        # SI based on a single selectivity-panel target is less reliable — flag it.
+        if len(panel_valid) == 1:
             if rec.resistance_notes:
                 rec.resistance_notes += " | "
-            rec.resistance_notes += "SI based on single human target."
+            rec.resistance_notes += "SI based on single selectivity-panel target."
 
-        if si < SELECTIVITY_INDEX_THRESHOLD:
-            log.warning(
-                f"  {rec.compound_id}: Low selectivity (SI = {si:.2f} < {SELECTIVITY_INDEX_THRESHOLD}). "
-                "Flagged for off-target risk."
-            )
-        else:
-            log.info(f"  {rec.compound_id}: SI = {si:.2f} (pass).")
+        si = rec.selectivity_index
+        if si is not None:
+            if si < SELECTIVITY_INDEX_THRESHOLD:
+                log.warning(
+                    f"  {rec.compound_id}: Low mechanism-restricted selectivity "
+                    f"(SI = {si:.2f} < {SELECTIVITY_INDEX_THRESHOLD}). Flagged for "
+                    "off-target risk."
+                )
+            else:
+                log.info(f"  {rec.compound_id}: mechanism-restricted SI = {si:.2f} (pass).")
 
-        # Off-target risk flag (separate boolean column, paper §4.1b). Only
-        # *valid* (finite, binding) human energies are considered — a >0.0
-        # (no-pose/clash) value is not a real binder and is excluded.
+        # Off-target risk flag (separate boolean column, paper §4.1b). The
+        # LIABILITY panel (and any tight human binder) sets this flag — but the
+        # liability-panel energies NEVER enter the SI denominator. Only *valid*
+        # (finite, binding) human energies are considered — a >0.0 (no-pose/clash)
+        # value is not a real binder and is excluded.
         rec.off_target_risk = any(
             e is not None and e < -8.0
-            for _label, e in raw_human
+            for _label, _a, e in raw_human
             if e is not None
         )
+
+        # Honest provenance: no covalent-warhead bonus is ever applied.
+        rec.warhead_type = "none"
+        rec.si_covalent = None
 
         if rec.off_target_risk:
             if rec.resistance_notes:

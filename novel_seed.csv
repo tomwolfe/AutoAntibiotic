@@ -20,3 +20,11 @@ O=C(O)c1ccc(-c2c(N)sc(-C1Cc2ccccc2C1)n2)cc1,SEED_V21
 O=C(O)c1ccc(-c2c(N)oc(-C1Cc2ccccc2C1)n2)cc1,SEED_V22
 O=C(O)c1ccc(-c2c(N)scn2)cc1,SEED_V23
 O=C(O)c1ccc(-c2c(N)ocn2)cc1,SEED_V24
+O=C(O)c1ccc(-c2c(N)sc(-c3ccc4ccccc4c3)n2)cc1B(O)O,SEED_C01
+O=C(O)c1ccc(-c2c(N)oc(-c3ccc(-c4ccccc4)cc3)n2)cc1B(O)O,SEED_C02
+O=C(O)c1ccc(-c2c(N)sc(-C12CC3CC(C1)CC(C2)(C3))n2)cc1C(=O)C(=O)N,SEED_C03
+O=C(O)c1ccc(-c2c(N)oc(-C(C)(C)C)n2)cc1C(=O)C(=O)N,SEED_C04
+O=C(O)c1ccc(-c2c(N)sc(-C1CCCCC1)n2)cc1C(=O)OC(=O),SEED_C05
+O=C(O)c1ccc(-c2c(N)oc(-c3ccc4ccccc4c3)n2)cc1C(=O)OC(=O),SEED_C06
+O=C(O)c1ccc(-c2c(N)sc(-c3ccc(-c4ccc(O)cc4)cc3)n2)cc1B(O)O,SEED_C07
+O=C(O)c1ccc(-c2c(N)oc(-C1Cc2ccccc2C1)n2)cc1C(=O)C(=O)N,SEED_C08

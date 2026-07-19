@@ -89,6 +89,62 @@ _TARGET_RESIDUE_KEYS = (
 TARGETS_FILE = Path(__file__).resolve().parent / "targets.yaml"
 
 
+# ── Selectivity panel split (Task 1) ────────────────────────────────────────
+# Two groups of human off-targets with distinct scientific roles. Loaded from
+# ``config/targets.yaml`` (``selectivity:`` block), falling back to these sane
+# defaults whenever the YAML file is missing, unreadable, pyyaml is unavailable,
+# or the block is absent.
+_SELECTIVITY_PANEL_TARGETS_DEFAULT = ["trypsin", "CES1"]
+_LIABILITY_PANEL_TARGETS_DEFAULT = ["cyp3a4", "albumin", "herg", "cyp2d6"]
+_CEFTAROLINE_CONTROL_E_DEFAULT = 7.3
+
+
+def _load_selectivity_config() -> Dict[str, object]:
+    """
+    Load the selectivity-panel split from ``config/targets.yaml``.
+
+    Returns ``{"SELECTIVITY_PANEL_TARGETS", "LIABILITY_PANEL_TARGETS",
+    "CEFTAROLINE_CONTROL_E"}``, falling back to the ``*_DEFAULT`` values whenever
+    the file is missing, unreadable, pyyaml is unavailable, or the ``selectivity``
+    block is absent. Only string lists and a positive float are accepted;
+    anything else keeps the default so the contract stays stable.
+    """
+    defaults = {
+        "SELECTIVITY_PANEL_TARGETS": list(_SELECTIVITY_PANEL_TARGETS_DEFAULT),
+        "LIABILITY_PANEL_TARGETS": list(_LIABILITY_PANEL_TARGETS_DEFAULT),
+        "CEFTAROLINE_CONTROL_E": _CEFTAROLINE_CONTROL_E_DEFAULT,
+    }
+    try:
+        import yaml
+
+        if TARGETS_FILE.exists():
+            with open(TARGETS_FILE) as fh:
+                data = yaml.safe_load(fh) or {}
+            sel = data.get("selectivity", {}) if isinstance(data, dict) else {}
+            if isinstance(sel, dict):
+                if isinstance(sel.get("SELECTIVITY_PANEL_TARGETS"), list) \
+                        and sel["SELECTIVITY_PANEL_TARGETS"]:
+                    defaults["SELECTIVITY_PANEL_TARGETS"] = [
+                        str(t) for t in sel["SELECTIVITY_PANEL_TARGETS"]
+                    ]
+                if isinstance(sel.get("LIABILITY_PANEL_TARGETS"), list):
+                    defaults["LIABILITY_PANEL_TARGETS"] = [
+                        str(t) for t in sel["LIABILITY_PANEL_TARGETS"]
+                    ]
+                ceft = sel.get("CEFTAROLINE_CONTROL_E")
+                if isinstance(ceft, (int, float)) and float(ceft) > 0:
+                    defaults["CEFTAROLINE_CONTROL_E"] = float(ceft)
+    except Exception:
+        pass
+    return defaults
+
+
+_loaded_selectivity = _load_selectivity_config()
+SELECTIVITY_PANEL_TARGETS = _loaded_selectivity["SELECTIVITY_PANEL_TARGETS"]
+LIABILITY_PANEL_TARGETS = _loaded_selectivity["LIABILITY_PANEL_TARGETS"]
+CEFTAROLINE_CONTROL_E = _loaded_selectivity["CEFTAROLINE_CONTROL_E"]
+
+
 # Sane default RMSD cutoffs (Angstrom) for the protocol-trust logic. These are
 # overridden by the ``thresholds:`` block in ``config/targets.yaml`` when present.
 _RMSD_VALIDATED_MAX_DEFAULT = 1.5

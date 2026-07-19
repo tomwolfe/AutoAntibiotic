@@ -124,11 +124,13 @@ def generate_csv_report(
 
     Columns:
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
-        Human_Trypsin_Energy, Human_CES1_Energy, Selectivity_Index,
-        Selectivity_Confidence, Off_Target_Risk, Max_Similarity, Passes_Lipinski,
-        QED_Score, Binding_Mode_Notes, Protocol_RMSD, protocol_trust,
-        H_Bond_Ser403, H_Bond_Lys406, H_Bond_Tyr446, Human_OffTarget_Max_Energy,
-        HIGH_TOXICITY_RISK.
+        Human_Trypsin_Energy, Human_CES1_Energy, Human_Albumin_Energy,
+        Human_CYP3A4_Energy, Human_HERG_Energy, Human_CYP2D6_Energy,
+        Selectivity_Index, Selectivity_Index_PanPanel, SI_vs_Ceftaroline,
+        Passes_Selectivity_Gate, Selectivity_Confidence, Off_Target_Risk,
+        Max_Similarity, Passes_Lipinski, QED_Score, Binding_Mode_Notes,
+        Protocol_RMSD, protocol_trust, H_Bond_Ser403, H_Bond_Lys406,
+        H_Bond_Tyr446, Human_OffTarget_Max_Energy, HIGH_TOXICITY_RISK.
 
     Returns path to CSV.
     """
@@ -266,6 +268,31 @@ def generate_csv_report(
             "H_Bond_Ser403": str(h_ser),
             "H_Bond_Lys406": str(h_lys),
             "H_Bond_Tyr446": str(h_tyr),
+            # ── Selectivity metrics (Task 1) ──
+            # Selectivity_Index (primary, mechanism-restricted) and its OLD
+            # pan-panel counterpart are both reported so the metric correction
+            # is transparent (paper §Metrics). SI_vs_Ceftaroline is the
+            # supplementary control-indexed ratio = |E_PBP2a| / 7.3, computed
+            # with NO covalent bonus. Passes_Selectivity_Gate flags the NEW
+            # mechanism-restricted gate (SI vs trypsin/CES1 >= 2.0).
+            "Selectivity_Index": (
+                f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
+                else "N/A"
+            ) + ("" if rec.selectivity_confidence == "High" else " (low-conf)"),
+            "Selectivity_Index_PanPanel": (
+                f"{getattr(rec, 'selectivity_index_panpanel', None):.2f}"
+                if getattr(rec, "selectivity_index_panpanel", None) is not None
+                else "N/A"
+            ),
+            "SI_vs_Ceftaroline": (
+                f"{rec.si_vs_ceftaroline:.2f}"
+                if getattr(rec, "si_vs_ceftaroline", None) is not None
+                else "N/A"
+            ),
+            "Passes_Selectivity_Gate": str(
+                rec.selectivity_index is not None
+                and rec.selectivity_index >= SELECTIVITY_INDEX_THRESHOLD
+            ),
         })
 
     df = pd.DataFrame(rows)

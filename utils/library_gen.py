@@ -65,6 +65,10 @@ class CompoundRecord:
 
     # Selectivity
     selectivity_index: Optional[float] = None
+    # Selectivity_Index_PanPanel: the OLD pan-panel SI (all human off-targets
+    # in the denominator). Preserved as a separate column for transparency so
+    # the mechanism-restricted SI can be compared against it (paper §Metrics).
+    selectivity_index_panpanel: Optional[float] = None
     # Off-target risk flag (paper §4.1b): True when any *valid* human
     # off-target binds tightly (energy < -8.0 kcal/mol). Kept separate from
     # selectivity_index so the raw SI is never artificially zeroed.
@@ -101,6 +105,15 @@ class CompoundRecord:
     # captured during Phase 4 so reporting can expose per-residue H-bond flags
     # without re-parsing the docked pose.
     interactions: Optional[dict] = None
+
+    # Transparency metrics (Task 1). ``si_vs_ceftaroline`` is the supplementary
+    # control-indexed metric = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E (no
+    # covalent energy bonus is ever applied — Vina cannot model covalent bond
+    # formation). It lets the reader gauge each candidate against the clinical
+    # reference without a post-hoc energy adjustment.
+    warhead_type: Optional[str] = None  # retained for provenance, always "none"
+    si_covalent: Optional[float] = None  # deprecated; retained for CSV backward-compat, always None
+    si_vs_ceftaroline: Optional[float] = None
 
     # MM-GBSA-like rerank score (crude MMFF energy of the relaxed active-site
     # pose). Populated by utils.docking.rerank_mmff; None when unavailable.
