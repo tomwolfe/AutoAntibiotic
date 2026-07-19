@@ -296,21 +296,51 @@ def generate_candidate_library(
     """
     log.info("─── Phase 2: Library Generation ───")
 
-    # ── External CSV merge (AUTOANTIBIOTIC_LIB_CSV) ──
-    # If the env var points to a CSV, merge it into the generated library
-    # before filtering. We reuse the existing input_csv reader and simply
-    # concatenate the two record lists when BRICS generation is used. When an
-    # explicit ``input_csv`` was given we prefer it; otherwise the env var is
-    # read as an additional external source. Missing/invalid env CSV is skipped
-    # gracefully (warning only) so the pipeline keeps running.
+    # ── External seed CSV (AUTOANTIBIOTIC_LIB_CSV) ──
+    # If the env var points to a CSV, read its SMILES as *additional seed
+    # molecules* and decompose them into the BRICS fragment pool so BRICS
+    # recombination AUGMENTS the seeds (rather than replacing the library).
+    # This is distinct from an explicit ``input_csv`` (or ``--library``), which
+    # is a full library that skips BRICS entirely. When an explicit
+    # ``input_csv`` was given we prefer it and leave the env var untouched so
+    # the explicit library still drives the run. Missing/invalid env CSV is
+    # skipped gracefully (warning only) so the pipeline keeps running.
     external_csv = os.environ.get(EXTERNAL_LIB_CSV_ENV)
     if external_csv and input_csv is None:
         if os.path.exists(external_csv):
             log.info(
-                f"  Merging external library CSV from env "
-                f"{EXTERNAL_LIB_CSV_ENV}: {external_csv}"
+                f"  Reading external seed CSV from env "
+                f"{EXTERNAL_LIB_CSV_ENV}: {external_csv} (BRICS augmentation)"
             )
-            input_csv = external_csv
+            try:
+                _ext_df = pd.read_csv(external_csv)
+                _ext_cols = {str(c).strip().lower() for c in _ext_df.columns}
+                if "smiles" in _ext_cols:
+                    extra_seeds = [
+                        str(s).strip() for s in _ext_df["smiles"].tolist()
+                    ]
+                    extra_seeds = [
+                        s for s in extra_seeds
+                        if s and s.lower() not in ("nan", "none")
+                    ]
+                    if extra_seeds:
+                        if seed_smiles is None:
+                            seed_smiles = list(DEFAULT_SEED_SMILES)
+                        seed_smiles = seed_smiles + extra_seeds
+                        log.info(
+                            f"  Added {len(extra_seeds)} seed SMILES from "
+                            f"external CSV to BRICS fragment pool."
+                        )
+                else:
+                    log.warning(
+                        f"  {EXTERNAL_LIB_CSV_ENV} CSV has no 'smiles' column; "
+                        f"ignoring."
+                    )
+            except Exception as exc:
+                log.warning(
+                    f"  Failed to read {EXTERNAL_LIB_CSV_ENV} CSV ({exc}); "
+                    f"ignoring."
+                )
         else:
             log.warning(
                 f"  {EXTERNAL_LIB_CSV_ENV} set but file not found "

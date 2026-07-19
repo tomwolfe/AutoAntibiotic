@@ -670,10 +670,10 @@ def run_redocking_validation(
         # conformer so the validation can still complete rather than silently
         # dropping a conformer (which previously produced a 2-tuple / None RMSD
         # crash).
-        # Bound the flexible-redocking attempt to the standard rigid Vina
+        # Flexible redocking is expensive; allow the dedicated (larger) flex
         # timeout so a single slow conformer cannot stall the whole run; an
         # expired flex attempt immediately falls back to a rigid redock.
-        dock_timeout = VINA_TIMEOUT_S if using_flex else VINA_TIMEOUT_S
+        dock_timeout = FLEX_VINA_TIMEOUT_S if using_flex else VINA_TIMEOUT_S
         try:
             subprocess.run(vina_cmd, capture_output=True, timeout=dock_timeout)
         except subprocess.TimeoutExpired:
