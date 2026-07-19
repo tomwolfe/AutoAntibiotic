@@ -1481,13 +1481,14 @@ def _run_flex_dock_with_fallback_timeout(
     Run a single flexible (Vina ``--flex``) docking job for *rec*.
 
     Phase 3.5 — robust flexible docking. The job is attempted with a bounded
-    ``FLEX_SCREEN_TIMEOUT_S``; if Vina times out, it falls back to a *rigid*
-    Vina dock (a genuine physical energy) rather than blocking the whole screen
-    on the slow flexible-receptor search. The retained rigid energy keeps the
-    run bounded and the ranking honest — the flex pose is flagged as unavailable.
+    ``FLEX_SCREEN_TIMEOUT_S``; if Vina times out, the flex job is retried once
+    with the dedicated, larger ``FLEX_VINA_TIMEOUT_S`` rather than silently
+    degrading to a rigid dock. The flex pose remains the authoritative
+    active-site ranking score.
 
-    Returns the active-site energy (flex if it completed in time, otherwise the
-    rigid fallback). Never returns ``None`` unless even the rigid dock fails.
+    Returns the flexible-docking energy. Returns ``None`` only if both the
+    standard and extended-timeout flex attempts fail (a genuine failure, not a
+    recoverable timeout).
     """
     from utils.docking import dock_compound
 
@@ -1495,7 +1496,7 @@ def _run_flex_dock_with_fallback_timeout(
         energy = dock_compound(
             rec, rigid_flex_pdbqt, active_center, active_box,
             work_dir, "active_flex", use_vina=True,
-            flex_pdbqt=flex_pdbqt, timeout=FLEX_SCREEN_TIMEOUT_S,
+            flex_pdbqt=flex_pdbqt, timeout=VINA_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         energy = None
@@ -1503,20 +1504,19 @@ def _run_flex_dock_with_fallback_timeout(
         return energy
 
     # A flexible-dock timeout is common for this receptor/flex-tree combination
-    # (it is markedly slower than rigid docking). Fall back to a *rigid* Vina
-    # dock of the same compound into the rigid companion receptor. This yields a
-    # real (physical) active-site energy that the caller retains, keeping the
-    # run bounded and the ranking honest — the flex pose is flagged unavailable.
+    # (it is markedly slower than rigid docking). Rather than silently fall back
+    # to a rigid dock — which would misrepresent the active-site ranking — we
+    # retry the *flex* job once with the dedicated larger FLEX_VINA_TIMEOUT_S.
     log.info(
         f"  Flex docking for {rec.compound_id} timed out at "
-        f"{FLEX_SCREEN_TIMEOUT_S}s; falling back to rigid active-site docking "
-        f"(flex pose unavailable)."
+        f"{FLEX_SCREEN_TIMEOUT_S}s; retrying flex with extended timeout "
+        f"{FLEX_VINA_TIMEOUT_S}s (no rigid fallback)."
     )
     try:
         energy = dock_compound(
             rec, rigid_flex_pdbqt, active_center, active_box,
-            work_dir, "active_flex_rigid_fallback", use_vina=True,
-            flex_pdbqt=None, timeout=VINA_TIMEOUT_S,
+            work_dir, "active_flex", use_vina=True,
+            flex_pdbqt=flex_pdbqt, timeout=FLEX_VINA_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         energy = None
