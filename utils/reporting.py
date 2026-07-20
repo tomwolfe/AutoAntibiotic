@@ -30,11 +30,31 @@ from config.constants import (
     CSV_REPORT,
     protocol_trust,
     SELECTIVITY_INDEX_THRESHOLD,
+    SI_STRONG_THRESHOLD,
+    SI_PROMISING_THRESHOLD,
 )
 
 # A module-level logger sharing the pipeline's "AutoAntibiotic" logger name so
 # that handlers configured in discovery_pipeline capture these messages too.
 log = logging.getLogger("AutoAntibiotic")
+
+
+def si_tier(si: Optional[float]) -> str:
+    """
+    Map a Selectivity Index value to its tiered label (paper §2.4).
+
+        "Strong"     if SI >= SI_STRONG_THRESHOLD (2.0)
+        "Promising"  if SI_PROMISING_THRESHOLD <= SI < 2.0 (1.5 <= SI < 2.0)
+        "Weak"       if SI < 1.5
+        "N/A"        if SI is None
+    """
+    if si is None:
+        return "N/A"
+    if si >= SI_STRONG_THRESHOLD:
+        return "Strong"
+    if si >= SI_PROMISING_THRESHOLD:
+        return "Promising"
+    return "Weak"
 
 
 def _key_residue_coords(receptor_pdb: str) -> Dict[str, List[np.ndarray]]:
@@ -145,18 +165,6 @@ def generate_csv_report(
 
     is_mock = (mode == "ci")
 
-    # ── Optional MM-GBSA-like rerank ──
-    # If any record carries a rerank score (record.mmgbca_score), sort the
-    # displayed candidates by it (lower = better) so the reported order
-    # reflects the physics-based rerank rather than raw Vina ordering.
-    if any(getattr(rec, "mmgbca_score", None) is not None for rec in top10):
-        top10 = sorted(
-            top10, key=lambda r: getattr(r, "mmgbca_score", float("inf"))
-            if getattr(r, "mmgbca_score", None) is not None
-            else float("inf")
-        )
-        log.info("  Reranked top candidates by MM-GBSA-like (MMFF) score.")
-
     rows = []
     for rec in top10:
         # Per-residue H-bond flags derived from the interaction fingerprint
@@ -231,18 +239,9 @@ def generate_csv_report(
             # Phase 3.5: explicit high-toxicity warning flag. Any candidate with
             # a Selectivity Index < 1.0 (it binds humans at least as tightly as
             # the bacterial target) is flagged HIGH_TOXICITY_RISK so the report
-            # calls attention to it in red-equivalent bold text downstream.
+            # calls attention to it.
             "HIGH_TOXICITY_RISK": str(
                 rec.selectivity_index is not None and rec.selectivity_index < 1.0
-            ),
-            "Mutant_Energy_Delta": (
-                f"{getattr(rec, 'mutant_energy_delta', None):.2f}"
-                if getattr(rec, "mutant_energy_delta", None) is not None
-                else "N/A"
-            ),
-            "MMGBSA_Score": (
-                f"{rec.mmgbca_score:.2f}" if rec.mmgbca_score is not None
-                else "N/A"
             ),
             "Selectivity_Index": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
@@ -269,19 +268,16 @@ def generate_csv_report(
             "H_Bond_Lys406": str(h_lys),
             "H_Bond_Tyr446": str(h_tyr),
             # ── Selectivity metrics (Task 1) ──
-            # Selectivity_Index (primary, mechanism-restricted) and its OLD
-            # pan-panel counterpart are both reported so the metric correction
-            # is transparent (paper §Metrics). SI_vs_Ceftaroline is the
-            # supplementary control-indexed ratio = |E_PBP2a| / 7.3, computed
-            # with NO covalent bonus. Passes_Selectivity_Gate flags the NEW
+            # Selectivity_Index (primary, mechanism-restricted, trypsin/CES1)
+            # and a tiered label (paper §2.4). Selectivity_Index_TwoTarget is the
+            # same two-target denominator shown under a transparent name.
+            # SI_vs_Ceftaroline is the supplementary control-indexed ratio
+            # = |E_PBP2a| / 7.3 (no covalent bonus). SI_Tier is the Strong /
+            # Promising / Weak / N/A label. Passes_Selectivity_Gate flags the
             # mechanism-restricted gate (SI vs trypsin/CES1 >= 2.0).
-            "Selectivity_Index": (
+            "SI_Tier": rec.report_tier or si_tier(rec.selectivity_index),
+            "Selectivity_Index_TwoTarget": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None
-                else "N/A"
-            ) + ("" if rec.selectivity_confidence == "High" else " (low-conf)"),
-            "Selectivity_Index_PanPanel": (
-                f"{getattr(rec, 'selectivity_index_panpanel', None):.2f}"
-                if getattr(rec, "selectivity_index_panpanel", None) is not None
                 else "N/A"
             ),
             "SI_vs_Ceftaroline": (
@@ -307,7 +303,7 @@ def generate_csv_report(
     return str(csv_report)
 
 
-def rerank_and_diversify(
+def diversify_top_n(
     pool: List[CompoundRecord],
     ranked: Optional[List[CompoundRecord]] = None,
     top_n: int = 10,
@@ -316,20 +312,16 @@ def rerank_and_diversify(
     max_tanimoto: float = 0.4,
 ) -> List[CompoundRecord]:
     """
-    Post-rerank gate that (1) drops any candidate whose MM-GBSA-like rerank
-    score is positive (``mmgbca_score > 0`` — a positive relaxation energy
-    means the pose is unstable / unfavourable) and (2) clusters the remaining
-    pool by Morgan fingerprint and picks a maximally dissimilar final set
-    (pairwise Tanimoto ≤ ``max_tanimoto``) to fill up to *top_n* slots.
+    Diversity clustering of the pre-top-N candidate pool.
 
-    The *ranked* ordering (best-first) defines the priority used to seed the
-    diverse selection: the top-ranked passing candidate is always kept, then
-    each subsequent candidate is admitted only if it is sufficiently dissimilar
-    (Tanimoto ≤ ``max_tanimoto``) from all already-selected compounds. If the
-    diverse set is smaller than *top_n*, the remaining slots are filled with the
-    next-best passing candidates regardless of similarity (so the report always
-    has up to *top_n* rows). Records lacking a computable Morgan FP are kept
-    only as last-resort fillers.
+    Picks a maximally dissimilar final set (pairwise Morgan Tanimoto ≤
+    ``max_tanimoto``) to fill up to *top_n* slots. The *ranked* ordering
+    (best-first) defines the priority used to seed the diverse selection: the
+    top-ranked candidate is always kept, then each subsequent candidate is
+    admitted only if it is sufficiently dissimilar (Tanimoto ≤ ``max_tanimoto``)
+    from all already-selected compounds. The MM-GBSA-like MMFF score gate that
+    previously lived here was removed in v4.0 (the simplified pipeline ranks by
+    PBP2a consensus energy only).
 
     Args:
         pool: Candidate records that reached the pre-top-N stage.
@@ -339,7 +331,7 @@ def rerank_and_diversify(
         max_tanimoto: Similarity ceiling for the diverse selection.
 
     Returns:
-        A (possibly shorter) list of up to *top_n* diverse, passing candidates.
+        A (possibly shorter) list of up to *top_n* diverse candidates.
     """
     if ranked is None:
         ranked = pool
@@ -355,62 +347,12 @@ def rerank_and_diversify(
         except Exception:
             return None
 
-    # (1) Drop positive relaxation-energy candidates.
-    passing = [r for r in ranked if getattr(r, "mmgbca_score", None) is None
-               or r.mmgbca_score <= 0.0]
-    dropped = len(ranked) - len(passing)
-    if dropped:
-        log.info(
-            f"  Rerank gate dropped {dropped} candidate(s) with positive "
-            f"MM-GBSA-like (MMFF) relaxation energy (mmgbca_score > 0)."
-        )
-    if not passing:
-        log.warning(
-            "  All candidates dropped by rerank gate (positive relaxation "
-            "energy). Returning the original ranked list as a fallback."
-        )
-        return ranked[:top_n]
-
-    # (1b) Post-report key-catalytic-H-bond gate. Drop any candidate that
-    # engages NEITHER Ser403 NOR Lys406 in its active-site pose (no key
-    # catalytic H-bond), unless doing so would leave fewer than top_n
-    # candidates. We read the interaction fingerprint stashed on the record
-    # during Phase 4 (min distance to the conserved residues; a contact is
-    # flagged when the ligand approaches within 3.5 Å of Ser403 / 3.8 Å of
-    # Lys406). Candidates lacking an interaction fingerprint are kept (the
-    # distance is unverified, not proven absent).
-    def _has_key_hbond(rec: CompoundRecord) -> bool:
-        inter = getattr(rec, "interactions", None)
-        if inter is None:
-            return True  # unverified — keep
-        ser = inter.get("min_dist_Ser403", float("inf"))
-        lys = inter.get("min_dist_Lys406", float("inf"))
-        return (np.isfinite(ser) and ser < 3.5) or (np.isfinite(lys) and lys < 3.8)
-
-    hbond_passing = [r for r in passing if _has_key_hbond(r)]
-    dropped_hbond = len(passing) - len(hbond_passing)
-    if dropped_hbond:
-        if len(hbond_passing) >= top_n:
-            log.info(
-                f"  Post-report interaction filter dropped {dropped_hbond} "
-                f"candidate(s) with no key Ser403/Lys406 H-bond (fewer than "
-                f"{top_n} would remain otherwise; kept all)."
-            )
-            passing = hbond_passing
-        else:
-            log.info(
-                f"  Post-report interaction filter would drop {dropped_hbond} "
-                f"candidate(s) with no key Ser403/Lys406 H-bond, but only "
-                f"{len(hbond_passing)} would remain (< {top_n}). Keeping all "
-                f"passing candidates to preserve report size."
-            )
-
-    # (2) Diverse selection by Morgan Tanimoto.
+    # Diverse selection by Morgan Tanimoto.
     selected: List[CompoundRecord] = []
     selected_fps = []
     fillers: List[CompoundRecord] = []
 
-    for rec in passing:
+    for rec in ranked:
         fp = _fp(rec)
         if fp is None:
             fillers.append(rec)
@@ -424,8 +366,8 @@ def rerank_and_diversify(
         if len(selected) >= top_n:
             break
 
-    # Fill any remaining slots with the next-best passing candidates.
-    remaining = [r for r in passing if r not in selected and r not in fillers]
+    # Fill any remaining slots with the next-best candidates.
+    remaining = [r for r in ranked if r not in selected and r not in fillers]
     final = selected + fillers + remaining
     final = final[:top_n]
     log.info(

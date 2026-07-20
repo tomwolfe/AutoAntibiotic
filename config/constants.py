@@ -239,17 +239,6 @@ ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
 
 # Docking
 VINA_TIMEOUT_S = 600
-# Flexible (Vina --flex) docking is more expensive than rigid docking. Phase 3.5
-# mandates that the Top-50 active-site candidates are ranked by their flexible
-# energy, so flex jobs get a dedicated (larger) timeout instead of falling back
-# to rigid docking when Vina would otherwise time out.
-FLEX_VINA_TIMEOUT_S = 1800
-# Bounded time budget for a *screening* flexible dock (Phase 3.5 final ranking).
-# The flexible receptor/flex-tree combination is markedly slower than rigid
-# docking on this platform, so we cap each flex attempt and then fall back to a
-# real rigid Vina energy. This keeps the screen bounded while still *attempting*
-# a flexible pose; the retained rigid energy is a genuine physical score.
-FLEX_SCREEN_TIMEOUT_S = 150
 N_JOBS = max(1, mp.cpu_count() - 1)
 
 # Similarity
@@ -267,26 +256,16 @@ RECALL_QED_FLOOR = 0.4
 
 # Selectivity
 SELECTIVITY_INDEX_THRESHOLD = 2.0
+# Tiered Selectivity Index thresholds (paper §2.4). The final report includes all
+# candidates at or above SI_PROMISING_THRESHOLD; the Strong/Promising split is a
+# transparent secondary label (never a lower gate).
+SI_STRONG_THRESHOLD = 2.0
+SI_PROMISING_THRESHOLD = 1.5
 
 # Outputs
 OUTPUT_DIR = Path("output")
 CSV_REPORT = OUTPUT_DIR / "top_candidates.csv"
 TOP_N = 10
-
-# Local flexible docking: residues treated as flexible (Vina --flex) during the
-# active-site step of science mode. These are the conserved catalytic residues
-# whose side-chain repositioning matters most for binder pose discrimination.
-FLEX_RESIDUES = ["SER403", "LYS406", "TYR446"]
-
-# Simple PBP2a mutation scan (consensus / reduced-resistance probability). For
-# the top-N candidates, dock the active-site pose against mutant receptors built
-# by mutating the apo PDBQT (cheap string replace). Toggle via config; defaults
-# on so experimental-validation odds are improved. Missing/mock PDBs skip.
-MUTATION_SCAN = True
-
-# Mutants scanned and their single-residue substitutions of the conserved
-# catalytic network.
-MUTATION_SCAN_MUTANTS = ["S403A", "K406A", "Y446A", "N146K", "G262S"]
 
 # Morgan fingerprint parameters used for clustering the pre-top-N pool.
 FP_RADIUS = 2

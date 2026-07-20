@@ -60,23 +60,43 @@ Treat any result whose `protocol_trust` is not `Validated` as preliminary.
 > The canonical logic for these exact trust strings lives in
 > `config/constants.py` (`protocol_trust`).
 
-## Improving experimental-validation odds
+## Improving experimental-validation odds (v4.0 — simplified)
 
 To raise the likelihood that the top-ranked candidates are genuine PBP2a
 inhibitors — without adding deep learning, FEP, or new external services —
-the pipeline uses three low-complexity, RDKit/Vina-only measures. **Consensus
-rigid docking** docks every compound against a set of PBP2a conformer PDBQTs
-(apo 1VQQ, holo 3ZG0, 4DKI) and keeps the best (most negative) energy;
-redocking validation reports the lowest RMSD across those conformers, so a
-single fortuitous crystal pose cannot inflate confidence. **MM-GBSA-like
-rerank** relaxes each top-10 active-site pose with `MMFFOptimizeMolecule`
-and stores the MMFF energy as `MMGBSA_Score` (a cheap physics-based tie-breaker,
-not a full GBSA solver); the reported CSV is reranked by it when present.
-**Wider selectivity panel** averages the human off-target docking energy over
-four proteins (Trypsin, CES1, Serum Albumin 1AO6, CYP3A4 1W0E), making the
-Selectivity Index (threshold still SI ≥ 2.0) more conservative and harder to
-pass on an artefact. All residue lists and PDB IDs are configurable in
-`config/targets.yaml` / `config/constants.py`.
+the pipeline keeps only the measures that change *which* molecules are reported.
+**Consensus rigid docking** docks every compound against a set of PBP2a
+conformer PDBQTs (apo 1VQQ, holo 3ZG0, 4DKI) and keeps the best (most negative)
+energy; redocking validation reports the lowest RMSD across those conformers,
+so a single fortuitous crystal pose cannot inflate confidence. **Mechanism-
+restricted selectivity** docks only the two mechanism-relevant serine
+hydrolases (trypsin 1UTN, CES1 1YAH); the promiscuous liability panel
+(albumin, CYP3A4, hERG, CYP2D6) is no longer docked. The primary Selectivity
+Index uses only trypsin/CES1 and is tiered (Strong ≥ 2.0, Promising 1.5–2.0,
+Weak < 1.5). **Off-target box correction:** `_auto_box_size` now measures the
+grid radius from *only* the catalytic-site residues (trypsin His57/Asp102/Ser195;
+CES1 Ser221/His468/Glu354), capped at 15 Å, instead of from every receptor atom,
+so ligands can no longer dock on distant surface patches and inflate off-target
+scores. PBP2a active/allosteric boxes are similarly anchored and capped at
+20/18 Å. This is the second half of the selectivity fix. **Diversity clustering**
+keeps a maximally dissimilar final set (Morgan Tanimoto ≤ 0.4). All residue lists
+and PDB IDs are configurable in `config/targets.yaml` / `config/constants.py`.
+
+## Removed features (v4.0)
+
+The following were removed because they did not change which molecules appear
+in the report, and they slowed the run:
+- **Flexible (`--flex`) docking** of the active-site step — rigid consensus
+  docking is now the authoritative active-site ranking.
+- **MM-GBSA-like rerank** (`MMGBSA_Score`, `rerank_mmff`) — final ranking is by
+  PBP2a active-site consensus energy.
+- **Mutation scan** (`Mutant_Energy_Delta`) — resistance is now reported from
+  pose-based interaction analysis only.
+- **Liability-panel docking** (albumin/CYP3A4/hERG/CYP2D6) and the **negative
+  selection filter** (`filter_by_human_clash`) — off-target risk is reported
+  (from trypsin/CES1) but no longer discards candidates.
+- **Pan-panel SI** (`Selectivity_Index_PanPanel`) — replaced by the tiered,
+  mechanism-restricted `Selectivity_Index` / `Selectivity_Index_TwoTarget`.
 
 ## Known defects fixed in this revision
 
@@ -85,11 +105,11 @@ been corrected. These were *engineering* bugs that suppressed real signal —
 no scientific-validity logic (e.g. the `protocol_trust` CAUTION badge) was
 weakened.
 
-1. **Pose loss across parallel workers (§4.3).** `_dock_worker` now returns
-   the active-site pose path alongside `(record, energy)`; `_dock_compounds_parallel`
+1. **Pose loss across parallel workers (§4.3).** `_dock_worker` returns the
+   active-site pose path alongside `(record, energy)`; `_dock_compounds_parallel`
    and `_consensus_dock` propagate `active_docked_pdbqt` back to the parent
-   `CompoundRecord`. This lets `MMGBSA_Score`, `Mutant_Energy_Delta`, and the
-   `H_Bond_*` flags populate from the real docked pose.
+   `CompoundRecord`. This lets the `H_Bond_*` flags populate from the real
+   docked pose.
 
 2. **Selectivity Index hard-zero (§4.1).** The override that set
    `rec.selectivity_index = 0.0` when any human off-target bound tightly
@@ -99,18 +119,12 @@ weakened.
    steric clash) is treated as invalid (excluded), so the SI is computed only
    from real binding energies.
 
-3. **Flexible docking broken (§3.3).** The flex PDBQT for SER403/LYS406/
-   TYR446 is now written with `BEGIN_RES` / `END_RES` tags and plain `ATOM`
-   records and **no** `TER`/`REMARK` lines, which is what Vina's strict
-   `--flex` parser requires (the old writer emitted `TER`, causing "Unknown tag"
-   aborts). The flex pose is propagated the same way as the rigid active pose.
-
-4. **Filter relaxation for known binders (§4.4).** `config.yaml` gains
+3. **Filter relaxation for known binders (§4.4).** `config.yaml` gains
    `recall_mode: false`. When set `true`, `apply_filters` uses
    `SIMILARITY_THRESHOLD_RELAXED` and a QED floor of `0.4` (not `0.7`) so
    ceftaroline / meropenem survive filtering.
 
-5. **Validation artifact (§1).** `run_redocking_validation` now writes
+4. **Validation artifact (§1).** `run_redocking_validation` writes
    `validation_results.json` to `work_dir`. The honest `protocol_trust` CAUTION
    badge is unchanged.
 

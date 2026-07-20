@@ -65,19 +65,25 @@ class CompoundRecord:
 
     # Selectivity
     selectivity_index: Optional[float] = None
-    # Selectivity_Index_PanPanel: the OLD pan-panel SI (all human off-targets
-    # in the denominator). Preserved as a separate column for transparency so
-    # the mechanism-restricted SI can be compared against it (paper §Metrics).
-    selectivity_index_panpanel: Optional[float] = None
-    # Off-target risk flag (paper §4.1b): True when any *valid* human
-    # off-target binds tightly (energy < -8.0 kcal/mol). Kept separate from
-    # selectivity_index so the raw SI is never artificially zeroed.
+    # Mechanism-relevant human off-target energies (docked in the simplified
+    # pipeline).
+    human_trypsin_energy: Optional[float] = None
+    human_ces1_energy: Optional[float] = None
+    # Promiscuous liability-panel energies (albumin, CYP3A4, hERG, CYP2D6). The
+    # simplified pipeline no longer docks these proteins, so these stay None and
+    # are reported as "N/A"; they are retained for downstream compatibility.
+    human_albumin_energy: Optional[float] = None
+    human_cyp3a4_energy: Optional[float] = None
+    human_herg_energy: Optional[float] = None
+    human_cyp2d6_energy: Optional[float] = None
+    # Off-target risk flag (paper §4.1b): True when trypsin OR CES1 binds tightly
+    # (energy < -8.0 kcal/mol). Kept separate from selectivity_index so the raw
+    # SI is never artificially zeroed.
     off_target_risk: bool = False
 
     # Phase 3.5 — Negative selection: the most negative (strongest) human
-    # off-target binding energy observed across the human panel (kcal/mol),
-    # populated by utils.filtering.filter_by_human_clash. None when the compound
-    # has no valid human off-target energies. Surfaced in the CSV report.
+    # off-target binding energy observed across the docked human panel
+    # (kcal/mol). Surfaced in the CSV report.
     human_offtarget_max_energy: Optional[float] = None
 
     # Similarity
@@ -115,9 +121,11 @@ class CompoundRecord:
     si_covalent: Optional[float] = None  # deprecated; retained for CSV backward-compat, always None
     si_vs_ceftaroline: Optional[float] = None
 
-    # MM-GBSA-like rerank score (crude MMFF energy of the relaxed active-site
-    # pose). Populated by utils.docking.rerank_mmff; None when unavailable.
-    mmgbca_score: Optional[float] = None
+    # Final reported SI tier label override. The report normally derives the
+    # tier from selectivity_index, but when a candidate is kept only as a
+    # below-threshold filler (SI < SI_PROMISING_THRESHOLD) this is set to
+    # "Below gate" so the CSV is unambiguous (paper §A3).
+    report_tier: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

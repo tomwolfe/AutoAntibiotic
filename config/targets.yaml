@@ -16,17 +16,6 @@ targets:
   CONSERVED_RESIDUES: ["SER403", "LYS406", "TYR446"]
   TRYPSIN_CATALYTIC_RESIDUES: ["HIS57", "ASP102", "SER195"]
   CES1_CATALYTIC_RESIDUES: ["SER221", "HIS468", "GLU354"]
-  # Human off-target panel (added for a wider selectivity screen). Residue
-  # lists are plausible catalytic/active-site sites used to centre the docking
-  # grid. Edit here to re-target without touching source code.
-  ALBUMIN_CATALYTIC_RESIDUES: ["HIS242", "LYS199"]
-  CYP3A4_CATALYTIC_RESIDUES: ["HIS368", "ARG105"]
-  # Additional (optional / mock-capable) off-target panel entries used to widen
-  # the selectivity screen further. HERG (cardiotoxicity) and CYP2D6 (metabolic
-  # liability) are appended when a prepared receptor + grid centre exist; they
-  # skip gracefully if no real PDB is available (CI/offline). Sane defaults:
-  HERG_CATALYTIC_RESIDUES: ["SER624", "TYR652", "PHE656"]
-  CYP2D6_CATALYTIC_RESIDUES: ["ASP301", "GLU216", "SER304"]
 
 # ── Selectivity panel split (Task 1) ───────────────────────────────────────
 # The human off-target panel is split into two groups with distinct scientific
@@ -39,25 +28,20 @@ targets:
 #     property the design intent actually targets.
 #
 #   LIABILITY_PANEL_TARGETS — promiscuous sinks (CYP3A4, albumin, hERG, CYP2D6)
-#     that bind any aromatic acid at -9 to -10.5 kcal/mol. They MUST NEVER enter
-#     the SI denominator; they feed the Off_Target_Risk flag and are reported as
-#     their own energy columns.
+#     that bind any aromatic acid at -9 to -10.5 kcal/mol. In the simplified
+#     pipeline (v4.0) these proteins are no longer docked; their residue lists
+#     have been removed. They are retained here only as documentation of the
+#     panel split and for backward-compatible reporting.
 #
-# The OLD pan-panel SI (all human off-targets in the denominator) is preserved as
-# a separate column (Selectivity_Index_PanPanel) for full transparency.
+# The mechanism-restricted SI is supplemented by a tiered label
+# (Strong / Promising / Weak / Below gate) defined in ``config/constants.py``
+# (SI_STRONG_THRESHOLD = 2.0, SI_PROMISING_THRESHOLD = 1.5).
 selectivity:
   SELECTIVITY_PANEL_TARGETS: ["trypsin", "CES1"]
   LIABILITY_PANEL_TARGETS: ["cyp3a4", "albumin", "herg", "cyp2d6"]
   # Ceftaroline control active-site energy (kcal/mol) used for the supplementary
   # transparency metric SI_vs_Ceftaroline = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E.
   CEFTAROLINE_CONTROL_E: 7.3
-
-# ── Mutation scan (reduced-resistance probability) ──────────────────────────
-# When true, top candidates are redocked against PBP2a mutant receptors
-# (S403A, K406A, Y446A) built by mutating the apo PDBQT. The energy delta vs
-# the wild-type pose is recorded quantitatively (mutant_energy_delta) and folded
-# into the resistance notes. Disable to skip the extra docking calls.
-mutation_scan: true
 
 # ── Protocol trust RMSD thresholds (Å) ────────────────────────────────────────
 # Redocking RMSD cutoffs used by config.constants.protocol_trust and the

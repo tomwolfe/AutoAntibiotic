@@ -32,13 +32,13 @@ from discovery_pipeline import (
     analyze_selectivity_and_resistance,
     log,
 )
-from utils.filtering import apply_filters, filter_by_human_clash
+from utils.filtering import apply_filters
 from utils.library_gen import generate_candidate_library, CompoundRecord
 from utils.docking import _run_vina_docking, _dock_compounds_parallel, format_fallback_score
 from utils.ligand_prep import LigandPreparator
-from utils.reporting import generate_csv_report, generate_pymol_script
+from utils.reporting import generate_csv_report, generate_pymol_script, diversify_top_n, si_tier
 from rdkit.DataStructs import TanimotoSimilarity
-from utils.structure_prep import compute_residue_centroid, validate_flex_pdbqt
+from utils.structure_prep import compute_residue_centroid
 from config.constants import (
     OUTPUT_DIR,
     TOP_N,
@@ -47,7 +47,8 @@ from config.constants import (
     RMSD_VALIDATED_MAX,
     RMSD_MARGINAL_MAX,
     protocol_trust,
-    FLEX_VINA_TIMEOUT_S,
+    SI_STRONG_THRESHOLD,
+    SI_PROMISING_THRESHOLD,
 )
 from tests.helpers import create_minimal_pdb
 from rdkit import Chem
@@ -82,13 +83,11 @@ def mock_pdb_dir():
         os.remove(os.path.join(tmpdir, fname))
     os.rmdir(tmpdir)
 
-
 @pytest.fixture(autouse=True)
 def setup_output_dir():
     """Ensure output/ exists for functions that write intermediate files."""
     ensure_output_dir()
     yield
-
 
 # ── Test 1: compute_residue_centroid ────────────────────────────────────────
 
@@ -110,7 +109,6 @@ class TestComputeResidueCentroid:
         """Raises ValueError when none of the requested residues exist in the PDB."""
         with pytest.raises(ValueError, match="No matching residues found"):
             compute_residue_centroid(mock_pdb_dir, ["GLY999"])
-
 
 # ── Test 2: apply_filters ────────────────────────────────────────────────────
 
@@ -171,7 +169,6 @@ class TestApplyFilters:
             "Quercetin may be filtered later, but structural check should pass"
         )
 
-
 # ── Test 3: generate_candidate_library ──────────────────────────────────────
 
 class TestGenerateCandidateLibrary:
@@ -204,7 +201,6 @@ class TestGenerateCandidateLibrary:
         library = generate_candidate_library(target_count=200)
         ids = [r.compound_id for r in library]
         assert len(ids) == len(set(ids)), "Duplicate compound IDs found"
-
 
 # ── Test 4: check_dependencies with mocked subprocess ─────────────────────────
 
@@ -243,7 +239,6 @@ class TestCheckDependencies:
         with patch("subprocess.run", side_effect=side_effect):
             deps = check_dependencies()
             assert deps["vina"] is True
-
 
 # ── Test 5: _run_vina_docking with mocked subprocess ─────────────────────────
 
@@ -308,7 +303,6 @@ class TestRunVinaDocking:
             energy = _run_vina_docking("rec.pdbqt", "lig.pdbqt", "out.pdbqt", mock_center, mock_box)
             assert energy == -9.3
 
-
 # ── Test 6: compute_selectivity_index edge cases ────────────────────────────
 
 class TestComputeSelectivityIndex:
@@ -347,7 +341,6 @@ class TestComputeSelectivityIndex:
         si = compute_selectivity_index(-8.0, -4.0)
         assert si == pytest.approx(2.0)
 
-
 # ── Test 8: Library generation edge cases ────────────────────────────────────
 
 class TestGenerateCandidateLibraryEdgeCases:
@@ -373,7 +366,6 @@ class TestGenerateCandidateLibraryEdgeCases:
         assert len(control_ids) >= 1, "Expected at least one control compound"
         assert len(library) >= 2, "Expected at least control compounds to be returned"
 
-
     def test_returns_only_valid_smiles_and_is_capped(self):
         """generate_candidate_library(target_count=20) returns valid SMILES and ≤ target_count."""
         library = generate_candidate_library(target_count=20)
@@ -384,7 +376,6 @@ class TestGenerateCandidateLibraryEdgeCases:
             assert mol is not None, (
                 f"Record {record.compound_id} has invalid SMILES: {record.smiles}"
             )
-
 
 # ── Test: Redocking Validation ───────────────────────────────────────────────
 
@@ -411,7 +402,6 @@ class TestRedockingValidation:
                     deps=deps,
                 )
         assert result == (False, None, None), f"Expected (False, None, None), got {result}"
-
 
 class TestMockRedockingSkip:
     def test_skips_mock_pdb_with_vina_enabled(self, tmp_path):
@@ -441,7 +431,6 @@ class TestMockRedockingSkip:
                     deps=deps,
                 )
         assert result == (False, None, None), f"Expected (False, None, None), got {result}"
-
 
 # ── Test: Redocking box auto-size ─────────────────────────────────────────
 
@@ -474,7 +463,6 @@ class TestRedockingBoxSize:
         box = _redocking_box_size("/no/such/file.pdbqt", np.array([0.0, 0.0, 0.0]))
         assert box == (25.0, 25.0, 25.0)
 
-
 # ── Test: fetch_structure rename fallback ─────────────────────────────────
 
 class TestFetchStructureRename:
@@ -500,7 +488,6 @@ class TestFetchStructureRename:
         (tmp_path / "unrelated.txt").write_text("x")
         assert _find_downloaded_pdb(str(tmp_path), "3QPD") is None
 
-
 # ── Test: Config-driven protocol-trust thresholds ────────────────────────
 
 class TestProtocolTrustThresholds:
@@ -515,7 +502,6 @@ class TestProtocolTrustThresholds:
         assert protocol_trust("science", 1.8) == "Validated (Marginal)"
         assert protocol_trust("science", 2.5).startswith("CAUTION: High RMSD")
         assert protocol_trust("ci", 0.5) == "CI Mode (Skipped)"
-
 
 # ── Test: RDKit fallback score labeling ──────────────────────────────────
 
@@ -532,7 +518,6 @@ class TestFallbackScoreLabeling:
         s = format_fallback_score(None)
         assert s.startswith("(fallback)")
         assert "N/A" in s
-
 
 # ── Test: Error Handling ───────────────────────────────────────────────────
 
@@ -605,7 +590,6 @@ class TestErrorHandling:
         assert by_id["R2"] == -5.0, "Healthy workers should still return their energy"
         assert len(results) == 3
 
-
 # ── Test: No recursive similarity relaxation ─────────────────────────────
 
 class TestApplyFiltersRelaxed:
@@ -644,7 +628,6 @@ class TestApplyFiltersRelaxed:
             "Relaxing similarity threshold" in str(c.args[0])
             for c in mock_info.call_args_list
         ), "Expected a similarity-threshold relaxation notice"
-
 
 # ── Test: Real PDB smoke test (science mode, real PDBs) ────────────────────
 
@@ -741,7 +724,6 @@ class TestRealPDBSmoke:
 
         assert len(rows) == 2, f"Expected 2 rows, got {len(rows)}"
 
-
 # ── Test 10: LigandPreparator ──────────────────────────────────────────────
 
 class TestLigandPreparator:
@@ -803,7 +785,6 @@ class TestLigandPreparator:
         preparator = LigandPreparator()
         with pytest.raises((TypeError, RuntimeError)):
             preparator.prepare(None)  # type: ignore[arg-type]
-
 
 # ── Test 11: analyze_binding_interactions ──────────────────────────────────
 
@@ -889,7 +870,6 @@ class TestAnalyzeBindingInteractions:
             f.write("REMARK   0\n")
         with pytest.raises(ValueError):
             analyze_binding_interactions(empty_path, mock_receptor_pdb)
-
 
 # ── Test 12: Integration Pipeline ────────────────────────────────────────────
 
@@ -1019,7 +999,6 @@ class TestIntegrationPipeline:
             f"CSV missing required columns: {required_columns - set(rows[0].keys())}"
         )
 
-
 # ── Test: Redocking failure aborts main() unless forced ─────────────────────
 
 class TestMainRedockingGate:
@@ -1126,7 +1105,6 @@ class TestMainRedockingGate:
         assert (output_dir / "top_candidates.csv").exists(), \
             "CSV should be written when AUTOANTIBIOTIC_FORCE is set"
 
-
 # ── Test: New experimental-validation-defaults (Task changes) ─────────────
 
 class TestExperimentalValidationDefaults:
@@ -1172,15 +1150,6 @@ class TestExperimentalValidationDefaults:
                                                 from discovery_pipeline import main
                                                 main(target_count=3)
 
-    def test_mutation_scan_mutants_length_is_five(self):
-        """MUTATION_SCAN_MUTANTS now includes the two clinical mutants (5 total)."""
-        from config.constants import MUTATION_SCAN_MUTANTS, MUTATION_SCAN
-        assert len(MUTATION_SCAN_MUTANTS) == 5
-        assert MUTATION_SCAN is True
-        assert MUTATION_SCAN_MUTANTS == [
-            "S403A", "K406A", "Y446A", "N146K", "G262S"
-        ]
-
     def test_filter_rejects_qed_0_65(self):
         """apply_filters rejects a compound whose QED is below the 0.7 gate."""
         # Benzene has a very low QED (~0.0); pin the calculated QED to 0.65 by
@@ -1200,7 +1169,6 @@ class TestExperimentalValidationDefaults:
                 with patch("utils.filtering.DIVERSITY_MIN_COUNT", 0):
                     filtered = apply_filters([record])
         assert len(filtered) == 0, "QED=0.65 must be rejected by the >0.7 gate"
-
 
 # ── Test: CONSERVED_RESIDUES warning ──────────────────────────────────────
 
@@ -1245,7 +1213,6 @@ class TestConservedResiduesCentroid:
                             "Conserved residues" in str(c.args[0])
                             for c in mock_warn.call_args_list
                         ), "Expected warning about missing conserved residues"
-
 
 # ── Test: Offline local PDB loading ──────────────────────────────────────
 
@@ -1295,7 +1262,6 @@ class TestPrepareTargetsNoneCenter:
             "PBP2a active_center should be None when active-site centroid "
             "computation fails."
         )
-
 
 class TestOfflinePDBLoad:
     def test_uses_local_mock_pdb(self, tmp_path):
@@ -1386,7 +1352,6 @@ class TestOfflinePDBLoad:
             for c in mock_err.call_args_list
         ), "Expected an error about refusing science mode with a mock PDB"
 
-
 # ── Test: CSV low-conf suffix ──────────────────────────────────────────────
 
 class TestCsvLowConfSuffix:
@@ -1415,7 +1380,6 @@ class TestCsvLowConfSuffix:
         by_id = {r["Compound_ID"]: r for r in rows}
         assert by_id["AA-0001"]["Selectivity_Index"] == "3.50", by_id["AA-0001"]
         assert by_id["AA-0002"]["Selectivity_Index"] == "1.20 (low-conf)", by_id["AA-0002"]
-
 
 # ── Test: resistance flags unverified residue on missing SER403 ─────────────
 
@@ -1454,7 +1418,6 @@ class TestResistanceUnverifiedResidue:
             interactions=interactions,
         )
         assert "unverified" in notes.lower(), notes
-
 
 # ── Test: Task 1 — Externalised target residue lists ──────────────────────
 
@@ -1512,7 +1475,6 @@ class TestTargetResidueLoading:
         assert TRYPSIN_CATALYTIC_RESIDUES == ["HIS57", "ASP102", "SER195"]
         assert CES1_CATALYTIC_RESIDUES == ["SER221", "HIS468", "GLU354"]
 
-
 # ── Test: Task 2 — LigandPreparator error clarity ─────────────────────────
 
 class TestLigandPreparatorError:
@@ -1566,7 +1528,6 @@ class TestLigandPreparatorError:
                         "pip install meeko" in str(call.args[0])
                         for call in mock_warn.call_args_list
                     ), "Expected a warning suggesting 'pip install meeko'"
-
 
 # ── Test: Task 3 — Native ligand resname override ─────────────────────────
 
@@ -1627,7 +1588,6 @@ class TestNativeLigandResnameOverride:
             str(holo), str(smi), str(pdbqt)
         )
         assert result is None
-
 
 # ── Test: PyMOL script generation ─────────────────────────────────────────
 
@@ -1695,7 +1655,6 @@ class TestGeneratePyMOLScript:
         assert "Ligand_1" in content
         assert "Ligand_2" not in content
 
-
 # ── Test: Task 1 — Consensus rigid docking returns best energy ───────
 
 class TestConsensusDocking:
@@ -1740,7 +1699,6 @@ class TestConsensusDocking:
                 (20.0, 20.0, 20.0), str(tmp_path), "active", use_vina=True,
             )
         assert results[0][1] == -6.0
-
 
 # ── Test: Task 1 — Active-site pose propagated across workers ───────
 
@@ -1868,93 +1826,42 @@ class TestActivePosePropagation:
             "failed flex dock must not clobber the retained rigid pose"
         assert os.path.exists(rec.active_docked_pdbqt)
 
+# ── Test: Task 1 — Mechanism-restricted (two-target) Selectivity Index ──
 
-# ── Test: Task 2 — MM-GBSA-like rerank populates mmgbca_score ───────
+class TestMechanismRestrictedSelectivity:
+    """Task 1 — SI uses ONLY the selectivity panel (trypsin, CES1) in its
+    denominator; Off_Target_Risk is derived from trypsin/CES1 only (the
+    simplified pipeline no longer docks the liability panel). Also covers
+    SI_vs_Ceftaroline and the tiered SI labels."""
 
-class TestMMGBSARerank:
-    def test_rerank_populates_score_from_pose(self, tmp_path):
-        """rerank_mmff relaxes an active-site pose and sets mmgbca_score (float)."""
-        from rdkit.Chem import AllChem
-        from utils.docking import rerank_mmff
+    def _run(self, tmp_path, pb2pa_e, trypsin_e, ces1_e):
+        records = [
+            CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
+                           mol=Chem.MolFromSmiles("c1ccccc1"))
+        ]
+        records[0].pb2pa_active_energy = pb2pa_e
 
-        mol = Chem.MolFromSmiles("c1ccccc1")
-        mol = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol, randomSeed=42)
-        AllChem.MMFFOptimizeMolecule(mol)
-        pose = tmp_path / "pose.pdbqt"
-        Chem.MolToPDBFile(mol, str(pose))
+        targets = {
+            "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
+            "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
+        }
+        fixed = {"trypsin": trypsin_e, "ces1": ces1_e}
 
-        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
-                             mol=Chem.MolFromSmiles("c1ccccc1"))
-        rec.active_docked_pdbqt = str(pose)
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
+                          dock_func=None, use_vina=True):
+            return [(r, fixed[tag]) for r in recs]
 
-        rerank_mmff([rec], work_dir=str(tmp_path), use_vina=True)
-        assert rec.mmgbca_score is not None, "mmgbca_score should be populated"
-        assert isinstance(rec.mmgbca_score, float)
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            return analyze_selectivity_and_resistance(
+                records, targets, str(tmp_path),
+                {"vina": True, "USE_VINA": True},
+            )
 
-    def test_load_pose_mol_reads_pdbqt_via_obabel(self, tmp_path):
-        """_load_pose_mol converts a real Vina PDBQT pose to an RDKit Mol with a
-        3D conformer. Regression: RDKit has no MolFromPDBQTFile and parsing a
-        PDBQT as PDB returns None, so MM-GBSA was always N/A."""
-        import shutil
-        if shutil.which("obabel") is None:
-            pytest.skip("obabel required")
-        from rdkit.Chem import AllChem
-        from utils.docking import _load_pose_mol
-
-        # Build a genuine PDBQT pose with obabel (partial charges + atom types).
-        mol = Chem.AddHs(Chem.MolFromSmiles("c1ccccc1O"))
-        AllChem.EmbedMolecule(mol, randomSeed=42)
-        pdb = tmp_path / "lig.pdb"
-        Chem.MolToPDBFile(mol, str(pdb))
-        pdbqt = tmp_path / "lig.pdbqt"
-        import subprocess
-        subprocess.run(["obabel", str(pdb), "-O", str(pdbqt), "-xr"],
-                       capture_output=True, timeout=60)
-
-        loaded = _load_pose_mol(str(pdbqt))
-        assert loaded is not None, "pose PDBQT must load into RDKit via obabel"
-        assert loaded.GetNumConformers() >= 1
-        assert loaded.GetNumAtoms() > 0
-
-    def test_rerank_skips_without_pose(self, tmp_path):
-        """rerank_mmff leaves mmgbca_score None when no pose is present."""
-        from utils.docking import rerank_mmff
-
-        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
-                             mol=Chem.MolFromSmiles("c1ccccc1"))
-        rerank_mmff([rec], work_dir=str(tmp_path), use_vina=True)
-        assert rec.mmgbca_score is None
-
-    def test_rerank_skips_when_vina_unavailable(self, tmp_path):
-        """rerank_mmff is a no-op (no real pose) when use_vina is False."""
-        from rdkit.Chem import AllChem
-        from utils.docking import rerank_mmff
-
-        mol = Chem.MolFromSmiles("c1ccccc1")
-        mol = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol, randomSeed=42)
-        AllChem.MMFFOptimizeMolecule(mol)
-        pose = tmp_path / "pose.pdbqt"
-        Chem.MolToPDBFile(mol, str(pose))
-
-        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
-                             mol=Chem.MolFromSmiles("c1ccccc1"))
-        rec.active_docked_pdbqt = str(pose)
-        rerank_mmff([rec], work_dir=str(tmp_path), use_vina=False)
-        assert rec.mmgbca_score is None
-
-
-# ── Test: Task 3 — Selectivity uses all 4 human targets ─────────────
-
-class TestWiderSelectivityPanel:
-    def test_selectivity_averages_four_targets(self, tmp_path):
-        """
-        analyze_selectivity_and_resistance docks the top-10 against the 4-protein
-        human panel (trypsin, CES1, albumin, CYP3A4) and computes SI from the
-        averaged (best) human energy. With fixed per-target dock energies we verify
-        the human_min used is the min across all 4 supplied energies.
-        """
+    def test_selectivity_uses_two_targets(self, tmp_path):
+        """analyze_selectivity_and_resistance docks the top-10 against the
+        mechanism-restricted two-target panel (trypsin, CES1) only and computes
+        SI from the tightest of those two energies. The liability panel is no
+        longer docked (its columns are reported as N/A)."""
         records = [
             CompoundRecord(compound_id=f"AA-{i:04d}", smiles="c1ccccc1",
                            mol=Chem.MolFromSmiles("c1ccccc1"))
@@ -1966,20 +1873,13 @@ class TestWiderSelectivityPanel:
         targets = {
             "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
             "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
-            "albumin": {"pdbqt": "a.pdbqt", "active_center": np.zeros(3)},
-            "cyp3a4": {"pdbqt": "y.pdbqt", "active_center": np.zeros(3)},
         }
-
-        # Fixed human energies per tag: trypsin=-4, ces1=-3, albumin=-2, cyp3a4=-1
-        fixed = {
-            "trypsin": -4.0, "ces1": -3.0,
-            "albumin": -2.0, "cyp3a4": -1.0,
-        }
+        # Fixed human energies per tag: trypsin=-4, ces1=-3.
+        fixed = {"trypsin": -4.0, "ces1": -3.0}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
                           dock_func=None, use_vina=True):
-            e = fixed[tag]
-            return [(r, e) for r in recs]
+            return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
             out = analyze_selectivity_and_resistance(
@@ -1987,15 +1887,11 @@ class TestWiderSelectivityPanel:
                 {"vina": True, "USE_VINA": True},
             )
 
-        # human_min across all 4 = -4.0 → OLD pan-panel SI = 10.0/4.0 = 2.5
-        # (preserved as Selectivity_Index_PanPanel for transparency).
-        assert out[0].human_albumin_energy == -2.0
-        assert out[0].human_cyp3a4_energy == -1.0
-        assert out[0].selectivity_index_panpanel == pytest.approx(2.5)
-        # NEW primary SI uses ONLY the selectivity panel (trypsin=-4.0,
-        # ces1=-3.0) → min = -4.0 → SI = 10.0/4.0 = 2.5. (The liability panel
-        # albumin/cyp3a4 are excluded from the denominator.)
+        # SI uses ONLY trypsin/CES1 → min = -4.0 → SI = 10.0/4.0 = 2.5.
         assert out[0].selectivity_index == pytest.approx(2.5)
+        # The liability panel is no longer docked → energies are None ("N/A").
+        assert getattr(out[0], "human_albumin_energy", None) is None
+        assert getattr(out[0], "human_cyp3a4_energy", None) is None
         # 2 selectivity-panel targets valid → High confidence.
         assert out[0].selectivity_confidence == "High"
 
@@ -2061,78 +1957,11 @@ class TestWiderSelectivityPanel:
         # A clash (>0) is not a real binder, so no off-target risk.
         assert out[0].off_target_risk is False
 
-
-class TestMechanismRestrictedSelectivity:
-    """Task 1 — SI uses ONLY the selectivity panel (trypsin, CES1) in its
-    denominator; a tight LIABILITY-panel binder (CYP3A4) must NOT lower SI but
-    MUST set Off_Target_Risk=True. Also covers SI_vs_Ceftaroline."""
-
-    def _run(self, tmp_path, pb2pa_e, trypsin_e, ces1_e, cyp3a4_e,
-             albumin_e=None, herg_e=None, cyp2d6_e=None):
-        records = [
-            CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
-                           mol=Chem.MolFromSmiles("c1ccccc1"))
-        ]
-        records[0].pb2pa_active_energy = pb2pa_e
-
-        # Build a targets dict for every panel member used.
-        targets = {
-            "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
-            "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
-        }
-        fixed = {"trypsin": trypsin_e, "ces1": ces1_e}
-        for key, e in (("cyp3a4", cyp3a4_e), ("albumin", albumin_e),
-                       ("herg", herg_e), ("cyp2d6", cyp2d6_e)):
-            if e is not None:
-                targets[key] = {"pdbqt": f"{key}.pdbqt",
-                                "active_center": np.zeros(3)}
-                fixed[key] = e
-
-        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None, use_vina=True):
-            return [(r, fixed[tag]) for r in recs]
-
-        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
-            return analyze_selectivity_and_resistance(
-                records, targets, str(tmp_path),
-                {"vina": True, "USE_VINA": True},
-            )
-
-    def test_liability_cyp3a4_does_not_lower_si(self, tmp_path):
-        """A tight CYP3A4 energy (-9.5) must NOT lower the mechanism-restricted
-        SI (denominator stays trypsin/CES1), but MUST set Off_Target_Risk."""
-        out = self._run(tmp_path, pb2pa_e=-9.0, trypsin_e=-3.0, ces1_e=-4.0,
-                        cyp3a4_e=-9.5)
-        rec = out[0]
-        # SI denominator = min(trypsin=-3, ces1=-4) = -4.0 → SI = 9/4 = 2.25.
-        # A CYP3A4 of -9.5 must NOT pull the denominator to -9.5.
-        assert rec.selectivity_index == pytest.approx(2.25)
-        assert rec.off_target_risk is True
-        # The liability energy still reaches its own column (honest reporting).
-        assert rec.human_cyp3a4_energy == -9.5
-        # Pan-panel SI (OLD) DOES include cyp3a4 as denominator = 9/9.5 = 0.95.
-        assert rec.selectivity_index_panpanel == pytest.approx(9.0 / 9.5)
-
-    def test_passes_gate_with_mechanism_restricted_si(self, tmp_path):
-        """When trypsin/CES1 bind weakly, the NEW SI can exceed the 2.0 gate even
-        though the OLD pan-panel SI fails (liability panel dominates)."""
-        out = self._run(tmp_path, pb2pa_e=-9.0, trypsin_e=-2.0, ces1_e=-2.0,
-                        cyp3a4_e=-10.0)
-        rec = out[0]
-        # NEW SI = 9/2 = 4.5 → passes the mechanism-restricted gate.
-        assert rec.selectivity_index == pytest.approx(4.5)
-        assert rec.selectivity_index >= 2.0
-        # OLD pan-panel SI = 9/10 = 0.9 → would have failed the old gate.
-        assert rec.selectivity_index_panpanel == pytest.approx(0.9)
-        # But the candidate is still flagged as a liability risk (honest).
-        assert rec.off_target_risk is True
-
     def test_si_vs_ceftaroline_transparency(self, tmp_path):
         """SI_vs_Ceftaroline = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E (7.3),
         computed with NO covalent bonus. Matches the configured control energy."""
         from config.constants import CEFTAROLINE_CONTROL_E
-        out = self._run(tmp_path, pb2pa_e=-7.3, trypsin_e=-2.0, ces1_e=-3.0,
-                        cyp3a4_e=None)
+        out = self._run(tmp_path, pb2pa_e=-7.3, trypsin_e=-2.0, ces1_e=-3.0)
         rec = out[0]
         assert rec.si_vs_ceftaroline == pytest.approx(
             abs(-7.3) / CEFTAROLINE_CONTROL_E)
@@ -2143,353 +1972,30 @@ class TestMechanismRestrictedSelectivity:
     def test_si_vs_ceftaroline_populated_for_all(self, tmp_path):
         """SI_vs_Ceftaroline is populated whenever a PBP2a energy exists,
         independently of human panel availability."""
-        out = self._run(tmp_path, pb2pa_e=-10.0, trypsin_e=-3.0, ces1_e=-4.0,
-                        cyp3a4_e=-9.0)
+        out = self._run(tmp_path, pb2pa_e=-10.0, trypsin_e=-3.0, ces1_e=-4.0)
         assert out[0].si_vs_ceftaroline is not None
         assert out[0].si_vs_ceftaroline == pytest.approx(10.0 / 7.3)
 
+class TestSelectivityIndexTiers:
+    """Tiered SI labels (paper §2.4)."""
 
+    def test_si_tier_strong_promising_weak_na(self):
+        assert si_tier(2.5) == "Strong"
+        assert si_tier(2.0) == "Strong"
+        assert si_tier(1.8) == "Promising"
+        assert si_tier(1.5) == "Promising"
+        assert si_tier(1.2) == "Weak"
+        assert si_tier(0.0) == "Weak"
+        assert si_tier(None) == "N/A"
+
+    def test_si_tier_thresholds_match_constants(self):
+        from config.constants import SI_STRONG_THRESHOLD, SI_PROMISING_THRESHOLD
+        assert si_tier(SI_STRONG_THRESHOLD) == "Strong"
+        assert si_tier(SI_STRONG_THRESHOLD - 0.01) == "Promising"
+        assert si_tier(SI_PROMISING_THRESHOLD) == "Promising"
+        assert si_tier(SI_PROMISING_THRESHOLD - 0.01) == "Weak"
 
 # ── Test: Flexible-residue PDBQT torsion tree (Vina --flex) ──────────
-
-class TestWriteFlexPdbqt:
-    """write_flex_pdbqt must emit a Vina-valid flexible-residue torsion tree.
-
-    Regression: Vina rejected the flex file with "Unknown or inappropriate tag
-    found in flex residue or ligand" because a ``TORSDOF`` record (ligand-only)
-    was emitted inside the ``BEGIN_RES``/``END_RES`` block, and because polar
-    hydrogens (HD) were missing. This locks in the fix.
-    """
-
-    def _write_ser_flex_pdb(self, path):
-        # Two SER residues (chains A/B) with backbone + OG side chain, no Hs
-        # (matching a crystal PDB slice).
-        lines = [
-            "ATOM      1  N   SER A 403      23.803  25.107  82.919  1.00  0.00           N",
-            "ATOM      2  CA  SER A 403      22.833  25.575  83.912  1.00  0.00           C",
-            "ATOM      3  C   SER A 403      21.357  25.586  83.515  1.00  0.00           C",
-            "ATOM      4  O   SER A 403      20.477  25.627  84.383  1.00  0.00           O",
-            "ATOM      5  CB  SER A 403      23.209  26.984  84.359  1.00  0.00           C",
-            "ATOM      6  OG  SER A 403      24.356  26.948  85.169  1.00  0.00           O",
-            "END",
-        ]
-        with open(path, "w") as fh:
-            fh.write("\n".join(lines) + "\n")
-
-    def test_no_torsdof_in_flex_block(self, tmp_path):
-        from utils.structure_prep import write_flex_pdbqt
-
-        pdb = str(tmp_path / "flex.pdb")
-        out = str(tmp_path / "flex.pdbqt")
-        self._write_ser_flex_pdb(pdb)
-        assert write_flex_pdbqt(pdb, out, ["SER403"]) is True
-
-        text = open(out).read()
-        # TORSDOF is a ligand-only tag; Vina rejects it inside a flex residue.
-        assert "TORSDOF" not in text, "flex residue must not carry a TORSDOF record"
-        assert "BEGIN_RES" in text and "END_RES" in text
-        assert "ROOT" in text and "ENDROOT" in text
-
-    def test_side_chain_only_branch_and_backbone_root(self, tmp_path):
-        from utils.structure_prep import write_flex_pdbqt
-
-        pdb = str(tmp_path / "flex.pdb")
-        out = str(tmp_path / "flex.pdbqt")
-        self._write_ser_flex_pdb(pdb)
-        write_flex_pdbqt(pdb, out, ["SER403"])
-        lines = open(out).read().splitlines()
-
-        # Backbone N/CA/C/O live in ROOT; the CA–CB bond opens a BRANCH so only
-        # the side chain is flexible.
-        root_i = lines.index("ROOT")
-        endroot_i = lines.index("ENDROOT")
-        root_atoms = [l[12:16].strip() for l in lines[root_i + 1:endroot_i]
-                      if l.startswith("ATOM")]
-        assert "CA" in root_atoms and "N" in root_atoms
-        assert any(l.startswith("BRANCH") for l in lines)
-
-    def test_polar_hydrogen_present_with_hd_type(self, tmp_path):
-        from utils.structure_prep import write_flex_pdbqt
-        import shutil
-
-        if shutil.which("obabel") is None:
-            pytest.skip("obabel required to add polar hydrogens")
-        pdb = str(tmp_path / "flex.pdb")
-        out = str(tmp_path / "flex.pdbqt")
-        self._write_ser_flex_pdb(pdb)
-        write_flex_pdbqt(pdb, out, ["SER403"])
-        text = open(out).read()
-        # obabel -h adds the OG hydroxyl proton as an HD atom.
-        assert " HD" in text, "polar hydrogen (HD) must be present for H-bonding"
-
-
-# ── Test: Mutation scan parses 1-letter mutant codes ────────────────
-
-class TestMutationScan:
-    def test_one_letter_mutant_codes_populate_delta(self, tmp_path):
-        """_run_mutation_scan must parse 1-letter codes (e.g. 'S403A') and
-        populate mutant_energy_delta. Regression: the parser required a 3-letter
-        suffix so mutant_specs was always empty → Mutant_Energy_Delta = N/A."""
-        import discovery_pipeline as P
-
-        rec = CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
-                             mol=Chem.MolFromSmiles("c1ccccc1"))
-        pose = tmp_path / "AA-0001_active_out.pdbqt"
-        pose.write_text("MODEL 1\nENDMDL\n")
-        rec.active_docked_pdbqt = str(pose)
-        rec.pb2pa_active_energy = -9.0
-
-        pb2pa = {
-            "pdbqt": str(tmp_path / "wt.pdbqt"),
-            "active_center": np.zeros(3),
-            "cleaned_pdb": None,
-        }
-        (tmp_path / "wt.pdbqt").write_text("ATOM\n")
-        targets = {"PBP2a": pb2pa, "mode": "science"}
-        deps = {"USE_VINA": True}
-
-        # Mutant receptor build + docking are mocked; the mutant energy is 1.0
-        # kcal/mol worse than WT, so the average delta is +1.0.
-        with patch("discovery_pipeline._build_real_mutant_pdbqt",
-                    return_value=str(tmp_path / "mut.pdbqt")), \
-             patch("discovery_pipeline.dock_compound", return_value=-8.0):
-            P._run_mutation_scan([rec], targets, str(tmp_path), deps)
-
-        assert rec.mutant_energy_delta is not None, \
-            "1-letter mutant code must be parsed → delta populated"
-        assert rec.mutant_energy_delta == pytest.approx(1.0)
-
-    def test_build_real_mutant_pdbqt_ser_to_ala(self, tmp_path):
-        """_build_real_mutant_pdbqt must rebuild geometry, not just relabel.
-
-        SER403 → ALA should DROP the OG side-chain atom (fewer heavy atoms than
-        the wild-type SER) and write the mutant residue name ALA into the PDBQT.
-        Requires obabel (skipped otherwise)."""
-        import discovery_pipeline as P
-
-        if shutil.which("obabel") is None:
-            pytest.skip("obabel required to build real mutant geometry")
-
-        # Minimal single SER residue (backbone N/CA/C/O + CB + OG).
-        pdb = tmp_path / "ser403.pdb"
-        pdb.write_text(
-            "ATOM      1  N   SER A 403      10.000  10.000   0.000  1.00  0.00           N\n"
-            "ATOM      2  CA  SER A 403      10.000  11.500   0.000  1.00  0.00           C\n"
-            "ATOM      3  C   SER A 403      11.400  12.000   0.000  1.00  0.00           C\n"
-            "ATOM      4  O   SER A 403      12.200  11.100   0.000  1.00  0.00           O\n"
-            "ATOM      5  CB  SER A 403       8.600  12.000   0.000  1.00  0.00           C\n"
-            "ATOM      6  OG  SER A 403       7.500  11.100   0.000  1.00  0.00           O\n"
-        )
-
-        out = P._build_real_mutant_pdbqt(str(pdb), 403, "ALA", str(tmp_path))
-        assert out is not None, "real mutant PDBQT build must succeed with obabel"
-
-        text = open(out).read()
-        # Mutant residue name must be ALA (not SER) in the PDBQT RESNAME cols.
-        assert "ALA" in text and "SER" not in text.split("\n")[0:0]
-
-        # Count heavy atoms: WT SER had N,CA,C,O,CB,OG (6); ALA keeps
-        # N,CA,C,O,CB and drops OG → strictly fewer atoms.
-        wt_atoms = sum(
-            1 for ln in pdb.read_text().splitlines()
-            if ln.startswith("ATOM")
-        )
-        mut_heavy = sum(
-            1 for ln in text.splitlines()
-            if ln.startswith(("ATOM", "HETATM")) and ln[76:78].strip() != "H"
-        )
-        assert mut_heavy < wt_atoms, (
-            f"ALA mutant must have fewer atoms than SER ({mut_heavy} < {wt_atoms})"
-        )
-        assert mut_heavy == 5, f"expected 5 heavy atoms (N,CA,C,O,CB), got {mut_heavy}"
-
-
-# ── Test: Vina flex PDBQT validity check (Phase 3.5) ──────────────────
-
-class TestValidateFlexPdbqt:
-    """validate_flex_pdbqt must certify a flex file is consumable by Vina --flex.
-
-    Regression: Vina rejects flex files carrying a ligand-only ``TORSDOF`` tag
-    or lacking a proper ROOT/BRANCH torsion tree. This checks the structural
-    invariants before the (expensive) flex docking step.
-    """
-
-    def _write_valid_ser_flex(self, path):
-        from utils.structure_prep import write_flex_pdbqt
-        pdb = str(Path(path).with_suffix("")) + "_src.pdb"
-        lines = [
-            "ATOM      1  N   SER A 403      23.803  25.107  82.919  1.00  0.00           N",
-            "ATOM      2  CA  SER A 403      22.833  25.575  83.912  1.00  0.00           C",
-            "ATOM      3  C   SER A 403      21.357  25.586  83.515  1.00  0.00           C",
-            "ATOM      4  O   SER A 403      20.477  25.627  84.383  1.00  0.00           O",
-            "ATOM      5  CB  SER A 403      23.209  26.984  84.359  1.00  0.00           C",
-            "ATOM      6  OG  SER A 403      24.356  26.948  85.169  1.00  0.00           O",
-            "END",
-        ]
-        with open(pdb, "w") as fh:
-            fh.write("\n".join(lines) + "\n")
-        assert write_flex_pdbqt(pdb, str(path), ["SER403"]) is True
-
-    def test_valid_flex_passes(self, tmp_path):
-        out = tmp_path / "flex.pdbqt"
-        self._write_valid_ser_flex(out)
-        assert validate_flex_pdbqt(str(out)) is True
-
-    def test_torsdof_rejected(self, tmp_path):
-        out = tmp_path / "flex.pdbqt"
-        self._write_valid_ser_flex(out)
-        text = open(out).read() + "TORSDOF 1\n"
-        out.write_text(text)
-        assert validate_flex_pdbqt(str(out)) is False
-
-    def test_missing_root_rejected(self, tmp_path):
-        out = tmp_path / "flex.pdbqt"
-        out.write_text("BEGIN_RES SER A 403\nEND_RES SER A 403\n")
-        assert validate_flex_pdbqt(str(out)) is False
-
-    def test_empty_file_rejected(self, tmp_path):
-        out = tmp_path / "flex.pdbqt"
-        out.write_text("")
-        assert validate_flex_pdbqt(str(out)) is False
-
-
-# ── Test: Negative selection — filter_by_human_clash (Phase 3.5) ──────
-
-class TestFilterByHumanClash:
-    """filter_by_human_clash removes tight HERG/CYP3A4 binders outright.
-
-    The standard SI only flags weak selectivity; negative selection must
-    DISCARD a compound that binds a critical human off-target tightly, no
-    matter how strong its bacterial affinity. It must NOT discard compounds
-    that merely bind humans weakly.
-    """
-
-    def _rec(self, cid, **energies):
-        rec = CompoundRecord(compound_id=cid, smiles="c1ccccc1",
-                              mol=Chem.MolFromSmiles("c1ccccc1"))
-        for k, v in energies.items():
-            setattr(rec, k, v)
-        return rec
-
-    def test_herg_clash_flagged_when_only_candidate(self):
-        # When the hard-clash rule would remove EVERY candidate, the guard
-        # retains them (marked Off_Target_Risk=True) rather than emptying the
-        # report. A lone tight-HERG binder is therefore retained but flagged.
-        rec = self._rec("AA-1", human_herg_energy=-9.5, human_cyp3a4_energy=-3.0,
-                        pb2pa_active_energy=-11.0)
-        kept = filter_by_human_clash([rec])
-        assert len(kept) == 1
-        assert kept[0].off_target_risk is True
-
-    def test_cyp3a4_clash_flagged_when_only_candidate(self):
-        rec = self._rec("AA-2", human_herg_energy=-2.0, human_cyp3a4_energy=-8.1,
-                        pb2pa_active_energy=-12.0)
-        kept = filter_by_human_clash([rec])
-        assert len(kept) == 1
-        assert kept[0].off_target_risk is True
-
-    def test_hard_clash_discards_when_safe_candidates_remain(self):
-        # With a mixed set, a tight-HERG binder is DISCARDED while a safe
-        # compound is kept — the guard only fires on a fully-empty outcome.
-        clash = self._rec("AA-1", human_herg_energy=-9.5,
-                          pb2pa_active_energy=-11.0)
-        safe = self._rec("AA-2", human_herg_energy=-3.0,
-                         pb2pa_active_energy=-11.0)
-        kept = filter_by_human_clash([clash, safe])
-        ids = {r.compound_id for r in kept}
-        assert "AA-1" not in ids
-        assert "AA-2" in ids
-
-    def test_weak_human_binding_kept(self):
-        rec = self._rec("AA-3", human_herg_energy=-4.5, human_cyp3a4_energy=-3.0,
-                        pb2pa_active_energy=-11.0)
-        kept = filter_by_human_clash([rec])
-        assert len(kept) == 1
-        # Records the strongest (least negative) human engagement for reporting.
-        assert rec.human_offtarget_max_energy == pytest.approx(-3.0)
-
-    def test_at_threshold_not_discarded(self):
-        # Energy exactly at -8.0 is NOT < -8.0, so it is kept.
-        rec = self._rec("AA-4", human_herg_energy=-8.0, human_cyp3a4_energy=-4.0)
-        kept = filter_by_human_clash([rec])
-        assert len(kept) == 1
-
-    def test_max_energy_none_when_no_human_data(self):
-        rec = self._rec("AA-5", pb2pa_active_energy=-10.0)
-        kept = filter_by_human_clash([rec])
-        assert len(kept) == 1
-        assert rec.human_offtarget_max_energy is None
-
-
-# ── Test: Flexible docking is mandatory for Top-50 (Phase 3.5) ────────
-
-class TestRobustFlexDocking:
-    """Flexible docking must use an extended timeout and never silently fall
-    back to rigid docking on a Vina timeout for the Top-50 candidates.
-    """
-
-    def test_flex_timeout_constant_larger_than_vina(self):
-        from config.constants import VINA_TIMEOUT_S
-        assert FLEX_VINA_TIMEOUT_S > VINA_TIMEOUT_S
-
-    def test_dock_compound_passes_timeout_to_vina(self, tmp_path):
-        # A fake Vina (_run_vina_docking) records the timeout it was invoked
-        # with, and succeeds. Confirms the per-call timeout reaches Vina.
-        import discovery_pipeline as P
-        from utils.docking import _run_vina_docking
-
-        captured = {}
-
-        def fake_run(receptor_pdbqt, ligand_pdbqt, output_pdbqt, center,
-                     box_size, timeout=None, flex_pdbqt=None):
-            captured["timeout"] = timeout
-            return -9.123
-
-        rec = CompoundRecord(compound_id="AA-1", smiles="c1ccccc1",
-                             mol=Chem.MolFromSmiles("c1ccccc1"))
-        from utils import docking as docking_mod
-        with patch.object(docking_mod, "_run_vina_docking", side_effect=fake_run):
-            energy = P.dock_compound(
-                rec, "receptor.pdbqt", np.zeros(3), (20, 20, 20),
-                str(tmp_path), "active_flex", use_vina=True,
-                flex_pdbqt="flex.pdbqt", timeout=1234,
-            )
-        assert energy == pytest.approx(-9.123)
-        assert captured["timeout"] == 1234
-
-    def test_flex_timeout_retry_no_rigid_fallback(self, tmp_path):
-        # First call times out, second call (extended timeout) succeeds. The
-        # helper must return the flex energy, not silently fall back to rigid.
-        import discovery_pipeline as P
-
-        calls = []
-
-        def fake_dock(rec, receptor, center, box, work_dir, tag,
-                      use_vina=True, flex_pdbqt=None, timeout=None):
-            calls.append(timeout)
-            # First call (standard timeout) → TimeoutExpired; second (extended)
-            # → success. We emulate by raising when called with the short
-            # timeout and returning energy on the longer one.
-            if timeout == P.VINA_TIMEOUT_S:
-                raise subprocess.TimeoutExpired(cmd="vina", timeout=timeout)
-            return -9.5
-
-        rec = CompoundRecord(compound_id="AA-2", smiles="c1ccccc1",
-                             mol=Chem.MolFromSmiles("c1ccccc1"))
-        from utils import docking as docking_mod
-        with patch.object(docking_mod, "dock_compound", side_effect=fake_dock):
-            energy = P._run_flex_dock_with_fallback_timeout(
-                rec, "rigid.pdbqt", np.zeros(3), (20, 20, 20),
-                str(tmp_path), "flex.pdbqt",
-            )
-        # Both the standard and extended timeout runs were attempted; the
-        # extended-timeout flex energy is returned (no rigid fallback value).
-        assert P.VINA_TIMEOUT_S in calls
-        assert FLEX_VINA_TIMEOUT_S in calls
-        assert energy == pytest.approx(-9.5)
-
-
-# ── Test: Protocol validation tightening (Phase 3.5) ──────────────────
 
 class TestProtocolValidationTightening:
     """Redocking validation must use a tighter per-axis box around the native
@@ -2565,7 +2071,6 @@ class TestProtocolValidationTightening:
             )
         assert captured.get("redock_padding") == 3.0
 
-
 # ── Test: Reporting adds Phase 3.5 columns ───────────────────────────
 
 class TestReportingPhase35:
@@ -2596,7 +2101,6 @@ class TestReportingPhase35:
         # SI < 1.0 ⇒ flagged as high toxicity risk.
         assert bool(df["HIGH_TOXICITY_RISK"].iloc[0]) is True
         assert df["Human_OffTarget_Max_Energy"].iloc[0] == pytest.approx(-2.0)
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

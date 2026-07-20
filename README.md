@@ -292,57 +292,40 @@ Configuration is resolved in this order:
 sees results immediately. A real, heavy computational run requires an explicit
 `config.yaml` with `mode: science`.
 
-### Improving experimental-validation odds (consensus + rerank + wider panel)
+### Improving experimental-validation odds (simplified pipeline, v4.0)
 
-To raise the chance that top candidates are real, selective, low-resistance
-binders that experimentally validate, the pipeline layers several
-low-complexity boosts (all RDKit/AutoDock-Vina only, no deep learning, FEP, or
-external services):
+Version 4.0 removes every feature that did not change *which* molecules get
+reported, keeping the run fast (< 60 min for `--count 500`) and the result easy
+to defend. The surviving boosts (all RDKit / AutoDock-Vina only, no deep
+learning, FEP, or external services):
 (1) **Consensus rigid docking** — every compound is docked against a small set
 of PBP2a conformer PDBQTs (apo 1VQQ, holo 3ZG0, plus 4DKI) and the most
 negative energy is kept as `pb2pa_allosteric_energy` / `pb2pa_active_energy`;
 redocking validation likewise reports the best (lowest) RMSD across conformers.
-(2) **Local flexible docking** — in `science` mode the active-site step is also
-run with Vina `--flex` on a flexible-residue PDBQT built from SER403/LYS406/TYR446
-(see `FLEX_RESIDUES` in `config/constants.py`), giving a more realistic pose for
-interaction analysis and the MM-GBSA-like rerank; it falls back to rigid docking
-if flex prep fails. (3) **MM-GBSA-like rerank + diversity gate** — after Vina
-active-site docking of the top 10, each retained pose is relaxed with
-`MMFFOptimizeMolecule` and a crude MMFF energy stored as `MMGBSA_Score` (no full
-GBSA solver). Candidates with a *positive* relaxation energy are dropped, then
-the survivors are clustered by Morgan fingerprint (radius 2, 2048 bits) and a
-maximally dissimilar set (pairwise Tanimoto ≤ 0.4) fills the final top-10 so
-reported hits are distinct rather than near-duplicates. (4) **Wider selectivity
-panel** — the human off-target screen now averages docking energy over up to 6
-proteins (Trypsin, CES1, Serum Albumin [1AO6], CYP3A4 [1W0E], hERG [7CN1], and
-CYP2D6); new residue lists live in `config/targets.yaml`
-(`ALBUMIN_CATALYTIC_RESIDUES`, `CYP3A4_CATALYTIC_RESIDUES`,
-`HERG_CATALYTIC_RESIDUES`, `CYP2D6_CATALYTIC_RESIDUES`) with sane defaults in
-`config/constants.py`, and the SI threshold stays at 2.0. **hERG and CYP2D6 are
-optional off-targets and are skipped in offline/CI runs** (CYP2D6 uses a MOCK
-placeholder PDB by default); their energies are flagged "(mock)" in the report and
-must not be read as a physically real panel. (5) **Quantitative
-mutation scan** — toggle `mutation_scan: true` in `config/targets.yaml` (default
-on); for the top candidates the active-site pose is re-docked against three PBP2a
-mutants (S403A, K406A, Y446A) built by mutating the apo PDBQT, and the mean
-energy delta vs wild-type (`Mutant_Energy_Delta`) is recorded and folded into the
-resistance notes so low-resistance-emergence candidates are favoured. (6)
-**Library diversification** — BRICS recombination is biased by decomposing known
-binders (ceftaroline, meropenem; override via `seed_smiles`), and an external
-library CSV pointed to by `AUTOANTIBIOTIC_LIB_CSV` (columns `smiles,compound_id`)
-is merged in before filtering, reusing the existing CSV loader. Set
-`AUTOANTIBIOTIC_LIB_CSV` to a CSV containing known non-β-lactam PBP2a binders
-(e.g. ceftaroline analogs, glycopeptides) to bias BRICS generation via
-`seed_smiles`. (7) **Protocol-trust gate** — in `science` mode the run now
-*aborts* unless redocking RMSD ≤ 1.5 Å (`protocol_trust == "Validated"`); set
-`AUTOANTIBIOTIC_FORCE=1` to override. (8) **Tighter filters** — the ADMET gate
-requires `QED > 0.7` (was 0.6) and the strict similarity cutoff is `0.3` (was
-0.4; relaxed stays 0.5). (9) **More clinical mutants** — the mutation scan now
-covers `["S403A","K406A","Y446A","N146K","G262S"]`. (10) **More thorough docking**
-— Vina `--exhaustiveness` is `16` (was 8) and the `--flex` residues
-`["SER403","LYS406","TYR446"]` (FLEX_RESIDUES) stay active. (11) **Post-report
-key-H-bond filter** — any final candidate lacking both a Ser403 and Lys406
-catalytic H-bond is dropped (unless fewer than `TOP_N` would remain).
+Rigid docking only — flexible (`--flex`) docking was removed for speed and
+reproducibility. (2) **Mechanism-restricted selectivity** — the human off-target
+screen docks only the two mechanism-relevant serine hydrolases trypsin (1UTN) and
+CES1 (1YAH), whose narrow catalytic sites the seed library was explicitly
+designed to avoid. The promiscuous liability panel (albumin, CYP3A4, hERG,
+CYP2D6) is no longer docked; those columns report "N/A" and `Off_Target_Risk` is
+derived from trypsin/CES1 only. (3) **Tiered Selectivity Index** — the primary
+SI = `|E_PBP2a| / min(|E_trypsin|, |E_CES1|)` gets a tier label
+(`SI_Tier`: Strong ≥ 2.0, Promising 1.5–2.0, Weak < 1.5, N/A); the final report
+includes every candidate with SI ≥ 1.5 (Promising/Strong) and fills any
+remaining slots with the next-best by PBP2a energy, marked "Below gate". (4)
+**Diversity clustering** — the final set is clustered by Morgan fingerprint
+(radius 2, 2048 bits) and a maximally dissimilar set (pairwise Tanimoto ≤ 0.4)
+fills the top-10 so reported hits are distinct rather than near-duplicates. (5)
+**Library diversification** — an external library CSV pointed to by
+`AUTOANTIBIOTIC_LIB_CSV` (columns `smiles,compound_id`) is screened directly (no
+BRICS needed), letting you design the 6 scaffold families described below. (6)
+**Protocol-trust gate** — in `science` mode redocking must reproduce the native
+ligand within the `rmsd_marginal_max` / `rmsd_validated_max` cutoffs
+(`protocol_trust` badge); set `AUTOANTIBIOTIC_FORCE=1` to override a marginal
+result. (7) **Tighter filters** — the ADMET gate requires `QED > 0.7` and the
+strict similarity cutoff is `0.3` (relaxed `0.5`). (8) **Post-report key-H-bond
+filter** — any final candidate lacking both a Ser403 and Lys406 catalytic
+H-bond is dropped (unless fewer than `TOP_N` would remain).
 
 
 The allosteric and active-site docking boxes are auto-sized at runtime from the
@@ -352,6 +335,15 @@ only a fallback used when a site centre cannot be computed. The science-mode
 native-ligand redocking box is likewise auto-sized from the native ligand's
 centroid + atomic spread via `_redocking_box_size` (instead of a fixed 25 Å cube),
 falling back to 25 Å only if the ligand cannot be parsed.
+
+> **v4.0 box-sizing correction:** `_auto_box_size` now takes a `site_residues`
+> argument and measures the grid radius from *only* those catalytic-site residues,
+> then caps the result (PBP2a allosteric ≤ 18 Å, active ≤ 20 Å; selectivity-panel
+> trypsin/CES1 ≤ 15 Å). Previously the radius was measured from every receptor atom,
+> so the trypsin/CES1 boxes enclosed the whole protein and ligands docked on distant
+> surface patches, inflating off-target scores and artificially suppressing the SI.
+> Confining the grids to the catalytic pocket is the second half of the selectivity
+> fix (the first being the mechanism-restricted SI denominator).
 
 ### Target-specific residue configuration (`config/targets.yaml`)
 

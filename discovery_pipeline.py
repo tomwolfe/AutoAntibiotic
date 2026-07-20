@@ -105,11 +105,6 @@ from config.constants import (
     CYP3A4_CATALYTIC_RESIDUES,
     HERG_CATALYTIC_RESIDUES,
     CYP2D6_CATALYTIC_RESIDUES,
-    FLEX_RESIDUES,
-    FLEX_VINA_TIMEOUT_S,
-    FLEX_SCREEN_TIMEOUT_S,
-    MUTATION_SCAN,
-    MUTATION_SCAN_MUTANTS,
     FP_RADIUS,
     FP_NBITS,
     PBP2A_CONFORMER_IDS,
@@ -121,6 +116,8 @@ from config.constants import (
     SIMILARITY_THRESHOLD_RELAXED,
     DIVERSITY_MIN_COUNT,
     SELECTIVITY_INDEX_THRESHOLD,
+    SI_STRONG_THRESHOLD,
+    SI_PROMISING_THRESHOLD,
     SELECTIVITY_PANEL_TARGETS,
     LIABILITY_PANEL_TARGETS,
     CEFTAROLINE_CONTROL_E,
@@ -214,6 +211,7 @@ def _auto_box_size(
     min_size: float = 15.0,
     max_size: float = 30.0,
     padding: float = 6.0,
+    site_residues: Optional[List[str]] = None,
 ) -> Tuple[float, float, float]:
     """
     Auto-size a docking grid box around *center*.
@@ -229,6 +227,13 @@ def _auto_box_size(
     span more than 15 Å in real structures). When the receptor PDB is missing
     or the spread cannot be measured, the *default_box* is returned unchanged.
 
+    When *site_residues* is supplied (e.g. the catalytic-triad residue names),
+    the radius is measured only over those residues so the box encloses the
+    actual catalytic site rather than the whole protein surface -- this keeps
+    off-target docking focused on the narrow catalytic pocket the seed library
+    was designed to avoid, and prevents artificially strong off-target scores
+    from surface patches far from the catalytic centre.
+
     Args:
         receptor_pdb: Path to the cleaned receptor PDB (or None).
         center: Grid centre as a length-3 array (or None).
@@ -236,6 +241,8 @@ def _auto_box_size(
         min_size: Minimum box edge in Å (enforced even for tiny sites).
         max_size: Maximum box edge in Å (capped to prevent whole-protein boxes).
         padding: Extra Å added to the measured radius on each side.
+        site_residues: Optional list of residue names (e.g. ``["SER195"]``) to
+            restrict the radius measurement to the catalytic site.
 
     Returns:
         ``(x, y, z)`` box dimensions in Å.
@@ -247,6 +254,14 @@ def _auto_box_size(
         parser = PDBParser(QUIET=True)
         struct = parser.get_structure("receptor", receptor_pdb)
         center = np.asarray(center, dtype=float)
+        site_set = None
+        if site_residues is not None:
+            site_set = set()
+            for sr in site_residues:
+                # Accept either a bare resname ("SER") or "SER195" / "SER_195".
+                name = "".join(ch for ch in sr if ch.isalpha()).upper()
+                digits = "".join(ch for ch in sr if ch.isdigit())
+                site_set.add((name, int(digits) if digits else None))
         max_radius = 0.0
         for model in struct:
             for chain in model:
@@ -254,6 +269,10 @@ def _auto_box_size(
                     rid = residue.get_id()
                     if rid[0] != " ":
                         continue
+                    if site_set is not None:
+                        key = (residue.get_resname(), rid[1] if rid[1] else None)
+                        if key not in site_set and (residue.get_resname(), None) not in site_set:
+                            continue
                     for atom in residue:
                         try:
                             pos = atom.get_vector().get_array()
@@ -529,7 +548,6 @@ def run_redocking_validation(
     config: Optional[dict] = None,
     target_pdbqt_paths: Optional[List[str]] = None,
     cleaned_pdb: Optional[str] = None,
-    flex_residues: Optional[List[str]] = None,
 ) -> Tuple[bool, Optional[float], Optional[float]]:
     """
     Phase 0 — Protocol Validation.
@@ -537,13 +555,8 @@ def run_redocking_validation(
     Extracts the native ligand from the holo PDB (resname override, e.g. AI8),
     docks it back into the prepared PBP2a receptor(s), and computes the best
     (lowest) RMSD to the crystal pose across all prepared receptor conformers
-    (consensus redocking).
-
-    To improve pose recovery, the native ligand is redocked into a *flexible*
-    receptor when *cleaned_pdb* and *flex_residues* are supplied (Vina
-    ``--flex`` for the conserved catalytic residues Ser403/Lys406/Tyr446). If a
-    flexible redock exceeds the dedicated flex timeout, the conformer falls back
-    to *rigid* redocking so the validation can still complete.
+    (consensus redocking). Uses rigid (non-flexible) Vina docking for speed and
+    reproducibility.
 
     Returns ``(validation_ok, rmsd, core_rmsd)`` where ``rmsd`` is the best
     (lowest, full-ligand) RMSD over all conformers and ``core_rmsd`` is the
@@ -615,45 +628,19 @@ def run_redocking_validation(
     # when no explicit conformer list is provided.
     conformer_pdbqts = list(target_pdbqt_paths) if target_pdbqt_paths else [target_pdbqt_path]
 
-    # ── Flexible redocking (Task 3) ───────────────────────────────────────────
-    # Prepare a flexible receptor for the conserved catalytic residues
-    # (Ser403/Lys406/TYR446) ONCE, then pass it to every Vina redock via the
-    # ``--flex`` flag. A flexible receptor lets the side chains re-optimise
-    # around the native ligand, which recovers a tighter (lower) RMSD than the
-    # rigid receptor used previously. When preparation fails, ``flex_pdbqt``
-    # stays None and the loop falls back to rigid docking for every conformer.
-    if flex_residues is None:
-        flex_residues = FLEX_RESIDUES
-    flex_pdbqt = None
-    rigid_flex_pdbqt = None
-    if cleaned_pdb and deps["USE_VINA"]:
-        flex_prep = _prepare_flex_pdbqt(
-            target_pdbqt_path, cleaned_pdb, flex_residues, work_dir,
-        )
-        if flex_prep is not None:
-            rigid_flex_pdbqt, flex_pdbqt = flex_prep
-            log.info(
-                f"  Flexible redocking receptor prepared for {flex_residues} "
-                f"(Vina --flex)."
-            )
-        else:
-            log.warning(
-                "  Flexible redocking receptor could not be prepared; "
-                "falling back to rigid redocking."
-            )
-
+    # ── Rigid redocking (simplified pipeline) ────────────────────────────────
+    # The native ligand is redocked into the rigid prepared receptor(s) using
+    # AutoDock Vina. Flexible (--flex) docking was removed in v4.0 for speed and
+    # reproducibility; rigid docking preserves the protocol-validation contract.
     best_rmsd: Optional[float] = None
     best_core_rmsd: Optional[float] = None
     for conf_idx, receptor_pdbqt in enumerate(conformer_pdbqts):
         if receptor_pdbqt is None:
             continue
         conf_pdbqt = docked_pdb.replace(".pdb", f"_c{conf_idx}.pdbqt")
-        # Use the flex companion rigid receptor (movable side chains removed)
-        # when flexible docking is active, otherwise the plain rigid receptor.
-        receptor_for_dock = rigid_flex_pdbqt if flex_pdbqt else receptor_pdbqt
         vina_cmd = [
             "vina",
-            "--receptor", receptor_for_dock,
+            "--receptor", receptor_pdbqt,
             "--ligand", lig_pdbqt,
             "--out", conf_pdbqt,
             "--center_x", f"{center[0]:.3f}",
@@ -665,57 +652,13 @@ def run_redocking_validation(
                 "--exhaustiveness", "16",
                 "--num_modes", "3",
         ]
-        using_flex = flex_pdbqt is not None
-        if using_flex:
-            vina_cmd += ["--flex", flex_pdbqt]
-        # Flexible redocking is expensive; allow the dedicated (larger) flex
-        # timeout. On flex timeout we fall back to a rigid redock of the same
-        # conformer so the validation can still complete rather than silently
-        # dropping a conformer (which previously produced a 2-tuple / None RMSD
-        # crash).
-        # Flexible redocking is expensive; allow the dedicated (larger) flex
-        # timeout so a single slow conformer cannot stall the whole run; an
-        # expired flex attempt immediately falls back to a rigid redock.
-        dock_timeout = FLEX_VINA_TIMEOUT_S if using_flex else VINA_TIMEOUT_S
         try:
-            subprocess.run(vina_cmd, capture_output=True, timeout=dock_timeout)
+            subprocess.run(vina_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            if using_flex:
-                log.warning(
-                    f"  ⚠  Flexible redocking timed out on conformer {conf_idx}; "
-                    "falling back to rigid redocking for this conformer."
-                )
-                # Rigid fallback: redock into the rigid receptor (no --flex).
-                rigid_cmd = [
-                    "vina",
-                    "--receptor", receptor_pdbqt,
-                    "--ligand", lig_pdbqt,
-                    "--out", conf_pdbqt,
-                    "--center_x", f"{center[0]:.3f}",
-                    "--center_y", f"{center[1]:.3f}",
-                    "--center_z", f"{center[2]:.3f}",
-                    "--size_x", f"{redock_box[0]:.1f}",
-                    "--size_y", f"{redock_box[1]:.1f}",
-                    "--size_z", f"{redock_box[2]:.1f}",
-                    "--exhaustiveness", "16",
-                    "--num_modes", "3",
-                ]
-                try:
-                    subprocess.run(rigid_cmd, capture_output=True, timeout=VINA_TIMEOUT_S)
-                except subprocess.TimeoutExpired:
-                    log.warning(
-                        f"  ⚠  Rigid redocking fallback also timed out on "
-                        f"conformer {conf_idx}. Skipping."
-                    )
-                    continue
-                except FileNotFoundError:
-                    log.warning("  ⚠  Vina binary not found during redocking.")
-                    return False, None, None
-            else:
-                log.warning(
-                    f"  ⚠  Vina redocking timed out on conformer {conf_idx}. Skipping."
-                )
-                continue
+            log.warning(
+                f"  ⚠  Vina redocking timed out on conformer {conf_idx}. Skipping."
+            )
+            continue
         except FileNotFoundError:
             log.warning("  ⚠  Vina binary not found during redocking.")
             return False, None, None
@@ -1346,183 +1289,6 @@ def _consensus_dock(
     return [(by_id[cid], e) for cid, e in best.items()]
 
 
-_FLEX_BACKBONE_KEEP = {"N", "CA", "C", "O", "OXT", "H", "HA", "HN"}
-
-
-def _strip_flex_sidechains_from_rigid(
-    receptor_pdbqt: str,
-    target: set,
-    out_pdbqt: str,
-) -> bool:
-    """
-    Write a rigid receptor PDBQT with the flexible residues' *side-chain*
-    atoms removed (backbone N/CA/C/O kept).
-
-    Vina's ``--flex`` requires that atoms declared movable in the flex file are
-    NOT also present in the rigid receptor; otherwise the docking aborts with
-    an opaque "unknown error". This produces the companion ``_rigid`` receptor.
-
-    ``target`` is a set of ``(RESNAME, RESSEQ)`` tuples. Returns ``True`` on
-    success.
-    """
-    try:
-        kept = []
-        with open(receptor_pdbqt) as fh:
-            for line in fh:
-                if line.startswith(("ATOM", "HETATM")):
-                    try:
-                        atom_name = line[12:16].strip()
-                        res_name = line[17:20].strip().upper()
-                        res_seq = int(line[22:26])
-                    except (ValueError, IndexError):
-                        kept.append(line.rstrip("\n"))
-                        continue
-                    if (res_name, res_seq) in target and atom_name not in _FLEX_BACKBONE_KEEP:
-                        # Drop movable side-chain atom from the rigid receptor.
-                        continue
-                kept.append(line.rstrip("\n"))
-        with open(out_pdbqt, "w") as fh:
-            fh.write("\n".join(kept) + "\n")
-        return True
-    except Exception as exc:
-        log.warning(f"  ⚠  Failed to strip flex side chains from rigid receptor: {exc}")
-        return False
-
-
-def _prepare_flex_pdbqt(
-    receptor_pdbqt: str,
-    cleaned_pdb: str,
-    flex_residues: List[str],
-    work_dir: str,
-    receptor_pdb: Optional[str] = None,
-) -> Optional[tuple]:
-    """
-    Build a flexible-residue PDBQT (and the companion stripped rigid receptor)
-    for Vina's ``--flex`` flag.
-
-    The flexible residues (e.g. SER403, LYS406, TYR446) are extracted into
-    their own PDB (via Bio.PDB), then converted to a *valid Vina flex PDBQT*
-    (a proper ROOT/BRANCH torsion tree) by
-    :func:`utils.structure_prep.write_flex_pdbqt`. In addition, a companion
-    rigid receptor is written with those residues' side-chain atoms removed —
-    Vina requires the movable atoms to appear ONLY in the flex file, never in
-    the rigid receptor, otherwise docking aborts (paper §3.3).
-
-    Returns ``(rigid_pdbqt, flex_pdbqt)`` on success, or ``None`` on any
-    failure (callers fall back to rigid docking and log a warning).
-    """
-    if not flex_residues or not cleaned_pdb or not os.path.exists(cleaned_pdb):
-        return None
-    try:
-        from utils.structure_prep import write_flex_pdbqt
-
-        flex_pdb = os.path.join(work_dir, "PBP2a_flex_residues.pdb")
-        # Extract just the flexible residues into their own PDB via Bio.PDB.
-        parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("receptor", cleaned_pdb)
-        target = set()
-        for entry in flex_residues:
-            resname = "".join(ch for ch in entry if ch.isalpha()).upper()
-            seqnum = int("".join(ch for ch in entry if ch.isdigit()))
-            target.add((resname, seqnum))
-
-        class FlexSelect(Select):
-            def accept_residue(self, residue):
-                rid = residue.get_id()
-                if rid[0] != " ":
-                    return False
-                return (residue.get_resname().strip().upper(),
-                        rid[1]) in target
-
-        io = PDBIO()
-        io.set_structure(struct)
-        io.save(flex_pdb, FlexSelect())
-        if not os.path.exists(flex_pdb) or os.path.getsize(flex_pdb) == 0:
-            log.warning("  ⚠  Flexible-residue extraction produced no atoms; skipping flex docking.")
-            return None
-
-        flex_pdbqt = os.path.join(work_dir, "PBP2a_flex.pdbqt")
-        if not write_flex_pdbqt(flex_pdb, flex_pdbqt, flex_residues=flex_residues):
-            return None
-
-        # Guard: Vina rejects a malformed flex file with an opaque error that
-        # would otherwise surface only after a full (expensive) docking run.
-        # Validate the torsion tree up front so the pipeline fails fast and
-        # cleanly falls back to rigid docking when the flex PDBQT is unusable.
-        from utils.structure_prep import validate_flex_pdbqt
-        if not validate_flex_pdbqt(flex_pdbqt):
-            log.warning(
-                "  ⚠  Generated flex PDBQT failed Vina validity check "
-                "(torsion tree malformed / TORSDOF present). Falling back to "
-                "rigid docking."
-            )
-            return None
-
-        # Companion rigid receptor with movable side chains removed.
-        rigid_pdbqt = os.path.join(work_dir, "PBP2a_rigid_flex.pdbqt")
-        if not _strip_flex_sidechains_from_rigid(receptor_pdbqt, target, rigid_pdbqt):
-            return None
-
-        return rigid_pdbqt, flex_pdbqt
-    except Exception as exc:
-        log.warning(f"  ⚠  Flexible-residue PDBQT preparation failed: {exc}. Falling back to rigid.")
-        return None
-
-
-def _run_flex_dock_with_fallback_timeout(
-    rec: "CompoundRecord",
-    rigid_flex_pdbqt: str,
-    active_center: np.ndarray,
-    active_box: Tuple[float, float, float],
-    work_dir: str,
-    flex_pdbqt: str,
-) -> Optional[float]:
-    """
-    Run a single flexible (Vina ``--flex``) docking job for *rec*.
-
-    Phase 3.5 — robust flexible docking. The job is attempted with a bounded
-    ``FLEX_SCREEN_TIMEOUT_S``; if Vina times out, the flex job is retried once
-    with the dedicated, larger ``FLEX_VINA_TIMEOUT_S`` rather than silently
-    degrading to a rigid dock. The flex pose remains the authoritative
-    active-site ranking score.
-
-    Returns the flexible-docking energy. Returns ``None`` only if both the
-    standard and extended-timeout flex attempts fail (a genuine failure, not a
-    recoverable timeout).
-    """
-    from utils.docking import dock_compound
-
-    try:
-        energy = dock_compound(
-            rec, rigid_flex_pdbqt, active_center, active_box,
-            work_dir, "active_flex", use_vina=True,
-            flex_pdbqt=flex_pdbqt, timeout=VINA_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        energy = None
-    if energy is not None:
-        return energy
-
-    # A flexible-dock timeout is common for this receptor/flex-tree combination
-    # (it is markedly slower than rigid docking). Rather than silently fall back
-    # to a rigid dock — which would misrepresent the active-site ranking — we
-    # retry the *flex* job once with the dedicated larger FLEX_VINA_TIMEOUT_S.
-    log.info(
-        f"  Flex docking for {rec.compound_id} timed out at "
-        f"{FLEX_SCREEN_TIMEOUT_S}s; retrying flex with extended timeout "
-        f"{FLEX_VINA_TIMEOUT_S}s (no rigid fallback)."
-    )
-    try:
-        energy = dock_compound(
-            rec, rigid_flex_pdbqt, active_center, active_box,
-            work_dir, "active_flex", use_vina=True,
-            flex_pdbqt=flex_pdbqt, timeout=FLEX_VINA_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        energy = None
-    return energy
-
-
 def screen_library(
     records: List[CompoundRecord],
     targets: dict,
@@ -1557,9 +1323,9 @@ def screen_library(
 
     # Auto-sized boxes (centroid + atom spread, min 15 Å) — never rely on the
     # hardcoded constants when a real grid centre exists.
-    allosteric_box = _auto_box_size(pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE) \
+    allosteric_box = _auto_box_size(pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=18.0, site_residues=ALLOSTERIC_RESIDUES) \
         if allosteric_center is not None else ALLOSTERIC_BOX_SIZE
-    active_box = _auto_box_size(pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE) \
+    active_box = _auto_box_size(pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE, min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES) \
         if active_center is not None else ACTIVE_BOX_SIZE
 
     # ── Allosteric docking (consensus over PBP2a conformers) ──
@@ -1611,63 +1377,6 @@ def screen_library(
 
         for rec, energy in active_results:
             rec.pb2pa_active_energy = energy
-
-        # ── Local flexible docking (science mode only, Vina required) ──
-        # Phase 3.5: flexible docking is MANDATORY for the Top-50 active-site
-        # candidates. The flexible energy (SER403/LYS406/TYR446 side chains
-        # movable via Vina --flex) is the authoritative active-site ranking
-        # score, not a re-dock for analysis only. The rigid consensus energy is
-        # used only as a fallback when a flex job genuinely cannot produce a
-        # valid energy (e.g. the flex receptor could not be prepared).
-        #
-        # Critically, if Vina times out on a flex job we do NOT fall back to
-        # rigid docking — instead the flex job is retried with the dedicated,
-        # larger FLEX_VINA_TIMEOUT_S so the Top-50 final ranking always reflects
-        # a proper flexible-docked score.
-        mode = deps.get("mode", "science")
-        if use_vina and mode == "science" and active_center is not None:
-            primary_pdbqt = receptor_pdbqts[0]
-            cleaned_pdb = pb2pa.get("cleaned_pdb")
-            flex_prep = _prepare_flex_pdbqt(
-                primary_pdbqt, cleaned_pdb, FLEX_RESIDUES, work_dir,
-            )
-            if flex_prep is not None:
-                rigid_flex_pdbqt, flex_pdbqt = flex_prep
-                log.info(
-                    f"  Local flexible docking (--flex) for top {len(top_active)} "
-                    f"compounds at the active site (mandatory final ranking)…"
-                )
-                for rec in top_active:
-                    if rec.mol is None:
-                        mol = Chem.MolFromSmiles(rec.smiles)
-                        if mol is None:
-                            continue
-                        rec.mol = mol
-                    # Phase 3.5: try the flex job with the standard timeout first;
-                    # on timeout, retry once with the dedicated larger flex
-                    # timeout rather than silently degrading to rigid docking.
-                    flex_energy = _run_flex_dock_with_fallback_timeout(
-                        rec, rigid_flex_pdbqt, active_center, active_box,
-                        work_dir, flex_pdbqt,
-                    )
-                    if flex_energy is not None:
-                        # The flexible-docked energy is authoritative for the
-                        # Top-50 final ranking. It replaces (never just improves
-                        # on) the rigid consensus active-site energy.
-                        rec.pb2pa_active_energy = flex_energy
-                    else:
-                        # A genuine failure (not a recoverable timeout) keeps the
-                        # existing rigid consensus energy so the candidate still
-                        # ranks, but we never *pretend* the flex pose succeeded.
-                        log.warning(
-                            f"  ⚠  Flexible docking failed for {rec.compound_id} "
-                            f"(retained rigid energy {rec.pb2pa_active_energy})."
-                        )
-            else:
-                log.warning(
-                    "  Flexible-residue PDBQT preparation failed; active-site "
-                    "docking remains rigid (backward compatible)."
-                )
 
     # ── Select top 10 ──
     # Rank by allosteric energy (lower = better)
@@ -2040,434 +1749,6 @@ def _physicochemical_resistance_notes(record: CompoundRecord) -> List[str]:
     return notes
 
 
-def _mutate_pdbqt_residue(
-    pdbqt_path: str,
-    work_dir: str,
-    residue_id: int,
-    new_resname: str,
-) -> Optional[str]:
-    """
-    Build a mutant receptor PDBQT by replacing one residue's name (cheap string
-    replace on the fixed-column PDBQT ``RESNAME`` field, cols 17-20).
-
-    Returns the path to the mutant PDBQT, or ``None`` on failure. The 3-letter
-    ``new_resname`` (e.g. ``"ALA"``) is written into columns 17-20 for every
-    ``ATOM``/``HETATM`` line whose residue sequence number equals *residue_id*
-    (and whose chain column indicates a standard polymer residue). This is a
-    fast, dependency-free approximation of mutagenesis used only for the
-    reduced-resistance scan — it does NOT rebuild side-chain geometry, so the
-    result is treated as a coarse screen, not a structural model.
-    """
-    if not pdbqt_path or not os.path.exists(pdbqt_path):
-        return None
-    try:
-        out_path = os.path.join(work_dir, f"PBP2a_mut_{residue_id}{new_resname}.pdbqt")
-        with open(pdbqt_path) as fh:
-            lines = fh.readlines()
-        new_lines = []
-        mutated = False
-        for line in lines:
-            if line.startswith(("ATOM", "HETATM")):
-                try:
-                    res_seq = int(line[22:26])
-                    # Chain column (21) must indicate a standard polymer residue.
-                    chain = line[21]
-                    if res_seq == residue_id and chain.strip() != "":
-                        # Replace residue name (cols 17-20, 1-indexed).
-                        line = line[:17] + f"{new_resname:<3s}" + line[20:]
-                        mutated = True
-                except (ValueError, IndexError):
-                    pass
-            new_lines.append(line)
-        if not mutated:
-            log.warning(
-                f"  ⚠  PDBQT mutation {residue_id}→{new_resname} matched no "
-                "residue; skipping mutant."
-            )
-            return None
-        with open(out_path, "w") as fh:
-            fh.writelines(new_lines)
-        return out_path
-    except Exception as exc:
-        log.warning(f"  ⚠  PDBQT mutation failed: {exc}")
-        return None
-
-
-# Standard L-amino-acid residue SMILES (neutral, free N-terminus / carboxyl) used
-# to generate real mutant side-chain geometry. Optically-active forms are written
-# so obabel/RDKit produce a physically reasonable 3D residue.
-_AA_RESIDUE_SMILES = {
-    "ALA": "N[C@@H](C)C(=O)O",
-    "ARG": "N[C@@H](CCCCN=C(N)N)C(=O)O",
-    "ASN": "N[C@@H](CC(=O)N)C(=O)O",
-    "ASP": "N[C@@H](CC(=O)O)C(=O)O",
-    "CYS": "N[C@@H](CS)C(=O)O",
-    "GLN": "N[C@@H](CCC(=O)N)C(=O)O",
-    "GLU": "N[C@@H](CCC(=O)O)C(=O)O",
-    "GLY": "NCC(=O)O",
-    "HIS": "N[C@@H](Cc1c[nH]cn1)C(=O)O",
-    "ILE": "N[C@@H](C(C)CC)C(=O)O",
-    "LEU": "N[C@@H](CC(C)C)C(=O)O",
-    "LYS": "N[C@@H](CCCCN)C(=O)O",
-    "MET": "N[C@@H](CCSC)C(=O)O",
-    "PHE": "N[C@@H](Cc1ccccc1)C(=O)O",
-    "PRO": "O=C(O)[C@H]1CCCN1",
-    "SER": "N[C@@H](CO)C(=O)O",
-    "THR": "N[C@@H](C(O)C)C(=O)O",
-    "TRP": "N[C@@H](Cc1c2ccccc2ncn1)C(=O)O",
-    "TYR": "N[C@@H](Cc1ccc(O)cc1)C(=O)O",
-    "VAL": "N[C@@H](C(C)C)C(=O)O",
-}
-
-# Backbone atoms whose coordinates are always inherited from the wild-type
-# residue to keep the mutant embedded in the native protein frame.
-_BACKBONE_ATOMS = {"N", "CA", "C", "O"}
-
-# Atom names never present in an in-protein residue (free-term caps produced by
-# the residue SMILES generator, e.g. the C-terminal OXT) must be dropped so the
-# rebuilt residue matches the wild-type backbone frame (1 fewer atom for SER→ALA).
-_DROP_ATOM_NAMES = {"OXT"}
-
-
-def _generate_residue_pdb(resname: str, work_dir: str) -> Optional[str]:
-    """
-    Generate a 3D PDB of a single amino-acid residue *resname* into *work_dir*.
-
-    Prefers ``obabel --gen3d``; falls back to RDKit (AddHs + EmbedMolecule +
-    MMFF optimise) when obabel is unavailable. Returns the PDB path or None.
-    """
-    smi = _AA_RESIDUE_SMILES.get(resname)
-    if not smi:
-        return None
-    out = os.path.join(work_dir, f"_aa_{resname}.pdb")
-    try:
-        res = subprocess.run(
-            ["obabel", "-:" + smi, "-O", out, "--gen3d"],
-            capture_output=True, timeout=60,
-        )
-        if res.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
-            return out
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    try:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            return None
-        mol = Chem.AddHs(mol)
-        from rdkit.Chem import AllChem
-        if AllChem.EmbedMolecule(mol, randomSeed=RANDOM_SEED) != 0:
-            return None
-        AllChem.MMFFOptimizeMolecule(mol)
-        Chem.MolToPDBFile(mol, out)
-        return out
-    except Exception:
-        return None
-
-
-def _parse_pdb_heavy_atoms(path: str) -> List[Tuple[str, str, Tuple[float, float, float]]]:
-    """Return ``(atom_name, element, (x,y,z))`` for heavy atoms in a PDB."""
-    atoms = []
-    with open(path) as fh:
-        for line in fh:
-            if not line.startswith(("ATOM", "HETATM")):
-                continue
-            name = line[12:16].strip()
-            elem = (line[76:78].strip() or (name[0] if name else "C"))
-            if not name:
-                continue
-            try:
-                x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
-            except (ValueError, IndexError):
-                continue
-            if elem.upper() == "H":
-                continue
-            atoms.append((name, elem, (x, y, z)))
-    return atoms
-
-
-def _kabsch_align(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
-    """
-    Return a 3x3 rotation matrix R that best maps *src* onto *dst* (Kabsch).
-
-    Both arrays are (n,3) with corresponding points. A pure rotation (no
-    scaling/translation) is returned; the caller centres before applying.
-    """
-    src_c = src - src.mean(axis=0)
-    dst_c = dst - dst.mean(axis=0)
-    H = src_c.T @ dst_c
-    U, _S, Vt = np.linalg.svd(H)
-    d = np.sign(np.linalg.det(Vt.T @ U.T))
-    D = np.diag([1.0, 1.0, d])
-    R = Vt.T @ D @ U.T
-    return R
-
-
-def _build_real_mutant_pdbqt(
-    wt_cleaned_pdb: str,
-    residue_id: int,
-    new_resname: str,
-    work_dir: str,
-) -> Optional[str]:
-    """
-    Build a mutant receptor PDBQT with *real* rebuilt side-chain geometry.
-
-    Loads the wild-type cleaned PDB (Bio.PDB), keeps the target residue's
-    backbone (N/CA/C/O) in its native protein frame, and replaces the side
-    chain with the mutant's geometry. The mutant residue is generated 3D via
-    obabel ``--gen3d`` (RDKit fallback), its backbone is Kabsch-superposed onto
-    the wild-type backbone, and the transformed side-chain atoms are merged back
-    in. The rebuilt single-residue PDB is then converted to a Vina PDBQT via the
-    existing :func:`clean_pdb_structure` (obabel ``-xr``) path.
-
-    This replaces the coarse string-replace mutation (which only swapped the
-    residue name in the PDBQT columns) with a structurally meaningful model, so
-    the reported mutant ΔG reflects a real change in side-chain volume/chemistry
-    rather than a label swap. Returns the mutant PDBQT path, or ``None`` if the
-    mutant cannot be built (callers should fall back to the string-replace).
-    """
-    if not wt_cleaned_pdb or not os.path.exists(wt_cleaned_pdb):
-        return None
-    try:
-        parser = PDBParser(QUIET=True)
-        struct = parser.get_structure("wt", wt_cleaned_pdb)
-
-        # Locate the target residue (standard polymer residue, seq == residue_id).
-        wt_res = None
-        for model in struct:
-            for chain in model:
-                for residue in chain:
-                    if residue.get_id()[0] != " ":
-                        continue
-                    if residue.get_id()[1] == residue_id:
-                        wt_res = residue
-                        break
-                if wt_res is not None:
-                    break
-            if wt_res is not None:
-                break
-        if wt_res is None:
-            log.warning(
-                f"  ⚠  Real mutant build: residue {residue_id} not found in "
-                f"{wt_cleaned_pdb}; skipping."
-            )
-            return None
-
-        # Wild-type backbone coordinates (N/CA/C/O) must exist to anchor the mutant.
-        wt_bb = {}
-        for atom in wt_res:
-            nm = atom.get_name().strip()
-            if nm in _BACKBONE_ATOMS:
-                wt_bb[nm] = tuple(float(v) for v in atom.get_vector())
-        if len(wt_bb) < 3:
-            log.warning(
-                f"  ⚠  Real mutant build: incomplete backbone for {residue_id}; "
-                "skipping."
-            )
-            return None
-
-        # Generate the mutant residue geometry.
-        mut_pdb = _generate_residue_pdb(new_resname, work_dir)
-        if mut_pdb is None:
-            return None
-        mut_atoms = _parse_pdb_heavy_atoms(mut_pdb)
-        if not mut_atoms:
-            return None
-        mut_atoms = [a for a in mut_atoms if a[0] not in _DROP_ATOM_NAMES]
-
-        mut_bb = {nm: c for nm, el, c in mut_atoms if nm in _BACKBONE_ATOMS}
-        bb_keys = [k for k in ("N", "CA", "C", "O") if k in wt_bb and k in mut_bb]
-        if len(bb_keys) < 3:
-            return None
-
-        # Superpose mutant backbone onto wild-type backbone.
-        src = np.array([mut_bb[k] for k in bb_keys], dtype=float)
-        dst = np.array([wt_bb[k] for k in bb_keys], dtype=float)
-        R = _kabsch_align(src, dst)
-        src_c = src - src.mean(axis=0)
-        dst_c = dst - dst.mean(axis=0)
-        t = dst_c.mean(axis=0) - R @ src_c.mean(axis=0)
-
-        # Map of mutant side-chain coordinates (transformed into WT frame).
-        mut_side = {}
-        for nm, el, c in mut_atoms:
-            if nm in _BACKBONE_ATOMS:
-                continue
-            p = np.array(c, dtype=float)
-            mut_side[nm] = (tuple((R @ (p - src.mean(axis=0)) + t).tolist()), el)
-
-        # Assemble the output single-residue PDB: backbone (WT coords) first in
-        # WT order, then any mutant side-chain atoms not already present. Atom
-        # names are RIGHT-justified in the standard PDB columns (e.g. " N  ",
-        # " CA ") so obabel -xr and RDKit parse the residue unambiguously (a
-        # left-justified name with a polar side-chain atom such as OG otherwise
-        # fails to parse and yields an empty PDBQT).
-        chain_id = wt_res.get_parent().get_id()
-        out_lines = [
-            "REMARK  AutoAntibiotic real mutant build "
-            f"{wt_res.get_resname().strip()}->{new_resname}@{residue_id}"
-        ]
-        serial = 1
-        written = set()
-        bb_order = [nm for nm in ("N", "CA", "C", "O") if nm in wt_bb]
-        for nm in bb_order:
-            el = wt_res[nm].element if nm in wt_res else nm[0]
-            x, y, z = wt_bb[nm]
-            out_lines.append(
-                f"ATOM  {serial:5d} {nm:>4s} {new_resname:>3s} {chain_id:>1s}"
-                f"{residue_id:4d}    {x:8.3f}{y:8.3f}{z:8.3f}"
-                f"  1.00  0.00          {el:>2s}"
-            )
-            written.add(nm)
-            serial += 1
-        for nm, (c, el) in mut_side.items():
-            if nm in written:
-                continue
-            x, y, z = c
-            out_lines.append(
-                f"ATOM  {serial:5d} {nm:>4s} {new_resname:>3s} {chain_id:>1s}"
-                f"{residue_id:4d}    {x:8.3f}{y:8.3f}{z:8.3f}"
-                f"  1.00  0.00          {el:>2s}"
-            )
-            written.add(nm)
-            serial += 1
-
-        frag_pdb = os.path.join(work_dir, f"PBP2a_mut_{residue_id}{new_resname}.pdb")
-        with open(frag_pdb, "w") as fh:
-            fh.write("\n".join(out_lines) + "\n")
-
-        # Convert to Vina PDBQT via the existing cleaning path (obabel -xr). Pass
-        # the .pdb fragment and let clean_pdb_structure derive its own .pdbqt
-        # (it internally rewrites ".pdb" → ".pdbqt"; a pre-suffixed path would
-        # double the extension and break obabel's format detection).
-        return clean_pdb_structure(frag_pdb, frag_pdb)
-    except Exception as exc:
-        log.warning(f"  ⚠  Real mutant build failed ({exc}); skipping.")
-        return None
-
-
-def _run_mutation_scan(
-    top10: List[CompoundRecord],
-    targets: dict,
-    work_dir: str,
-    deps: dict,
-) -> None:
-    """
-    Simple quantitative mutation scan for reduced-resistance probability.
-
-    For each candidate with a retained active-site pose, the pose is re-docked
-    against three PBP2a mutant receptors (S403A, K406A, Y446A) built from the
-    apo PDBQT via :func:`_mutate_pdbqt_residue`. The energy difference versus
-    the wild-type active-site energy (``mutant_energy_delta``) is recorded on
-    the record, and a quantitative note is appended to ``resistance_notes``:
-    a smaller delta means the candidate is less disrupted by the resistance
-    mutation (i.e. lower predicted resistance emergence).
-
-    Skips gracefully when Vina is unavailable, the mode is not science, no
-    receptor/pose is present, or mutation scanning is disabled in config.
-    """
-    if not MUTATION_SCAN:
-        return
-    if not deps.get("USE_VINA", False):
-        return
-    if targets.get("mode") != "science":
-        return
-
-    pb2pa = targets.get("PBP2a", {})
-    # Use the holo (3ZG0) receptor for the mutation scan when available: it is
-    # the biologically relevant ceftaroline-bound PBP2a and is guaranteed to be
-    # a valid Vina PDBQT. The plain apo ``pdbqt`` can occasionally carry an
-    # obabel formatting artifact that Vina rejects, which would otherwise make
-    # every mutant docking fail (and the scan report NaN).
-    wt_pdbqt = None
-    for cand in (pb2pa.get("receptor_pdbqts") or []):
-        if cand and os.path.exists(cand) and "3ZG0" in os.path.basename(cand):
-            wt_pdbqt = cand
-            break
-    if wt_pdbqt is None:
-        wt_pdbqt = pb2pa.get("pdbqt")
-    active_center = pb2pa.get("active_center")
-    if not wt_pdbqt or active_center is None:
-        return
-
-    active_box = _auto_box_size(
-        pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
-    ) if pb2pa.get("cleaned_pdb") else ACTIVE_BOX_SIZE
-
-    # Map mutant label → (residue_id, new 3-letter resname).
-    # Labels use the standard 1-letter mutation code, e.g. "S403A" = Ser403→Ala.
-    _AA1_TO_3 = {
-        "A": "ALA", "R": "ARG", "N": "ASN", "D": "ASP", "C": "CYS",
-        "Q": "GLN", "E": "GLU", "G": "GLY", "H": "HIS", "I": "ILE",
-        "L": "LEU", "K": "LYS", "M": "MET", "F": "PHE", "P": "PRO",
-        "S": "SER", "T": "THR", "W": "TRP", "Y": "TYR", "V": "VAL",
-    }
-    mutant_specs = []
-    for mut in MUTATION_SCAN_MUTANTS:
-        # e.g. "S403A": wild-type 'S' (Ser), id 403, mutant 'A' (Ala).
-        m = re.match(r"^([A-Z])(\d+)([A-Z])$", mut)
-        if not m:
-            continue
-        res_id = int(m.group(2))
-        new_name = _AA1_TO_3.get(m.group(3))
-        if new_name is None:
-            continue
-        mutant_specs.append((mut, res_id, new_name))
-
-    if not mutant_specs:
-        return
-
-    log.info("  Running PBP2a mutation scan (S403A/K406A/Y446A) for top candidates…")
-    for rec in top10:
-        pose = getattr(rec, "active_docked_pdbqt", None)
-        if not pose or not os.path.exists(pose):
-            rec.mutant_energy_delta = None
-            continue
-        wt_energy = rec.pb2pa_active_energy
-        if wt_energy is None:
-            rec.mutant_energy_delta = None
-            continue
-
-        deltas = []
-        for label, res_id, new_name in mutant_specs:
-            # Prefer a structurally real mutant (rebuilt side chain). Fall back to
-            # the coarse string-replace only when the real build is impossible.
-            mut_pdbqt = _build_real_mutant_pdbqt(
-                pb2pa.get("cleaned_pdb"), res_id, new_name, work_dir,
-            )
-            if mut_pdbqt is None:
-                mut_pdbqt = _mutate_pdbqt_residue(wt_pdbqt, work_dir, res_id, new_name)
-            if mut_pdbqt is None:
-                continue
-            try:
-                energy = dock_compound(
-                    rec, mut_pdbqt, active_center, active_box,
-                    work_dir, f"mut_{label}", use_vina=True,
-                )
-            except Exception as exc:
-                log.warning(f"  ⚠  Mutant docking {label} failed: {exc}")
-                continue
-            if energy is None:
-                continue
-            deltas.append(energy - wt_energy)
-
-        rec.mutant_energy_delta = float(np.mean(deltas)) if deltas else None
-        if rec.mutant_energy_delta is not None and np.isfinite(rec.mutant_energy_delta):
-            avg = rec.mutant_energy_delta
-            verdict = (
-                "remains bound under key resistance mutants"
-                if avg <= 1.0 else
-                "moderately disrupted by resistance mutants"
-                if avg <= 3.0 else
-                "highly disrupted by resistance mutants (high resistance risk)"
-            )
-            note = (
-                f"Mutation scan ΔG_avg={avg:.2f} kcal/mol vs WT ({verdict})."
-            )
-            if rec.resistance_notes:
-                rec.resistance_notes += " | "
-            rec.resistance_notes += note
-
-
 def _run_resistance_profiling(
     top10: List[CompoundRecord],
     targets: dict,
@@ -2551,8 +1832,9 @@ def analyze_selectivity_and_resistance(
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
     trypsin_box = _auto_box_size(
         targets["trypsin"].get("cleaned_pdb"), targets["trypsin"]["active_center"],
-        (20.0, 20.0, 20.0),
-    ) if targets["trypsin"].get("active_center") is not None else (20.0, 20.0, 20.0)
+        (15.0, 15.0, 15.0), min_size=15.0, max_size=15.0, padding=0.0,
+        site_residues=TRYPSIN_CATALYTIC_RESIDUES,
+    ) if targets["trypsin"].get("active_center") is not None else (15.0, 15.0, 15.0)
     trypsin_results = _dock_compounds_parallel(
         top10, targets["trypsin"]["pdbqt"],
         targets["trypsin"]["active_center"], trypsin_box,
@@ -2565,8 +1847,9 @@ def analyze_selectivity_and_resistance(
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
     ces1_box = _auto_box_size(
         targets["CES1"].get("cleaned_pdb"), targets["CES1"]["active_center"],
-        (20.0, 20.0, 20.0),
-    ) if targets["CES1"].get("active_center") is not None else (20.0, 20.0, 20.0)
+        (15.0, 15.0, 15.0), min_size=15.0, max_size=15.0, padding=0.0,
+        site_residues=CES1_CATALYTIC_RESIDUES,
+    ) if targets["CES1"].get("active_center") is not None else (15.0, 15.0, 15.0)
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
         targets["CES1"]["active_center"], ces1_box,
@@ -2575,33 +1858,11 @@ def analyze_selectivity_and_resistance(
     for rec, energy in ces1_results:
         rec.human_ces1_energy = energy
 
-    # ── Dock vs wider human off-target panel ──
-    # Averages the human binding energy over up to 6 proteins (Trypsin, CES1,
-    # Albumin, CYP3A4, hERG, CYP2D6) for a more conservative (harder to pass)
-    # Selectivity Index. Targets without a prepared receptor / grid centre are
-    # skipped gracefully, so the panel size adapts to what is available.
-    for label, key, attr in (
-        ("Human Serum Albumin (1AO6)", "albumin", "human_albumin_energy"),
-        ("Human CYP3A4 (1W0E)", "cyp3a4", "human_cyp3a4_energy"),
-        ("Human Ether-à-go-go (hERG, 7CN1)", "herg", "human_herg_energy"),
-        ("Human CYP2D6", "cyp2d6", "human_cyp2d6_energy"),
-    ):
-        tgt = targets.get(key)
-        if not tgt or tgt.get("pdbqt") is None or tgt.get("active_center") is None:
-            log.warning(f"  Skipping {label} (no prepared receptor / grid centre).")
-            continue
-        log.info(f"  Docking top 10 vs {label}…")
-        box = _auto_box_size(
-            tgt.get("cleaned_pdb"), tgt["active_center"],
-            (20.0, 20.0, 20.0),
-        ) if tgt.get("cleaned_pdb") else (20.0, 20.0, 20.0)
-        results = _dock_compounds_parallel(
-            top10, tgt["pdbqt"],
-            tgt["active_center"], box,
-            work_dir, key, n_jobs=min(4, len(top10)),
-        )
-        for rec, energy in results:
-            setattr(rec, attr, energy)
+    # ── Human liability-panel fields kept as None (simplified pipeline) ──
+    # The simplified pipeline no longer docks the promiscuous liability panel
+    # (albumin, CYP3A4, hERG, CYP2D6). Their energy fields are retained on the
+    # record (and surfaced as "N/A" in the CSV) for downstream-compatibility, but
+    # are not computed. The mechanism-restricted SI uses ONLY trypsin/CES1.
 
     # ── Compute SI with the mechanism-restricted / liability-panel split (Task 1) ──
     # The human off-target panel is split into two data-driven groups:
@@ -2616,8 +1877,11 @@ def analyze_selectivity_and_resistance(
     # The OLD pan-panel SI (all 6 off-targets in the denominator) is preserved
     # as Selectivity_Index_PanPanel for full transparency.
     for rec in top10:
-        # Collect raw human off-target energies, pairing each with the off-target
-        # attribute so we can flag high-risk binding on *valid* energies only.
+        # Collect raw human off-target energies. In the simplified pipeline only
+        # the mechanism-relevant trypsin/CES1 panel is docked; the promiscuous
+        # liability panel is no longer docked (their energies are None and are
+        # reported as "N/A"). We still pair each with its attribute so the
+        # Off_Target_Risk flag can be computed on *valid* energies only.
         raw_human = [
             ("trypsin", "human_trypsin_energy", rec.human_trypsin_energy),
             ("ces1", "human_ces1_energy", rec.human_ces1_energy),
@@ -2672,16 +1936,9 @@ def analyze_selectivity_and_resistance(
         if not energies_human:
             log.warning(f"  {rec.compound_id}: No human docking data. SI = N/A.")
             rec.selectivity_index = None
-            rec.selectivity_index_panpanel = None
             continue
 
-        # OLD pan-panel SI (preserved, transparent) — denominator = tightest of
-        # ALL valid human off-targets.
-        rec.selectivity_index_panpanel = compute_selectivity_index(
-            pb2pa_best, min(energies_human)
-        )
-
-        # NEW primary (mechanism-restricted) SI — denominator = tightest of the
+        # Mechanism-restricted SI — denominator = tightest of the
         # SELECTIVITY_PANEL_TARGETS only. If the selectivity panel provided no
         # valid energy, the gate cannot be evaluated and SI is left N/A.
         if panel_valid:
@@ -2711,15 +1968,15 @@ def analyze_selectivity_and_resistance(
             else:
                 log.info(f"  {rec.compound_id}: mechanism-restricted SI = {si:.2f} (pass).")
 
-        # Off-target risk flag (separate boolean column, paper §4.1b). The
-        # LIABILITY panel (and any tight human binder) sets this flag — but the
-        # liability-panel energies NEVER enter the SI denominator. Only *valid*
-        # (finite, binding) human energies are considered — a >0.0 (no-pose/clash)
-        # value is not a real binder and is excluded.
+        # Off-target risk flag (separate boolean column, paper §4.1b). In the
+        # simplified pipeline the only docked human off-targets are the
+        # mechanism-relevant trypsin/CES1 panel; a tight binder against EITHER
+        # (energy < -8.0 kcal/mol) raises the flag. The liability panel is no
+        # longer docked, so this is computed from trypsin/CES1 only.
         rec.off_target_risk = any(
             e is not None and e < -8.0
-            for _label, _a, e in raw_human
-            if e is not None
+            for label, _a, e in raw_human
+            if e is not None and label in ("trypsin", "ces1")
         )
 
         # Honest provenance: no covalent-warhead bonus is ever applied.
@@ -2731,20 +1988,8 @@ def analyze_selectivity_and_resistance(
                 rec.resistance_notes += " | "
             rec.resistance_notes += "High risk off-target binding"
 
-    # ── Optional MM-GBSA-like rerank of the top 10 ──
-    # Per-candidate MMFF-relaxed score (see utils.docking.rerank_mmff). Skips
-    # gracefully when Vina/OpenBabel are absent or no pose was retained. The
-    # final CSV is reranked by this score when available.
-    from utils.docking import rerank_mmff
-    rerank_mmff(top10, work_dir=work_dir, use_vina=use_vina)
-
     # ── Resistance profiling with pose-based interaction analysis ──
     _run_resistance_profiling(top10, targets, work_dir)
-
-    # ── Simple mutation scan (reduced-resistance probability) ──
-    # Quantitative ΔG vs the key resistance mutants (S403A/K406A/Y446A),
-    # appended to resistance_notes and stored on rec.mutant_energy_delta.
-    _run_mutation_scan(top10, targets, work_dir, deps)
 
     log.info("─── Phase 4 complete ───")
     return top10
@@ -2805,7 +2050,7 @@ def screen_single_compound(
         if allosteric_center is not None:
             allosteric_box = _auto_box_size(
                 pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"),
-                allosteric_center, ALLOSTERIC_BOX_SIZE,
+                allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=18.0, site_residues=ALLOSTERIC_RESIDUES,
             )
             rec.pb2pa_allosteric_energy = dock_compound(
                 rec, receptor_pdbqt, allosteric_center,
@@ -2814,7 +2059,7 @@ def screen_single_compound(
             )
         if active_center is not None:
             active_box = _auto_box_size(
-                pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
+                pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE, min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
             )
             rec.pb2pa_active_energy = dock_compound(
                 rec, receptor_pdbqt, active_center,
@@ -2921,7 +2166,6 @@ def _run_redocking_phase(
                 config=config,
                 target_pdbqt_paths=targets["PBP2a"].get("receptor_pdbqts"),
                 cleaned_pdb=targets["PBP2a"].get("cleaned_pdb"),
-                flex_residues=FLEX_RESIDUES,
             )
     else:
         validation_ok, redock_rmsd, redock_core_rmsd = run_redocking_validation(
@@ -2933,7 +2177,6 @@ def _run_redocking_phase(
             config=config,
             target_pdbqt_paths=targets["PBP2a"].get("receptor_pdbqts"),
             cleaned_pdb=targets["PBP2a"].get("cleaned_pdb"),
-            flex_residues=FLEX_RESIDUES,
         )
         # A failed redocking validation against real PDBs is a diagnostic
         # signal, not a hard gate: log the error, keep validation_ok=False,
@@ -3171,47 +2414,51 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 
-    # ── Phase 4.2: MM-GBSA-like rerank of the final top10 selection ──
-    # ``rerank_mmff`` (utils.docking) relaxes each active-site pose with the
-    # MMFF force field and stores the energy on record.mmgbca_score. We then
-    # reorder the final candidate list by that physics-based score (lower =
-    # better), falling back to the PBP2a active-site Vina energy when a record
-    # has no rerank score. This makes the reported Top-10 reflect pose-quality
-    # rather than raw docking energy alone.
-    from utils.docking import rerank_mmff
-    rerank_mmff(top10, work_dir=work_dir, use_vina=deps.get("USE_VINA", False))
-
+    # ── Phase 4.2: Final ranking ──
+    # The simplified pipeline ranks the final candidates by PBP2a active-site
+    # consensus energy (falling back to allosteric energy when no active-site
+    # energy is available). The MM-GBSA-like MMFF rerank was removed in v4.0.
     def _final_rank_key(rec: CompoundRecord):
-        score = getattr(rec, "mmgbca_score", None)
-        if score is not None and np.isfinite(score):
-            return (0, score)
         energy = rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None \
             else rec.pb2pa_allosteric_energy
         energy = energy if energy is not None else float("inf")
-        return (1, energy)
+        return energy
 
     top10 = sorted(top10, key=_final_rank_key)
-    log.info("  Final Top-10 reranked by MM-GBSA-like (MMFF) score where available.")
+    log.info("  Final Top-10 ranked by PBP2a active-site consensus energy.")
 
-    # ── Phase 3.5: Negative selection against human off-targets ──
-    # Compounds that bind HERG or CYP3A4 tightly (E < -8.0 kcal/mol) are removed
-    # outright — they must never appear in the reported Top-10 even if they bind
-    # the bacterial target well. Runs after selectivity analysis so the
-    # human-off-target energies are populated, and before the rerank/diversity
-    # gate so discarded compounds do not consume report slots.
-    from utils.filtering import filter_by_human_clash
-    top10 = filter_by_human_clash(top10)
-
-    # ── Phase 4.5: Rerank gate + diversity clustering ──
-    # Drop candidates with positive MM-GBSA-like relaxation energy and pick a
-    # maximally dissimilar final set (Morgan Tanimoto ≤ 0.4) to fill the
+    # ── Phase 4.5: Diversity clustering ──
+    # Pick a maximally dissimilar final set (Morgan Tanimoto ≤ 0.4) to fill the
     # reported top-10, improving the odds that reported hits are distinct,
-    # credible binders rather than near-duplicates.
-    from utils.reporting import rerank_and_diversify
-    top10 = rerank_and_diversify(
+    # credible binders rather than near-duplicates. The MM-GBSA-like score gate
+    # was removed in v4.0; only the diversity logic remains.
+    from utils.reporting import diversify_top_n
+    top10 = diversify_top_n(
         top10, ranked=top10,
         top_n=TOP_N, radius=FP_RADIUS, n_bits=FP_NBITS,
         max_tanimoto=SIMILARITY_THRESHOLD,
+    )
+
+    # ── Phase 4.6: Tiered-SI report selection ──
+    # The final report includes ALL candidates with SI >= SI_PROMISING_THRESHOLD
+    # (Promising or Strong). If fewer than TOP_N candidates reach that bar, the
+    # remaining slots are filled with the next-best by PBP2a energy, marked
+    # "Below gate" in the SI_Tier column for transparency.
+    passing = [r for r in top10 if r.selectivity_index is not None
+               and r.selectivity_index >= SI_PROMISING_THRESHOLD]
+    passing.sort(key=lambda r: r.selectivity_index or float("inf"), reverse=True)
+    below = [r for r in top10 if r not in passing]
+    below.sort(key=_final_rank_key)
+    report_list = list(passing)
+    for rec in below:
+        if len(report_list) >= TOP_N:
+            break
+        rec.report_tier = "Below gate"
+        report_list.append(rec)
+    top10 = report_list
+    log.info(
+        f"  Final report: {len(passing)} candidate(s) at SI >= "
+        f"{SI_PROMISING_THRESHOLD}, filled to {len(top10)} total."
     )
 
     # ── Phase 5: Reporting & Artifacts ──

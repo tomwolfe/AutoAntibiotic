@@ -2,6 +2,73 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [4.0.0] — Pipeline simplification & tiered SI
+
+### Removed (features that did not change which molecules get reported)
+- **Flexible (Vina `--flex`) docking.** `_prepare_flex_pdbqt`,
+  `_run_flex_dock_with_fallback_timeout`, `_strip_flex_sidechains_from_rigid`,
+  `FLEX_RESIDUES`, `FLEX_VINA_TIMEOUT_S`, `FLEX_SCREEN_TIMEOUT_S`, the `--flex`
+  Vina flags, and `utils.structure_prep.write_flex_pdbqt` /
+  `validate_flex_pdbqt` were all deleted. Active-site ranking now uses the rigid
+  consensus energy directly. `run_redocking_validation` is rigid-only.
+- **MM-GBSA-like rerank.** `rerank_mmff`, the `mmgbca_score` field, the
+  `_final_rank_key` MMFF sort in `main()`, and the `MMGBSA_Score` CSV column are
+  gone. Final ranking is by `pb2pa_active_energy` (allosteric fallback).
+- **Mutation scan.** `_run_mutation_scan`, `_mutate_pdbqt_residue`,
+  `_build_real_mutant_pdbqt`, `_generate_residue_pdb`, `_parse_pdb_heavy_atoms`,
+  `_kabsch_align`, `_AA_RESIDUE_SMILES`, `MUTATION_SCAN`, `MUTATION_SCAN_MUTANTS`,
+  the `mutant_energy_delta` field and `Mutant_Energy_Delta` CSV column removed.
+- **Liability-panel docking.** `analyze_selectivity_and_resistance` no longer
+  docks albumin / CYP3A4 / hERG / CYP2D6. Their energy fields stay `None` and
+  report as "N/A"; `Off_Target_Risk` is now computed from trypsin/CES1 only.
+- **Negative selection filter.** `filter_by_human_clash` and its call in
+  `main()` removed. Off-target risk is reported, not used to discard candidates.
+- **Pan-panel SI.** `selectivity_index_panpanel` / `Selectivity_Index_PanPanel`
+  removed. The mechanism-restricted SI is shown under `Selectivity_Index` and
+  `Selectivity_Index_TwoTarget`.
+
+### Added
+- **Tiered SI system** (`config/constants.py`): `SI_STRONG_THRESHOLD = 2.0`,
+  `SI_PROMISING_THRESHOLD = 1.5`, and an `SI_Tier` CSV column
+  (Strong / Promising / Weak / N/A). The final report includes all candidates
+  with `SI ≥ 1.5`; remaining slots are filled with the next-best by PBP2a energy
+  and marked "Below gate".
+- `utils.reporting.diversify_top_n` (renamed from `rerank_and_diversify`; the
+  MMFF gate was dropped, only the Morgan Tanimoto ≤ 0.4 diversity logic remains).
+- `utils.reporting.si_tier` helper and `TestSelectivityIndexTiers` unit tests.
+
+### Fixed
+- **Off-target docking boxes.** `_auto_box_size` previously measured the grid
+  radius from *all* receptor heavy atoms, so the trypsin and CES1 grids ballooned
+  to enclose the whole protein and ligands could dock on distant surface patches,
+  inflating off-target scores and depressing the SI. The function now accepts a
+  `site_residues` list and measures the radius from the catalytic-site residues
+  only; the selectivity-panel grids are capped at \SI{15}{\angstrom} (PBP2a
+  allosteric 18, active 20). Off-target docking is now confined to the narrow
+  catalytic pocket, giving an honest (weaker) off-target score.
+
+### Results (science-mode screen)
+- Seed library `novel_seed.csv`: \num{120} SMILES, six families of aliphatic
+  3D carboxylic acids (adamantane / spiro[3.3]heptane / bicyclo[2.2.1]heptane /
+  camphor / norbornane / tetrahydronaphthalene acetic acids) with bulky
+  substituents; ceftaroline and meropenem as `CTRL_` references. All valid RDKit
+  SMILES, \SI{250}{}--\SI{550}{Da}, no $\beta$-lactam.
+- Native-ligand redocking validated the protocol (core RMSD \SI{2.08}{\angstrom},
+  status `Validated`).
+- \num{48}/120 passed PAINS/Brenk; \textbf{six} candidates reached SI Tier
+  *Promising* ($\mathrm{SI}\ge 1.5$; range \num{1.59}--\num{1.74}).
+
+### Changed
+- `config/targets.yaml`: removed `mutation_scan` and the liability-panel
+  (`ALBUMIN`/`CYP3A4`/`HERG`/`CYP2D6`) residue lists; kept the `selectivity:`
+  and `thresholds:` blocks and the trypsin/CES1 residue lists.
+
+## [3.1.0] — Prior science-mode protocol fix
+- Dedicated `FLEX_VINA_TIMEOUT_S = 1800` for flexible redocking so the consensus
+  validation no longer drops to a rigid fallback on every conformer.
+- `AUTOANTIBIOTIC_LIB_CSV` augments the BRICS fragment pool instead of replacing
+  the generated library.
+
 ## [Unreleased] — Mechanism-restricted Selectivity Index (Task 1/2/3/4)
 
 ### Fixed
