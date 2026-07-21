@@ -83,16 +83,6 @@ class CompoundRecord:
     # pipeline).
     human_trypsin_energy: Optional[float] = None
     human_ces1_energy: Optional[float] = None
-    # Promiscuous liability-panel energies (albumin, CYP3A4, hERG, CYP2D6). The
-    # simplified pipeline no longer docks these proteins, so these stay None and
-    # are reported as "N/A"; they are retained for downstream compatibility.
-    human_albumin_energy: Optional[float] = None
-    human_cyp3a4_energy: Optional[float] = None
-    human_herg_energy: Optional[float] = None
-    human_cyp2d6_energy: Optional[float] = None
-    # Off-target risk flag (paper §4.1b): True when trypsin OR CES1 binds tightly
-    # (energy < -8.0 kcal/mol). Kept separate from selectivity_index so the raw
-    # SI is never artificially zeroed.
     off_target_risk: bool = False
 
     # Phase 3.5 — Negative selection: the most negative (strongest) human
@@ -126,13 +116,6 @@ class CompoundRecord:
     # without re-parsing the docked pose.
     interactions: Optional[dict] = None
 
-    # Transparency metrics (Task 1). ``si_vs_ceftaroline`` is the supplementary
-    # control-indexed metric = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E (no
-    # covalent energy bonus is ever applied — Vina cannot model covalent bond
-    # formation). It lets the reader gauge each candidate against the clinical
-    # reference without a post-hoc energy adjustment.
-    warhead_type: Optional[str] = None  # retained for provenance, always "none"
-    si_covalent: Optional[float] = None  # deprecated; retained for CSV backward-compat, always None
     si_vs_ceftaroline: Optional[float] = None
 
     # Final reported SI tier label override. The report normally derives the

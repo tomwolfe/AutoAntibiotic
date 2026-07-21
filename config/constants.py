@@ -8,6 +8,13 @@ discovery pipeline.
 Everything in this module is pure data (no I/O, no scientific computation) so
 that it can be imported by any other module — including ``discovery_pipeline``,
 ``utils.filtering`` and ``utils.docking`` — without creating a circular import.
+
+Primary scope: **non-covalent allosteric PBP2a inhibition** (Vina-valid).
+Active-site covalent acylation (beta-lactam mechanism) is explicitly out of
+scope; the active-site score is retained only as a secondary signal for
+consensus ranking. The SI gate compares PBP2a binding vs human serine
+hydrolases (trypsin, CES1); liability-panel proteins (albumin, CYP3A4, hERG,
+CYP2D6) are not docked in this pipeline.
 """
 
 import multiprocessing as mp
@@ -39,10 +46,7 @@ PDB_IDS = {
     "PBP2a_conformer_4DKI": "4DKI",
     "trypsin": "1UTN",
     "CES1": "1YAH",
-    "HUMAN_ALBUMIN": "1AO6",
-    "CYP3A4": "1W0E",
-    "HERG": "7CN1",
-    "CYP2D6": "1C5X",
+
 }
 
 # Reference antibiotics for similarity filtering (SMILES)
@@ -68,22 +72,14 @@ _ACTIVE_SITE_RESIDUES_DEFAULT = ["SER403"]
 _CONSERVED_RESIDUES_DEFAULT = ["SER403", "LYS406", "TYR446"]
 _TRYPSIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS57", "ASP102", "SER195"]
 _CES1_CATALYTIC_RESIDUES_DEFAULT = ["SER221", "HIS468", "GLU354"]
-_ALBUMIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS242", "LYS199"]
-_CYP3A4_CATALYTIC_RESIDUES_DEFAULT = ["HIS368", "ARG105"]
-_HERG_CATALYTIC_RESIDUES_DEFAULT = ["SER624", "TYR652", "PHE656"]
-_CYP2D6_CATALYTIC_RESIDUES_DEFAULT = ["ASP301", "GLU216", "SER304"]
 
-# Names of the target residue lists that can be overridden via targets.yaml.
+
 _TARGET_RESIDUE_KEYS = (
     "ALLOSTERIC_RESIDUES",
     "ACTIVE_SITE_RESIDUES",
     "CONSERVED_RESIDUES",
     "TRYPSIN_CATALYTIC_RESIDUES",
     "CES1_CATALYTIC_RESIDUES",
-    "ALBUMIN_CATALYTIC_RESIDUES",
-    "CYP3A4_CATALYTIC_RESIDUES",
-    "HERG_CATALYTIC_RESIDUES",
-    "CYP2D6_CATALYTIC_RESIDUES",
 )
 
 TARGETS_FILE = Path(__file__).resolve().parent / "targets.yaml"
@@ -95,23 +91,12 @@ TARGETS_FILE = Path(__file__).resolve().parent / "targets.yaml"
 # defaults whenever the YAML file is missing, unreadable, pyyaml is unavailable,
 # or the block is absent.
 _SELECTIVITY_PANEL_TARGETS_DEFAULT = ["trypsin", "CES1"]
-_LIABILITY_PANEL_TARGETS_DEFAULT = ["cyp3a4", "albumin", "herg", "cyp2d6"]
 _CEFTAROLINE_CONTROL_E_DEFAULT = 7.3
 
 
 def _load_selectivity_config() -> Dict[str, object]:
-    """
-    Load the selectivity-panel split from ``config/targets.yaml``.
-
-    Returns ``{"SELECTIVITY_PANEL_TARGETS", "LIABILITY_PANEL_TARGETS",
-    "CEFTAROLINE_CONTROL_E"}``, falling back to the ``*_DEFAULT`` values whenever
-    the file is missing, unreadable, pyyaml is unavailable, or the ``selectivity``
-    block is absent. Only string lists and a positive float are accepted;
-    anything else keeps the default so the contract stays stable.
-    """
     defaults = {
         "SELECTIVITY_PANEL_TARGETS": list(_SELECTIVITY_PANEL_TARGETS_DEFAULT),
-        "LIABILITY_PANEL_TARGETS": list(_LIABILITY_PANEL_TARGETS_DEFAULT),
         "CEFTAROLINE_CONTROL_E": _CEFTAROLINE_CONTROL_E_DEFAULT,
     }
     try:
@@ -127,10 +112,6 @@ def _load_selectivity_config() -> Dict[str, object]:
                     defaults["SELECTIVITY_PANEL_TARGETS"] = [
                         str(t) for t in sel["SELECTIVITY_PANEL_TARGETS"]
                     ]
-                if isinstance(sel.get("LIABILITY_PANEL_TARGETS"), list):
-                    defaults["LIABILITY_PANEL_TARGETS"] = [
-                        str(t) for t in sel["LIABILITY_PANEL_TARGETS"]
-                    ]
                 ceft = sel.get("CEFTAROLINE_CONTROL_E")
                 if isinstance(ceft, (int, float)) and float(ceft) > 0:
                     defaults["CEFTAROLINE_CONTROL_E"] = float(ceft)
@@ -141,7 +122,6 @@ def _load_selectivity_config() -> Dict[str, object]:
 
 _loaded_selectivity = _load_selectivity_config()
 SELECTIVITY_PANEL_TARGETS = _loaded_selectivity["SELECTIVITY_PANEL_TARGETS"]
-LIABILITY_PANEL_TARGETS = _loaded_selectivity["LIABILITY_PANEL_TARGETS"]
 CEFTAROLINE_CONTROL_E = _loaded_selectivity["CEFTAROLINE_CONTROL_E"]
 
 
@@ -200,10 +180,6 @@ def _load_target_residues() -> Dict[str, List[str]]:
         "CONSERVED_RESIDUES": _CONSERVED_RESIDUES_DEFAULT,
         "TRYPSIN_CATALYTIC_RESIDUES": _TRYPSIN_CATALYTIC_RESIDUES_DEFAULT,
         "CES1_CATALYTIC_RESIDUES": _CES1_CATALYTIC_RESIDUES_DEFAULT,
-        "ALBUMIN_CATALYTIC_RESIDUES": _ALBUMIN_CATALYTIC_RESIDUES_DEFAULT,
-        "CYP3A4_CATALYTIC_RESIDUES": _CYP3A4_CATALYTIC_RESIDUES_DEFAULT,
-        "HERG_CATALYTIC_RESIDUES": _HERG_CATALYTIC_RESIDUES_DEFAULT,
-        "CYP2D6_CATALYTIC_RESIDUES": _CYP2D6_CATALYTIC_RESIDUES_DEFAULT,
     }
     try:
         import yaml
@@ -228,10 +204,6 @@ ACTIVE_SITE_RESIDUES = _loaded_target_residues["ACTIVE_SITE_RESIDUES"]
 CONSERVED_RESIDUES = _loaded_target_residues["CONSERVED_RESIDUES"]
 TRYPSIN_CATALYTIC_RESIDUES = _loaded_target_residues["TRYPSIN_CATALYTIC_RESIDUES"]
 CES1_CATALYTIC_RESIDUES = _loaded_target_residues["CES1_CATALYTIC_RESIDUES"]
-ALBUMIN_CATALYTIC_RESIDUES = _loaded_target_residues["ALBUMIN_CATALYTIC_RESIDUES"]
-CYP3A4_CATALYTIC_RESIDUES = _loaded_target_residues["CYP3A4_CATALYTIC_RESIDUES"]
-HERG_CATALYTIC_RESIDUES = _loaded_target_residues["HERG_CATALYTIC_RESIDUES"]
-CYP2D6_CATALYTIC_RESIDUES = _loaded_target_residues["CYP2D6_CATALYTIC_RESIDUES"]
 
 # Grid box defaults (Angstroms)
 ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
@@ -248,14 +220,6 @@ N_JOBS = max(1, mp.cpu_count() - 1)
 SIMILARITY_THRESHOLD = 0.3
 SIMILARITY_THRESHOLD_RELAXED = 0.5
 DIVERSITY_MIN_COUNT = 100
-
-# Recall (known-binder) mode — when True, the filter chain is relaxed so that
-# established PBP2a binders (ceftaroline, meropenem) survive filtering:
-# the similarity threshold uses SIMILARITY_THRESHOLD_RELAXED and the QED gate
-# is lowered from 0.7 to 0.4. Disabled by default; toggle via the
-# ``recall_mode`` key in config.yaml.
-RECALL_MODE = False
-RECALL_QED_FLOOR = 0.4
 
 # Selectivity
 SELECTIVITY_INDEX_THRESHOLD = 2.0

@@ -1,13 +1,9 @@
 # AutoAntibiotic Discovery Pipeline — Target-specific configuration
 # -----------------------------------------------------------------------------
-# Residue lists used to build docking grid boxes and for scientific
-# cross-checks. These were previously hardcoded in ``config/constants.py``.
-#
-# Editing this file lets you re-target the pipeline (or adjust the known
-# catalytic/active-site residues) without touching the source code.
-#
-# If this file is missing or cannot be parsed, ``config/constants.py`` falls
-# back to the original hardcoded defaults, so the pipeline keeps working.
+# Primary scope: non-covalent allosteric PBP2a inhibition. The selectivity
+# panel targets (trypsin, CES1) are human serine hydrolases with narrow
+# catalytic sites; the liability panel (albumin, CYP3A4, hERG, CYP2D6) is
+# not docked in this pipeline.
 # -----------------------------------------------------------------------------
 
 targets:
@@ -17,39 +13,18 @@ targets:
   TRYPSIN_CATALYTIC_RESIDUES: ["HIS57", "ASP102", "SER195"]
   CES1_CATALYTIC_RESIDUES: ["SER221", "HIS468", "GLU354"]
 
-# ── Selectivity panel split (Task 1) ───────────────────────────────────────
-# The human off-target panel is split into two groups with distinct scientific
-# roles (see CHANGELOG / paper §Methods):
-#
-#   SELECTIVITY_PANEL_TARGETS — mechanistically relevant human serine hydrolases
-#     (Trypsin, CES1). These have narrow, sterically gated catalytic sites that
-#     the seed library was explicitly designed to avoid. The PRIMARY Selectivity
-#     Index (SI) uses ONLY this panel as its denominator, so it measures the
-#     property the design intent actually targets.
-#
-#   LIABILITY_PANEL_TARGETS — promiscuous sinks (CYP3A4, albumin, hERG, CYP2D6)
-#     that bind any aromatic acid at -9 to -10.5 kcal/mol. In the simplified
-#     pipeline (v4.0) these proteins are no longer docked; their residue lists
-#     have been removed. They are retained here only as documentation of the
-#     panel split and for backward-compatible reporting.
-#
-# The mechanism-restricted SI is supplemented by a tiered label
-# (Strong / Promising / Weak / Below gate) defined in ``config/constants.py``
-# (SI_STRONG_THRESHOLD = 2.0, SI_PROMISING_THRESHOLD = 1.5).
 selectivity:
   SELECTIVITY_PANEL_TARGETS: ["trypsin", "CES1"]
-  LIABILITY_PANEL_TARGETS: ["cyp3a4", "albumin", "herg", "cyp2d6"]
-  # Ceftaroline control active-site energy (kcal/mol) used for the supplementary
-  # transparency metric SI_vs_Ceftaroline = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E.
   CEFTAROLINE_CONTROL_E: 7.3
 
-# ── Protocol trust RMSD thresholds (Å) ────────────────────────────────────────
-# Redocking RMSD cutoffs used by config.constants.protocol_trust and the
-# redocking validation gate. Previously hardcoded (1.5 / 2.0). Sane defaults
-# are applied if this block is missing or cannot be parsed.
 thresholds:
-  # RMSD at or below which the docking protocol is considered "Validated".
   rmsd_validated_max: 1.5
-  # RMSD above rmsd_validated_max but at/below this is "Validated (Marginal)".
-  # Above this is flagged "CAUTION: High RMSD".
   rmsd_marginal_max: 2.0
+
+# Data-calibrated SI gate (v4.0). Derived from known-active benchmark
+# ROC analysis: see output/enrichment_results.json for the supporting
+# enrichment metrics.
+si_gate:
+  selectivity_index_threshold: 1.5
+  si_strong_threshold: 2.0
+  si_promising_threshold: 1.0

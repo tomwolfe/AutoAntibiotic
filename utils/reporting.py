@@ -145,14 +145,13 @@ def generate_csv_report(
 
     Columns:
         Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
-        Human_Trypsin_Energy, Human_CES1_Energy, Human_Albumin_Energy,
-        Human_CYP3A4_Energy, Human_HERG_Energy, Human_CYP2D6_Energy,
-        Selectivity_Index, Selectivity_Index_PanPanel, SI_vs_Ceftaroline,
+        Human_Trypsin_Energy, Human_CES1_Energy,
+        Selectivity_Index, Selectivity_Index_TwoTarget, SI_vs_Ceftaroline,
         Passes_Selectivity_Gate, Selectivity_Confidence, Off_Target_Risk,
         Max_Similarity, Passes_Lipinski, QED_Score, Binding_Mode_Notes,
-        Protocol_RMSD, protocol_trust,         H_Bond_Ser403, H_Bond_Lys406,
+        Protocol_RMSD, protocol_trust, H_Bond_Ser403, H_Bond_Lys406,
         H_Bond_Tyr446, Human_OffTarget_Max_Energy, HIGH_TOXICITY_RISK,
-        SA_Score, TPSA, Fraction_CSP3, Num_Rotatable_Bonds.
+        SA_Score, TPSA, Fraction_CSP3, Num_Rotatable_Bonds, SI_Tier.
 
 
     Returns path to CSV.
@@ -220,26 +219,7 @@ def generate_csv_report(
                 f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
                 else "N/A"
             ),
-            "Human_Albumin_Energy": (
-                f"{getattr(rec, 'human_albumin_energy', None):.2f}"
-                if getattr(rec, "human_albumin_energy", None) is not None
-                else "N/A"
-            ),
-            "Human_CYP3A4_Energy": (
-                f"{getattr(rec, 'human_cyp3a4_energy', None):.2f}"
-                if getattr(rec, "human_cyp3a4_energy", None) is not None
-                else "N/A"
-            ),
-            "Human_HERG_Energy": (
-                f"{getattr(rec, 'human_herg_energy', None):.2f}"
-                if getattr(rec, "human_herg_energy", None) is not None
-                else "N/A"
-            ),
-            "Human_CYP2D6_Energy": (
-                f"{getattr(rec, 'human_cyp2d6_energy', None):.2f}"
-                if getattr(rec, "human_cyp2d6_energy", None) is not None
-                else "N/A"
-            ),
+
             "Human_OffTarget_Max_Energy": (
                 f"{getattr(rec, 'human_offtarget_max_energy', None):.2f}"
                 if getattr(rec, "human_offtarget_max_energy", None) is not None

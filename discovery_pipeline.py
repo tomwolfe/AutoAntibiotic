@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AutoAntibiotic Discovery Pipeline v3.1
+AutoAntibiotic Discovery Pipeline v4.0
 ========================================
 Principal Computational Chemist & AI Pipeline Architect
 Project: AutoAntibiotic Discovery — MRSA PBP2a Inhibitor Screening
@@ -101,10 +101,6 @@ from config.constants import (
     CONSERVED_RESIDUES,
     TRYPSIN_CATALYTIC_RESIDUES,
     CES1_CATALYTIC_RESIDUES,
-    ALBUMIN_CATALYTIC_RESIDUES,
-    CYP3A4_CATALYTIC_RESIDUES,
-    HERG_CATALYTIC_RESIDUES,
-    CYP2D6_CATALYTIC_RESIDUES,
     FP_RADIUS,
     FP_NBITS,
     PBP2A_CONFORMER_IDS,
@@ -119,7 +115,6 @@ from config.constants import (
     SI_STRONG_THRESHOLD,
     SI_PROMISING_THRESHOLD,
     SELECTIVITY_PANEL_TARGETS,
-    LIABILITY_PANEL_TARGETS,
     CEFTAROLINE_CONTROL_E,
     RMSD_VALIDATED_MAX,
     RMSD_MARGINAL_MAX,
@@ -141,7 +136,7 @@ try:
 
     __version__ = _pkg_version("autoantibiotic-discovery-pipeline")
 except Exception:  # pragma: no cover - local/dev fallback
-    __version__ = "3.1.0"
+    __version__ = "4.0.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1159,52 +1154,6 @@ def prepare_targets(
     log.info(f"    CES1 active site center: {ces1_center}")
     result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
 
-    # ── Human off-target panel (wider selectivity screen) ──
-    # Albumin (1AO6) and CYP3A4 (1W0E) are resolved like the other targets
-    # and their docking grid is centred on the configured catalytic residues.
-    # Missing/offline PDBs are skipped gracefully in CI mode.
-    for label, pdb_key, residues, out_name, optional in (
-        ("Human Serum Albumin", "HUMAN_ALBUMIN", ALBUMIN_CATALYTIC_RESIDUES, "albumin", False),
-        ("Human CYP3A4", "CYP3A4", CYP3A4_CATALYTIC_RESIDUES, "cyp3a4", False),
-        # Wider panel: HERG (cardiotoxicity, 7CN1 — skipped if unavailable) and
-        # CYP2D6 (mock-capable metabolic liability). Both are prepared like the
-        # other off-targets but are *optional*: if no PDB can be resolved (e.g.
-        # offline CI, unavailable/synth-id), they are skipped gracefully so the
-        # pipeline keeps running with whatever panel is available.
-        ("Human Ether-à-go-go (hERG)", "HERG", HERG_CATALYTIC_RESIDUES, "herg", True),
-        ("Human CYP2D6", "CYP2D6", CYP2D6_CATALYTIC_RESIDUES, "cyp2d6", True),
-    ):
-        pdb_id = PDB_IDS.get(pdb_key)
-        # Off-target honesty: surface clearly when an off-target is a mock
-        # placeholder (no real PDB) or an optional target was skipped, so the
-        # report's selectivity confidence ("mock") is not mistaken for a real
-        # panel run (paper §4.1b). No behaviour changes — just a loud log line.
-        if pdb_id and str(pdb_id).startswith("MOCK_"):
-            log.warning(
-                f"  ⚠  {label} ({pdb_key}) uses a MOCK placeholder PDB "
-                f"({pdb_id}); its off-target energies are not physically real."
-            )
-        try:
-            pdb_path = _resolve_structure(pdb_id)
-        except Exception as exc:
-            if optional:
-                log.warning(
-                    f"  ⚠  Could not resolve {label} ({pdb_key}); skipping "
-                    f"(optional off-target): {exc}"
-                )
-                result[out_name] = {"pdbqt": None, "active_center": None}
-                continue
-            raise
-        clean_pdb = os.path.join(work_dir, f"{out_name}_clean.pdb")
-        try:
-            pdbqt = clean_pdb_structure(pdb_path, clean_pdb)
-            center = compute_residue_centroid(clean_pdb, residues)
-        except Exception as exc:
-            log.warning(f"  ⚠  Could not prepare {label} ({pdb_key}): {exc}")
-            pdbqt, center = None, None
-        log.info(f"  {label} active site center: {center}")
-        result[out_name] = {"pdbqt": pdbqt, "active_center": center}
-
     # ── Write grid configuration files ──
     grid_dir = os.path.join(work_dir, "grid_configs")
     os.makedirs(grid_dir, exist_ok=True)
@@ -1882,55 +1831,19 @@ def analyze_selectivity_and_resistance(
     for rec, energy in ces1_results:
         rec.human_ces1_energy = energy
 
-    # ── Human liability-panel fields kept as None (simplified pipeline) ──
-    # The simplified pipeline no longer docks the promiscuous liability panel
-    # (albumin, CYP3A4, hERG, CYP2D6). Their energy fields are retained on the
-    # record (and surfaced as "N/A" in the CSV) for downstream-compatibility, but
-    # are not computed. The mechanism-restricted SI uses ONLY trypsin/CES1.
-
-    # ── Compute SI with the mechanism-restricted / liability-panel split (Task 1) ──
-    # The human off-target panel is split into two data-driven groups:
-    #   * SELECTIVITY_PANEL_TARGETS (trypsin, CES1) — mechanistically relevant
-    #     human serine hydrolases with narrow catalytic sites the seed library
-    #     was explicitly designed to avoid. The PRIMARY Selectivity_Index uses
-    #     ONLY this panel as its denominator (gates SI vs trypsin/CES1 >= 2.0).
-    #   * LIABILITY_PANEL_TARGETS (cyp3a4, albumin, herg, cyp2d6) — promiscuous
-    #     sinks that bind any aromatic acid at -9 to -10.5 kcal/mol. They MUST
-    #     NEVER enter the SI denominator; they feed Off_Target_Risk and are
-    #     reported as their own energy columns.
-    # The OLD pan-panel SI (all 6 off-targets in the denominator) is preserved
-    # as Selectivity_Index_PanPanel for full transparency.
     for rec in top10:
-        # Collect raw human off-target energies. In the simplified pipeline only
-        # the mechanism-relevant trypsin/CES1 panel is docked; the promiscuous
-        # liability panel is no longer docked (their energies are None and are
-        # reported as "N/A"). We still pair each with its attribute so the
-        # Off_Target_Risk flag can be computed on *valid* energies only.
         raw_human = [
-            ("trypsin", "human_trypsin_energy", rec.human_trypsin_energy),
-            ("ces1", "human_ces1_energy", rec.human_ces1_energy),
-            ("albumin", "human_albumin_energy", getattr(rec, "human_albumin_energy", None)),
-            ("cyp3a4", "human_cyp3a4_energy", getattr(rec, "human_cyp3a4_energy", None)),
-            ("herg", "human_herg_energy", getattr(rec, "human_herg_energy", None)),
-            ("cyp2d6", "human_cyp2d6_energy", getattr(rec, "human_cyp2d6_energy", None)),
+            ("trypsin", rec.human_trypsin_energy),
+            ("ces1", rec.human_ces1_energy),
         ]
-        # Case-insensitive membership tests so config keys ("CES1") and the
-        # internal panel labels ("ces1") match regardless of capitalisation.
         sel_panel = {s.lower() for s in SELECTIVITY_PANEL_TARGETS}
-        # A human off-target energy > 0.0 means no-pose / steric clash — it
-        # carries no binding information and must NOT enter any SI denominator.
-        # We treat it as invalid so the SI is computed only from real, finite,
-        # binding (negative) energies. The *raw* list (including invalid
-        # energies) is still used for the Off_Target_Risk flag below.
         energies_human = [
-            e for _l, _a, e in raw_human if e is not None and e <= 0.0
+            e for _l, e in raw_human if e is not None and e <= 0.0
         ]
         n_human_targets = len(energies_human)
 
-        # Confidence is keyed on the SELECTIVITY panel: High if >= 2
-        # selectivity-panel targets provided valid energies.
         panel_valid = [
-            e for label, _a, e in raw_human
+            e for label, e in raw_human
             if label in sel_panel and e is not None and e <= 0.0
         ]
         if len(panel_valid) >= 2:
@@ -1992,20 +1905,11 @@ def analyze_selectivity_and_resistance(
             else:
                 log.info(f"  {rec.compound_id}: mechanism-restricted SI = {si:.2f} (pass).")
 
-        # Off-target risk flag (separate boolean column, paper §4.1b). In the
-        # simplified pipeline the only docked human off-targets are the
-        # mechanism-relevant trypsin/CES1 panel; a tight binder against EITHER
-        # (energy < -8.0 kcal/mol) raises the flag. The liability panel is no
-        # longer docked, so this is computed from trypsin/CES1 only.
         rec.off_target_risk = any(
             e is not None and e < -8.0
-            for label, _a, e in raw_human
-            if e is not None and label in ("trypsin", "ces1")
+            for label, e in raw_human
+            if e is not None
         )
-
-        # Honest provenance: no covalent-warhead bonus is ever applied.
-        rec.warhead_type = "none"
-        rec.si_covalent = None
 
         if rec.off_target_risk:
             if rec.resistance_notes:
@@ -2287,13 +2191,9 @@ def _generate_and_filter_library(
         target_count=target_count, input_csv=library, input_sdf=sdf,
     )
     n_total = len(all_records)
-    # Recall mode (config.yaml ``recall_mode: true``) relaxes the filter chain
-    # so established PBP2a binders (ceftaroline, meropenem) survive
-    # filtering (paper §4.4).
     if config is None:
         config = load_config()
-    recall_mode = bool(config.get("recall_mode", False))
-    filtered = apply_filters(all_records, recal_mode=recall_mode)
+    filtered = apply_filters(all_records)
     n_filtered = len(filtered)
 
     if n_filtered == 0:

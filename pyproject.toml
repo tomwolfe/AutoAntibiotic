@@ -7,7 +7,7 @@ include = ["discovery_pipeline*", "utils*", "config*"]
 
 [project]
 name = "autoantibiotic-discovery-pipeline"
-version = "3.1.0"
+version = "4.0.0"
 description = "AutoAntibiotic Discovery Pipeline — MRSA PBP2a inhibitor screening"
 readme = "README.md"
 requires-python = ">=3.9"
