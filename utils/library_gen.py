@@ -25,9 +25,23 @@ from typing import List, Optional
 import pandas as pd
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import BRICS
+from rdkit.Chem import BRICS, rdMolDescriptors
 
 from config.constants import RANDOM_SEED
+
+# Synthetic Accessibility (SA) score from the RDKit Contrib collection. Imported
+# lazily/guarded so that a missing contrib directory never breaks library
+# generation (the SA score is purely descriptive and non-essential downstream).
+try:
+    from rdkit.Chem import RDConfig
+    import os as _os
+    import sys as _sys
+    _sys.path.append(_os.path.join(RDConfig.RDContribDir, "SA_Score"))
+    import sascorer  # type: ignore
+    _HAVE_SA_SCORER = True
+except Exception:  # pragma: no cover - depends on RDKit contrib availability
+    sascorer = None
+    _HAVE_SA_SCORER = False
 
 # When ``target_count`` is at/above this threshold, decomposed fragments are
 # cached to a temp JSON so repeated runs (e.g. re-tuning parameters) avoid
@@ -127,6 +141,16 @@ class CompoundRecord:
     # "Below gate" so the CSV is unambiguous (paper §A3).
     report_tier: Optional[str] = None
 
+    # Phase C — synthetic accessibility & physicochemical descriptors computed
+    # during library generation. ``sa_score`` is the Ertl SA score (lower = easier
+    # to synthesise); ``tpsa`` is the topological polar surface area; ``frac_csp3``
+    # is the fraction of sp3 carbons; ``num_rotatable_bonds`` is the rotatable-bond
+    # count. All default to None when the SMILES cannot be parsed.
+    sa_score: Optional[float] = None
+    tpsa: Optional[float] = None
+    frac_csp3: Optional[float] = None
+    num_rotatable_bonds: Optional[int] = None
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SCAFFOLDS & CONTROLS
@@ -204,6 +228,39 @@ CONTROL_SMILES = {
 def _count_atoms(mol: Chem.Mol) -> int:
     """Heavy-atom count for a molecule."""
     return mol.GetNumHeavyAtoms()
+
+
+def _enrich_record_properties(rec: "CompoundRecord") -> "CompoundRecord":
+    """
+    Compute SA_Score, TPSA, Fraction_CSP3 and Num_Rotatable_Bonds for *rec*.
+
+    Populates ``rec.sa_score``, ``rec.tpsa``, ``rec.frac_csp3`` and
+    ``rec.num_rotatable_bonds`` in place (best-effort; any uncomputable value
+    stays ``None``). Called for every :class:`CompoundRecord` produced by
+    :func:`generate_candidate_library` so the CSV report can surface these
+    drug-likeness descriptors (paper §2.6, §3).
+    """
+    mol = rec.mol if rec.mol is not None else Chem.MolFromSmiles(rec.smiles)
+    if mol is None:
+        return rec
+    try:
+        if _HAVE_SA_SCORER and sascorer is not None:
+            rec.sa_score = float(sascorer.calculateScore(mol))
+    except Exception:
+        pass
+    try:
+        rec.tpsa = float(rdMolDescriptors.CalcTPSA(mol))
+    except Exception:
+        pass
+    try:
+        rec.frac_csp3 = float(rdMolDescriptors.CalcFractionCSP3(mol))
+    except Exception:
+        pass
+    try:
+        rec.num_rotatable_bonds = int(rdMolDescriptors.CalcNumRotatableBonds(mol))
+    except Exception:
+        pass
+    return rec
 
 
 def _brics_cache_path(scaffold_smiles: List[str]) -> str:
@@ -398,7 +455,7 @@ def generate_candidate_library(
                 mol=mol,
             ))
         log.info(f"  Loaded {len(records)} compounds from external CSV (BRICS skipped).")
-        return records
+        return [_enrich_record_properties(r) for r in records]
 
     all_scaffolds = NATURAL_PRODUCT_SCAFFOLDS
     scaffold_mols = []
@@ -480,7 +537,7 @@ def generate_candidate_library(
                 smiles=smi,
                 mol=mol,
             ))
-        return candidates
+        return [_enrich_record_properties(r) for r in candidates]
 
     # Recombine fragments to create novel analogs via BRICSBuild
     seen_smiles = set()
@@ -550,7 +607,7 @@ def generate_candidate_library(
                 seen_smiles.add(smi)
 
     log.info(f"  Library generation complete: {len(records)} compounds.")
-    return records
+    return [_enrich_record_properties(r) for r in records]
 
 
 def _read_records_from_sdf(sdf_path: str) -> List[CompoundRecord]:
@@ -591,4 +648,4 @@ def _read_records_from_sdf(sdf_path: str) -> List[CompoundRecord]:
         log.warning(f"  No valid molecules read from SDF: {sdf_path}")
     else:
         log.info(f"  Loaded {len(records)} molecules from SDF (BRICS skipped).")
-    return records
+    return [_enrich_record_properties(r) for r in records]

@@ -238,7 +238,10 @@ ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
 ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
 
 # Docking
-VINA_TIMEOUT_S = 600
+# Default Vina per-dock timeout. Kept generous so large/flexible ligands (e.g.
+# BRICS decoys) finish instead of being dropped as "inactive", which would bias
+# enrichment/screening statistics. Redocking uses an explicit 2400 s override.
+VINA_TIMEOUT_S = 1200
 N_JOBS = max(1, mp.cpu_count() - 1)
 
 # Similarity
