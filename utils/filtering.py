@@ -37,6 +37,7 @@ log = logging.getLogger("AutoAntibiotic")
 def apply_filters(
     records: "List[CompoundRecord]",
     similarity_threshold: Optional[float] = None,
+    return_counts: bool = False,
 ) -> "List[CompoundRecord]":
     """
     Phase2.2 — Apply structural, similarity, ADMET, and PAINS filters.
@@ -44,20 +45,22 @@ def apply_filters(
     Filter chain:
         1. Structural exclusion (β-lactam SMARTS).
         2. Similarity filter vs reference antibiotics (Morgan FP, Tc < threshold).
-        3. ADMET: Lipinski Rule of 5 + QED > 0.7.
+        3. ADMET: Lipinski Rule of 5 + QED > 0.5.
         4. PAINS alerts via RDKit FilterCatalog.
         5. Diversity check: if < 100 pass, relax similarity to 0.5.
 
     Args:
         records: Input compound records.
         similarity_threshold: Initial Tanimoto cutoff (default 0.3).
+        return_counts: When True, records are returned with an attribute
+            ``_funnel_counts`` containing the intermediate filter counts.
 
     Returns:
         Filtered list of CompoundRecord (with computed ADMET/similarity fields).
     """
     if similarity_threshold is None:
         similarity_threshold = SIMILARITY_THRESHOLD
-    qed_floor = 0.7
+    qed_floor = 0.5
 
     log.info("─── Phase 2: Filtering ───")
 
@@ -83,8 +86,9 @@ def apply_filters(
     brenk_params.AddCatalog(FilterCatalogParams.FilterCatalogs.BRENK)
     brenk_catalog = FilterCatalog(brenk_params)
 
-    def _filter_pass(threshold: float, qed_gate: float) -> "List[CompoundRecord]":
-        """Run the similarity + ADMET + PAINS filter chain on the original records."""
+    def _filter_pass(threshold: float, qed_gate: float) -> tuple:
+        """Run the similarity + ADMET + PAINS filter chain on the original records.
+        Returns (passed_list, counts_dict)."""
         passed = []
         skipped_structural = 0
         skipped_similarity = 0
@@ -164,16 +168,31 @@ def apply_filters(
         log.info(f"  PAINS filter: {skipped_pains} removed.")
         log.info(f"  Brenk alerts: {skipped_brenk} removed.")
         log.info(f"  Passed filters: {len(passed)} compounds.")
-        return passed
+        counts = {
+            "total_input": len(records),
+            "skipped_structural": skipped_structural,
+            "skipped_similarity": skipped_similarity,
+            "skipped_admet": skipped_admet,
+            "skipped_pains": skipped_pains,
+            "skipped_brenk": skipped_brenk,
+            "passed": len(passed),
+        }
+        return passed, counts
 
-    passed = _filter_pass(similarity_threshold, qed_floor)
+    passed, counts_strict = _filter_pass(similarity_threshold, qed_floor)
 
     if len(passed) < DIVERSITY_MIN_COUNT:
         log.info(
             f"  Only {len(passed)} compounds passed filters (< {DIVERSITY_MIN_COUNT}). "
             f"Relaxing similarity threshold to {SIMILARITY_THRESHOLD_RELAXED}."
         )
-        passed = _filter_pass(SIMILARITY_THRESHOLD_RELAXED, 0.7)
+        passed, counts_relaxed = _filter_pass(SIMILARITY_THRESHOLD_RELAXED, 0.5)
+        counts_strict = counts_relaxed
+        counts_strict["relaxed"] = True
+
+    if return_counts:
+        for r in passed:
+            r._funnel_counts = counts_strict
 
     log.info("─── Phase 2 complete ───")
     return passed

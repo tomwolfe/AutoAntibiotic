@@ -111,10 +111,20 @@ class CompoundRecord:
     # screening so that pose-based interaction analysis need not re-dock.
     active_docked_pdbqt: Optional[str] = None
 
+    # Path to the allosteric-site Vina docked pose (PDBQT), populated during
+    # screening so allosteric interaction analysis need not re-dock.
+    allosteric_docked_pdbqt: Optional[str] = None
+
     # Interaction fingerprint (dict returned by analyze_binding_interactions)
     # captured during Phase 4 so reporting can expose per-residue H-bond flags
     # without re-parsing the docked pose.
     interactions: Optional[dict] = None
+
+    # Allosteric interaction fingerprint (dict returned by
+    # analyze_allosteric_interactions), captured during Phase 4 so reporting
+    # can expose allosteric-contact flags without re-parsing the docked pose.
+    allosteric_interactions: Optional[dict] = None
+    allosteric_contact: bool = False
 
     si_vs_ceftaroline: Optional[float] = None
 
@@ -195,6 +205,16 @@ NATURAL_PRODUCT_SCAFFOLDS = [
     "O=C1OC2=C(C3=C(C=C2)C=CC=C3)C=C1",                            # Coumarin derivative
     "CC(=O)Nc1ccc(O)cc1",                                          # Paracetamol (amide phenol)
     "O=c1[nH]c(=O)n(Cc2ccccc2)cc1C=Cc3ccc(O)cc3",                 # Styrylxanthine
+
+    # ── Task 1a: BROADENED scaffold set for diverse PBP2a library ──
+    "c1ccc(-c2ccnc(-c3ccccc3)n2)cc1",                              # Diarylpyrimidine core
+    "O=C1Nc2ccccc2C(=O)N1",                                        # Quinazolinone
+    "NS(=O)(=O)c1ccc(-c2ccccc2)cc1",                               # Sulfonamide
+    "c1ccc2nc(Nc3ccccc3)sc2c1",                                    # Benzothiazole
+    "O=C(Nc1ccccc1)c1c[nH]c2ccccc12",                              # Indole-3-carboxamide
+    "c1ccc(-c2cc3ncnc(Nc4ccccc4)c3n2)cc1",                        # Pyrazolopyrimidine
+    "O=C1NC(=O)S1",                                                # Thiazolidinone
+    "O=C1Nc2ccccc2C1",                                             # Oxindole
 ]
 
 # Positive control SMILES (to verify pipeline)

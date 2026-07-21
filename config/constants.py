@@ -232,7 +232,7 @@ SI_PROMISING_THRESHOLD = 1.5
 # Outputs
 OUTPUT_DIR = Path("output")
 CSV_REPORT = OUTPUT_DIR / "top_candidates.csv"
-TOP_N = 10
+TOP_N = 20
 
 # Morgan fingerprint parameters used for clustering the pre-top-N pool.
 FP_RADIUS = 2

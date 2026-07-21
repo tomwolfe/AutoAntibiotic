@@ -1505,6 +1505,123 @@ def analyze_binding_interactions(
     return results
 
 
+def analyze_allosteric_interactions(
+    docked_pdbqt_path: str,
+    receptor_pdb_path: str,
+    allosteric_residues: Optional[List[str]] = None,
+    contact_cutoff: float = 4.5,
+) -> Dict[str, Union[bool, float]]:
+    """
+    Analyse allosteric pocket contacts between a docked ligand and key
+    allosteric residues (Ala237, Met241, Tyr159).
+
+    The function parses the ligand PDBQT and receptor PDB files, then
+    computes distances between ligand heavy atoms and all heavy atoms
+    of each allosteric residue. A hydrophobic contact is flagged when
+    any ligand heavy atom is within *contact_cutoff* Å of any residue atom.
+
+    Args:
+        docked_pdbqt_path: Path to the docked ligand PDBQT file.
+        receptor_pdb_path: Path to the cleaned receptor PDB file.
+        allosteric_residues: List of residue identifiers (e.g. ``["ALA237", "MET241", "TYR159"]``).
+            Defaults to ALLOSTERIC_RESIDUES.
+        contact_cutoff: Distance cutoff in Å (default 4.5).
+
+    Returns:
+        Dictionary with:
+            'allosteric_contact'     – True if any allosteric residue has a contact
+            'Ala237_contact'         – True if any heavy atom < cutoff from Ala237
+            'Met241_contact'         – True if any heavy atom < cutoff from Met241
+            'Tyr159_contact'         – True if any heavy atom < cutoff from Tyr159
+            'min_dist_Ala237'        – Minimum distance (Å) to any Ala237 atom
+            'min_dist_Met241'        – Minimum distance (Å) to any Met241 atom
+            'min_dist_Tyr159'        – Minimum distance (Å) to any Tyr159 atom
+    """
+    if allosteric_residues is None:
+        allosteric_residues = ALLOSTERIC_RESIDUES
+
+    def _parse_sidechain_coords(pdb_path: str, residue_keys: List[str]) -> Dict[str, List[np.ndarray]]:
+        atom_coords: Dict[str, List[np.ndarray]] = {}
+        try:
+            parser = PDBParser(QUIET=True)
+            struct = parser.get_structure("receptor", pdb_path)
+            for reskey in residue_keys:
+                resname_str = "".join(ch for ch in reskey if ch.isalpha()).upper()
+                resno_str = "".join(ch for ch in reskey if ch.isdigit())
+                resno = int(resno_str) if resno_str else None
+                atom_coords[reskey] = []
+                for model in struct:
+                    for chain in model:
+                        for residue in chain:
+                            rid = residue.get_id()
+                            if rid[0] != " ":
+                                continue
+                            if residue.get_resname().strip().upper() != resname_str:
+                                continue
+                            if resno is not None and rid[1] != resno:
+                                continue
+                            for atom in residue:
+                                try:
+                                    atom_coords[reskey].append(
+                                        atom.get_vector().get_array()
+                                    )
+                                except Exception:
+                                    continue
+        except Exception:
+            pass
+        return atom_coords
+
+    atom_coords = _parse_sidechain_coords(receptor_pdb_path, allosteric_residues)
+
+    ligand_coords = []
+    try:
+        with open(docked_pdbqt_path) as f:
+            for line in f:
+                if line.startswith(("ATOM", "HETATM")):
+                    try:
+                        x = float(line[30:38].strip())
+                        y = float(line[38:46].strip())
+                        z = float(line[46:54].strip())
+                        elem = line[76:78].strip()
+                        if elem and elem.upper() != "H":
+                            ligand_coords.append(np.array([x, y, z]))
+                    except (ValueError, IndexError):
+                        continue
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Docked PDBQT not found: {docked_pdbqt_path}")
+
+    if not ligand_coords:
+        raise ValueError("No ligand heavy atoms found in PDBQT file.")
+
+    results: Dict[str, Union[bool, float]] = {}
+    min_dists: Dict[str, float] = {}
+    any_contact = False
+
+    for reskey in allosteric_residues:
+        coords = atom_coords.get(reskey, [])
+        if not coords:
+            min_dists[reskey] = float("inf")
+            continue
+        ref = np.array(coords)
+        distances = np.linalg.norm(
+            np.array(ligand_coords)[:, np.newaxis] - ref[np.newaxis, :],
+            axis=2,
+        ).min(axis=0)
+        min_d = float(distances.min())
+        min_dists[reskey] = min_d
+        if min_d < contact_cutoff:
+            any_contact = True
+
+    short_name = lambda k: k[0].upper() + k[1:].lower()
+    results["allosteric_contact"] = any_contact
+    for reskey in allosteric_residues:
+        col = f"{reskey[:1]}{reskey[1:].lower()}_contact"
+        results[col] = min_dists.get(reskey, float("inf")) < contact_cutoff
+        results[f"min_dist_{reskey[:1]}{reskey[1:].lower()}"] = min_dists.get(reskey, float("inf"))
+
+    return results
+
+
 def compute_selectivity_index(
     pb2pa_energy: float, human_avg_energy: float,
 ) -> float:
@@ -1723,24 +1840,28 @@ def _physicochemical_resistance_notes(record: CompoundRecord) -> List[str]:
 
 
 def _run_resistance_profiling(
-    top10: List[CompoundRecord],
+    top: List[CompoundRecord],
     targets: dict,
     work_dir: str,
 ) -> None:
     """
-    Pose-based resistance profiling for the *top10* candidates.
+    Pose-based resistance profiling for the *top* candidates.
 
     Uses the active-site pose captured during ``screen_library``
     (``record.active_docked_pdbqt``) to compute the binding-interaction
     fingerprint, then runs :func:`profile_resistance_risk`. When no pose was
     retained (e.g. the RDKit fallback path), the analysis gracefully notes
     "no pose" rather than fabricating a pose.
+
+    Also runs allosteric-site interaction analysis (hydrophobic contacts with
+    Ala237, Met241, Tyr159) using the allosteric docked pose when available.
     """
     pb2pa = targets.get("PBP2a", {})
     cleaned_pdb = pb2pa.get("cleaned_pdb")
 
-    for rec in top10:
+    for rec in top:
         interactions = None
+        allosteric_interactions = None
 
         if cleaned_pdb and os.path.exists(cleaned_pdb):
             out_pdbqt = getattr(rec, "active_docked_pdbqt", None)
@@ -1750,9 +1871,23 @@ def _run_resistance_profiling(
                 except Exception:
                     interactions = None
 
-        # Stash the interaction fingerprint on the record so the CSV report
-        # can derive per-residue H-bond columns without re-parsing the pose.
+            # ── Allosteric-site interaction analysis ──
+            allosteric_pdbqt = getattr(rec, "allosteric_docked_pdbqt", None)
+            if allosteric_pdbqt and os.path.exists(allosteric_pdbqt):
+                try:
+                    allosteric_interactions = analyze_allosteric_interactions(
+                        allosteric_pdbqt, cleaned_pdb,
+                    )
+                except Exception:
+                    allosteric_interactions = None
+
+        # Stash the interaction fingerprints on the record so the CSV report
+        # can derive per-residue columns without re-parsing the pose.
         rec.interactions = interactions
+        rec.allosteric_interactions = allosteric_interactions
+        rec.allosteric_contact = bool(
+            allosteric_interactions and allosteric_interactions.get("allosteric_contact")
+        )
 
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
@@ -2179,13 +2314,13 @@ def _write_status_badge(
 def _generate_and_filter_library(
     target_count: int, library: Optional[str], sdf: Optional[str],
     config: Optional[dict] = None,
-) -> Tuple[list, list, int, int]:
+) -> Tuple[list, list, int, int, dict]:
     """Generate the candidate library and apply the filter chain.
 
-    Returns ``(all_records, filtered, n_total, n_filtered)``. If no compound
-    survives the strict+relaxed filter chain, falls back to the unfiltered
-    generated library so a report is still produced (these candidates carry no
-    ADMET/PAINS guarantees and are flagged accordingly downstream).
+    Returns ``(all_records, filtered, n_total, n_filtered, funnel_counts)``.
+    If no compound survives the strict+relaxed filter chain, falls back to the
+    unfiltered generated library so a report is still produced (these candidates
+    carry no ADMET/PAINS guarantees and are flagged accordingly downstream).
     """
     all_records = generate_candidate_library(
         target_count=target_count, input_csv=library, input_sdf=sdf,
@@ -2193,8 +2328,21 @@ def _generate_and_filter_library(
     n_total = len(all_records)
     if config is None:
         config = load_config()
-    filtered = apply_filters(all_records)
+    filtered = apply_filters(all_records, return_counts=True)
     n_filtered = len(filtered)
+
+    funnel_counts = {"generated": n_total}
+    if filtered:
+        counts = getattr(filtered[0], "_funnel_counts", None)
+        if counts:
+            funnel_counts.update({
+                "after_structural": max(0, n_total - counts.get("skipped_structural", 0)),
+                "after_similarity": max(0, n_total - counts.get("skipped_structural", 0) - counts.get("skipped_similarity", 0)),
+                "after_admet": max(0, counts.get("passed", 0) + counts.get("skipped_pains", 0) + counts.get("skipped_brenk", 0)),
+                "after_pains": max(0, counts.get("passed", 0) + counts.get("skipped_brenk", 0)),
+                "after_brenk": counts.get("passed", 0),
+            })
+    funnel_counts["after_filtering"] = n_filtered
 
     if n_filtered == 0:
         log.warning(
@@ -2203,7 +2351,7 @@ def _generate_and_filter_library(
         )
         filtered = all_records
 
-    return all_records, filtered, n_total, n_filtered
+    return all_records, filtered, n_total, n_filtered, funnel_counts
 
 
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
@@ -2329,7 +2477,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # Read pre-made molecules directly from an SDF file (RDKit) when provided,
     # instead of generating a new library via BRICS. This makes the pipeline
     # easy to integrate with external compound collections.
-    all_records, filtered, n_total, n_filtered = _generate_and_filter_library(
+    all_records, filtered, n_total, n_filtered, funnel_counts = _generate_and_filter_library(
         target_count=target_count, library=library, sdf=sdf, config=config,
     )
 
@@ -2423,6 +2571,25 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         generate_pymol_script(top3, targets, str(OUTPUT_DIR))
     except Exception as exc:
         log.warning(f"  Could not generate PyMOL script: {exc}")
+
+    # ── Filter funnel summary ──
+    n_docked_allosteric = sum(1 for r in top10 if r.pb2pa_allosteric_energy is not None)
+    n_docked_active = sum(1 for r in top10 if r.pb2pa_active_energy is not None)
+    n_si_passing = sum(1 for r in top10 if r.selectivity_index is not None
+                       and r.selectivity_index >= SI_PROMISING_THRESHOLD)
+    funnel_counts.update({
+        "docked_allosteric": n_docked_allosteric,
+        "docked_active": n_docked_active,
+        "si_passing": n_si_passing,
+        "reported": len(top10),
+    })
+    funnel_path = OUTPUT_DIR / "filter_funnel.json"
+    try:
+        with open(funnel_path, "w") as fh:
+            json.dump(funnel_counts, fh, indent=2)
+        log.info(f"  Filter funnel saved: {funnel_path}")
+    except Exception as exc:
+        log.warning(f"  Could not write filter_funnel.json: {exc}")
 
     print_summary(
         n_total, n_filtered, top10,

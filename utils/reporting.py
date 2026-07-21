@@ -276,6 +276,7 @@ def generate_csv_report(
             "H_Bond_Ser403": str(h_ser),
             "H_Bond_Lys406": str(h_lys),
             "H_Bond_Tyr446": str(h_tyr),
+            "Allosteric_Contact": str(getattr(rec, "allosteric_contact", False)),
             # ── Selectivity metrics (Task 1) ──
             # Selectivity_Index (primary, mechanism-restricted, trypsin/CES1)
             # and a tiered label (paper §2.4). Selectivity_Index_TwoTarget is the

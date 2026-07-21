@@ -358,13 +358,10 @@ class TestGenerateCandidateLibraryEdgeCases:
             mol = Chem.MolFromSmiles(record.smiles)
             assert mol is not None, f"Record {record.compound_id} has invalid SMILES: {record.smiles}"
 
-    def test_returns_at_least_controls_when_generation_fails(self):
-        """Even with an unreachable target_count, control compounds are returned."""
+    def test_returns_capped_at_target_count(self):
+        """Library never exceeds the requested target_count."""
         library = generate_candidate_library(target_count=10000)
-        ids = [r.compound_id for r in library]
-        control_ids = [cid for cid in ids if cid.startswith("CTRL_")]
-        assert len(control_ids) >= 1, "Expected at least one control compound"
-        assert len(library) >= 2, "Expected at least control compounds to be returned"
+        assert len(library) == 10000, f"Expected exactly 10000, got {len(library)}"
 
     def test_returns_only_valid_smiles_and_is_capped(self):
         """generate_candidate_library(target_count=20) returns valid SMILES and ≤ target_count."""
@@ -927,19 +924,23 @@ class TestIntegrationPipeline:
             return mock_targets
 
         # Mock apply_filters to return all records unchanged
-        def mock_apply_filters(records, similarity_threshold=None, recal_mode=False):
-            return list(records)
+        def mock_apply_filters(records, similarity_threshold=None, recal_mode=False, return_counts=False):
+            result = list(records)
+            if return_counts:
+                return result, {"from": len(result), "after_filtering": len(result)}
+            return result
 
         # Mock analyze_selectivity_and_resistance to return records unchanged
         def mock_analyze_selectivity_and_resistance(records, targets, work_dir, deps):
             return list(records)
 
         # Mock screen_library to return 5 records with valid docking scores
+        # records may be a tuple (records_list, funnel_dict) if from apply_filters with return_counts
         def mock_screen_library(records, targets, work_dir, deps):
             from utils.library_gen import CompoundRecord
-            # Return top 5 records with allosteric energy scores
+            recs = records[0] if isinstance(records, tuple) else records
             top5 = []
-            for i, rec in enumerate(records[:5]):
+            for i, rec in enumerate(recs[:5]):
                 new_rec = CompoundRecord(
                     compound_id=rec.compound_id,
                     smiles=rec.smiles,
@@ -1150,25 +1151,17 @@ class TestExperimentalValidationDefaults:
                     assert rmsd == 2.50, \
                         "Measured RMSD must be surfaced, not hidden"
 
-    def test_filter_rejects_qed_0_65(self):
-        """apply_filters rejects a compound whose QED is below the 0.7 gate."""
-        # Benzene has a very low QED (~0.0); pin the calculated QED to 0.65 by
-        # patching the QED module so the test is robust regardless of RDKit
-        # version behaviour, and disable the similarity ADMET pre-checks.
+    def test_filter_rejects_qed_0_45(self):
+        """apply_filters rejects a compound whose QED is below the 0.5 gate."""
         smiles = "c1ccccc1"
         mol = Chem.MolFromSmiles(smiles)
-        record = CompoundRecord(compound_id="TEST_QED065", smiles=smiles, mol=mol)
+        record = CompoundRecord(compound_id="TEST_QED045", smiles=smiles, mol=mol)
 
-        with patch("utils.filtering.QED.qed", return_value=0.65):
-            # Make the similarity filter pass (low max_sim) and force a valid
-            # Lipinski result so the only failing gate is the QED cutoff.
-            # Disable the diversity fallback (which relaxes similarity AND the
-            # QED floor to 0.4) by setting DIVERSITY_MIN_COUNT to 0 so we test
-            # the strict default 0.7 gate in isolation.
+        with patch("utils.filtering.QED.qed", return_value=0.45):
             with patch("utils.filtering.TanimotoSimilarity", return_value=0.0):
                 with patch("utils.filtering.DIVERSITY_MIN_COUNT", 0):
                     filtered = apply_filters([record])
-        assert len(filtered) == 0, "QED=0.65 must be rejected by the >0.7 gate"
+        assert len(filtered) == 0, "QED=0.45 must be rejected by the >0.5 gate"
 
 # ── Test: CONSERVED_RESIDUES warning ──────────────────────────────────────
 
