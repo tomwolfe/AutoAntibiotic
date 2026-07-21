@@ -29,6 +29,15 @@ env/
 # Run log
 run_log.txt
 
+# Generated reports
+RUN_REPORT.md
+
+# Generated library CSV
+library.csv
+
+# Generated decoys
+data/known_decoys.csv
+
 # IDE / editor
 .vscode/
 .idea/
