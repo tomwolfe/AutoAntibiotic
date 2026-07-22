@@ -144,7 +144,7 @@ def generate_csv_report(
     Phase 5.1 — Write top_candidates.csv with all required columns.
 
     Columns:
-        Compound_ID, SMILES, PBP2a_Allosteric_Energy, PBP2a_Active_Energy,
+        Compound_ID, SMILES, PBP2a_Active_Energy,
         Human_Trypsin_Energy, Human_CES1_Energy,
         Selectivity_Index, Selectivity_Index_TwoTarget, SI_vs_Ceftaroline,
         Passes_Selectivity_Gate, Selectivity_Confidence, Off_Target_Risk,
@@ -207,10 +207,6 @@ def generate_csv_report(
         rows.append({
             "Compound_ID": rec.compound_id,
             "SMILES": rec.smiles,
-            "PBP2a_Allosteric_Energy": (
-                f"{rec.pb2pa_allosteric_energy:.2f}" if rec.pb2pa_allosteric_energy is not None
-                else "N/A"
-            ),
             "PBP2a_Active_Energy": (
                 f"{rec.pb2pa_active_energy:.2f}" if rec.pb2pa_active_energy is not None
                 else "N/A"
@@ -283,7 +279,6 @@ def generate_csv_report(
             "H_Bond_Ser403": str(h_ser),
             "H_Bond_Lys406": str(h_lys),
             "H_Bond_Tyr446": str(h_tyr),
-            "Allosteric_Contact": str(getattr(rec, "allosteric_contact", False)),
             # ── Selectivity metrics (Task 1) ──
             # Selectivity_Index (primary, mechanism-restricted, trypsin/CES1)
             # and a tiered label (paper §2.4). Selectivity_Index_TwoTarget is the
@@ -773,7 +768,6 @@ def generate_figures(
         for key, label in [
             ("generated", "Generated"),
             ("after_filtering", "After Filters"),
-            ("docked_allosteric", "Allosteric Docked"),
             ("docked_active", "Active Docked"),
             ("si_passing", "SI Passing"),
             ("reported", "Reported"),

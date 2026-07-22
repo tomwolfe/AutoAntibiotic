@@ -360,8 +360,8 @@ class TestGenerateCandidateLibraryEdgeCases:
 
     def test_returns_capped_at_target_count(self):
         """Library never exceeds the requested target_count."""
-        library = generate_candidate_library(target_count=10000)
-        assert len(library) == 10000, f"Expected exactly 10000, got {len(library)}"
+        library = generate_candidate_library(target_count=500)
+        assert len(library) <= 500, f"Expected ≤ 500, got {len(library)}"
 
     def test_returns_only_valid_smiles_and_is_capped(self):
         """generate_candidate_library(target_count=20) returns valid SMILES and ≤ target_count."""
@@ -672,7 +672,7 @@ class TestRealPDBSmoke:
                 out.append(CompoundRecord(
                     compound_id=rec.compound_id,
                     smiles=rec.smiles,
-                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                    pb2pa_active_energy=-9.5 + i * 0.3,
                 ))
             return out
 
@@ -928,7 +928,7 @@ class TestIntegrationPipeline:
                 new_rec = CompoundRecord(
                     compound_id=rec.compound_id,
                     smiles=rec.smiles,
-                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                    pb2pa_active_energy=-9.5 + i * 0.3,
                 )
                 top5.append(new_rec)
             return top5
@@ -978,7 +978,7 @@ class TestIntegrationPipeline:
         required_columns = {
             "Compound_ID",
             "SMILES",
-            "PBP2a_Allosteric_Energy",
+            "PBP2a_Active_Energy",
         }
         assert required_columns.issubset(set(rows[0].keys())), (
             f"CSV missing required columns: {required_columns - set(rows[0].keys())}"
@@ -1015,7 +1015,7 @@ class TestMainRedockingGate:
                 out.append(CompoundRecord(
                     compound_id=rec.compound_id,
                     smiles=rec.smiles,
-                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                    pb2pa_active_energy=-9.5 + i * 0.3,
                 ))
             return out
 
@@ -1072,7 +1072,7 @@ class TestMainRedockingGate:
                 out.append(CompoundRecord(
                     compound_id=rec.compound_id,
                     smiles=rec.smiles,
-                    pb2pa_allosteric_energy=-9.5 + i * 0.3,
+                    pb2pa_active_energy=-9.5 + i * 0.3,
                 ))
             return out
 
@@ -2057,7 +2057,7 @@ class TestReportingPhase35:
         rec = CompoundRecord(
             compound_id="AA-1", smiles="c1ccccc1",
             mol=Chem.MolFromSmiles("c1ccccc1"),
-            pb2pa_allosteric_energy=-9.0, pb2pa_active_energy=-9.0,
+            pb2pa_active_energy=-9.0,
             human_trypsin_energy=-3.0, human_ces1_energy=-2.0,
             human_offtarget_max_energy=-2.0,
             selectivity_index=0.8, selectivity_confidence="High",

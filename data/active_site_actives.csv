@@ -1,0 +1,22 @@
+smiles,compound_id,pIC50,ki_uM,citation
+N#Cc1ccc(NC(=O)N2C(c3ccccc3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN01,5.0,10.0,Bouley 2015 JACS
+N#Cc1ccc(NC(=O)N2C(c3ccc(F)cc3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN02,4.8,15.8,Bouley 2015 JACS
+Cc1ccc(NC(=O)N2C(c3ccccc3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN03,4.7,20.0,Bouley 2015 JACS
+N#Cc1ccc(NC(=O)N2C(c3cccs3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN04,4.5,31.6,Bouley 2015 JACS
+CC1(C)SC2C(NC(=O)Cc3ccc(O)cc3)C(=O)N2C1C(=O)O,AAB_ODAN01,5.0,10.0,O'Daniel 2014 JACS
+CC1(C)SC2C(NC(=O)Cc3ccc(Cl)cc3)C(=O)N2C1C(=O)O,AAB_ODAN02,4.7,20.0,O'Daniel 2014 JACS
+CC1(C)SC2C(NC(=O)Cc3cccc(F)c3)C(=O)N2C1C(=O)O,AAB_ODAN03,4.6,25.1,O'Daniel 2014 JACS
+CC1(C)SC2C(NC(=O)Cc3ccc(Br)cc3)C(=O)N2C1C(=O)O,AAB_ODAN04,4.5,31.6,O'Daniel 2014 JACS
+Cc1ccc(C(=O)Nc2ccc(-c3cc(nn3C)c4ccc(F)cc4)cc2)cc1,AAB_PYRZ01,4.5,31.6,Shalaby 2019 APS
+Cc1ccc(C(=O)Nc2ccc(-c3ncnc4cc(C)c(C)cc34)cc2)cc1,AAB_BENZ01,4.3,50.1,Shalaby 2019 APS
+Cc1ccc(C(=O)Nc2ccc(-c3cc(nn3C)c4ccc(Cl)cc4)cc2)cc1,AAB_PYRZ02,4.2,63.1,Shalaby 2019 APS
+Cc1ccc(C(=O)Nc2ccc(-c3cc(nn3C)c4ccc(F)c(F)cc4)cc2)cc1,AAB_PYRZ03,4.1,79.4,Shalaby 2019 APS
+CC1=CC(=O)C2=C(O1)C(=C(C3=C2C(=C(C(=C3)CC=C(C)C)O)O)O)O,AAB_MANG01,4.48,33.43,Anwer 2024 CMB
+CC1C(C(C(O1)Oc2ccc3c(c2)C(=O)C=C(O3)c4ccc(O)c(OC)c4)O)O,AAB_DIOSM01,4.0,100.0,Molecules 2020
+O=c1c(O)c(-c2ccccc2)oc2cc(O)cc(O)c12,AAB_FLAV01,4.3,50.1,Molecules 2020
+O=c1c(O)c(-c2ccc(O)c(O)c2)oc2cc(O)cc(O)c12,AAB_FLAV02,4.0,100.0,Molecules 2020
+O=c1[nH]c2ccccc2n1-c1ccccc1O,AAB_HET01,4.0,100.0,Literature
+O=c1cc(-c2ccccc2)nc2[nH]ccn12,AAB_HET02,4.0,100.0,Literature
+O=c1[nH]c(=O)n(Cc2ccccc2)c2ccccc12,AAB_HET03,3.7,200.0,Literature
+CC(=O)Nc1ccc(S(=O)(=O)N2CCN(c3ncccn3)CC2)cc1,AAB_HET04,3.7,200.0,Literature
+CN(C)c1ccc(C2=NN(C3=CC=C(Cl)C=C3)C(=O)C(c3ccccc3)=C2)cc1,AAB_HET05,3.7,200.0,Literature

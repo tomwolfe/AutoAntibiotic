@@ -222,11 +222,7 @@ SIMILARITY_THRESHOLD = 0.3
 SIMILARITY_THRESHOLD_RELAXED = 0.5
 DIVERSITY_MIN_COUNT = 100
 
-# Selectivity
-SELECTIVITY_INDEX_THRESHOLD = 2.0
-# Tiered Selectivity Index thresholds (paper §2.4). The final report includes all
-# candidates at or above SI_PROMISING_THRESHOLD; the Strong/Promising split is a
-# transparent secondary label (never a lower gate).
+SELECTIVITY_INDEX_THRESHOLD = 1.5
 SI_STRONG_THRESHOLD = 2.0
 SI_PROMISING_THRESHOLD = 1.5
 

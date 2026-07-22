@@ -96,7 +96,6 @@ from config.constants import (
     PDB_IDS,
     REFERENCE_ANTIBIOTICS,
     BETA_LACTAM_SMARTS,
-    ALLOSTERIC_RESIDUES,
     ACTIVE_SITE_RESIDUES,
     CONSERVED_RESIDUES,
     TRYPSIN_CATALYTIC_RESIDUES,
@@ -104,7 +103,6 @@ from config.constants import (
     FP_RADIUS,
     FP_NBITS,
     PBP2A_CONFORMER_IDS,
-    ALLOSTERIC_BOX_SIZE,
     ACTIVE_BOX_SIZE,
     SELECTIVITY_BOX_SIZE,
     VINA_TIMEOUT_S,
@@ -1087,17 +1085,8 @@ def prepare_targets(
         except Exception as exc:
             log.warning(f"  ⚠  Could not prepare PBP2a conformer {cid}: {exc}")
 
-    # ── Compute allosteric + active site centres from cleaned apo ──
+    # ── Compute active site centre from cleaned apo ──
     cleaned_pdb = pbp2a_clean_pdb
-
-    log.info("  Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain heavy atoms…")
-    try:
-        allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES, use_ca=False)
-    except (ValueError, Exception) as exc:
-        log.warning(f"  ⚠  Allosteric residues {ALLOSTERIC_RESIDUES} missing: {exc}")
-        log.warning("  Residue missing – grid center set to None; supply real PDB.")
-        allosteric_center = None
-    log.info(f"    Allosteric site center: {allosteric_center}")
 
     log.info("  Computing active site centroid (conserved residues SER403, LYS406, TYR446)…")
     try:
@@ -1107,17 +1096,15 @@ def prepare_targets(
         active_center = None
     log.info(f"    Active site center: {active_center}")
 
-    for site, center in (("allosteric", allosteric_center), ("active", active_center)):
-        if center is None and mode == "science":
-            msg = f"{site} center missing in science mode – aborting"
-            log.error(msg)
-            raise MissingGridCenterError(msg)
+    if active_center is None and mode == "science":
+        msg = "active site center missing in science mode – aborting"
+        log.error(msg)
+        raise MissingGridCenterError(msg)
 
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
         "receptor_pdbqts": receptor_pdbqts,
         "cleaned_pdb": pbp2a_clean_pdb,
-        "allosteric_center": allosteric_center,
         "active_center": active_center,
     }
 
@@ -1159,21 +1146,15 @@ def prepare_targets(
     grid_dir = os.path.join(work_dir, "grid_configs")
     os.makedirs(grid_dir, exist_ok=True)
 
-    for site_name, center, box in [
-        ("allosteric", allosteric_center, ALLOSTERIC_BOX_SIZE),
-        ("active", active_center, ACTIVE_BOX_SIZE),
-    ]:
-        if center is None:
-            log.warning(f"  Skipping grid config for '{site_name}' site (center is None).")
-            continue
-        cfg_path = os.path.join(grid_dir, f"grid_{site_name}.txt")
+    if active_center is not None:
+        cfg_path = os.path.join(grid_dir, "grid_active.txt")
         with open(cfg_path, "w") as f:
-            f.write(f"center_x = {center[0]:.3f}\n")
-            f.write(f"center_y = {center[1]:.3f}\n")
-            f.write(f"center_z = {center[2]:.3f}\n")
-            f.write(f"size_x = {box[0]:.1f}\n")
-            f.write(f"size_y = {box[1]:.1f}\n")
-            f.write(f"size_z = {box[2]:.1f}\n")
+            f.write(f"center_x = {active_center[0]:.3f}\n")
+            f.write(f"center_y = {active_center[1]:.3f}\n")
+            f.write(f"center_z = {active_center[2]:.3f}\n")
+            f.write(f"size_x = {ACTIVE_BOX_SIZE[0]:.1f}\n")
+            f.write(f"size_y = {ACTIVE_BOX_SIZE[1]:.1f}\n")
+            f.write(f"size_z = {ACTIVE_BOX_SIZE[2]:.1f}\n")
         log.info(f"  Grid config saved: {cfg_path}")
 
     log.info("─── Phase 1 complete ───")
@@ -1231,75 +1212,56 @@ def screen_library(
     """
     Phase 3 — Virtual screening.
 
-    Primary (Vina):
-        1. Dock all filtered compounds against allosteric site.
-        2. Select top 50 by energy; dock against active site.
+    Docks ALL filtered compounds against PBP2a active site across 3 conformers,
+    taking the consensus (best) energy. No allosteric docking.
 
-    Returns top 10 candidates with docking scores populated.
+    Returns top candidates with docking scores populated.
 
-    Requires AutoDock Vina. If Vina is unavailable the pipeline cannot screen
-    and raises ``RuntimeError`` — install Vina via ``bash setup.sh`` or Docker.
+    Requires AutoDock Vina. If Vina is unavailable the pipeline cannot screen.
     """
     log.info("─── Phase 3: Virtual Screening ───")
 
     pb2pa = targets["PBP2a"]
-    allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
 
-    allosteric_box = _auto_box_size(pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=22.0, site_residues=ALLOSTERIC_RESIDUES) \
-        if allosteric_center is not None else ALLOSTERIC_BOX_SIZE
-    active_box = _auto_box_size(pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE, min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES) \
-        if active_center is not None else ACTIVE_BOX_SIZE
+    active_box = _auto_box_size(
+        pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
+        min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+    ) if active_center is not None else ACTIVE_BOX_SIZE
 
     receptor_pdbqts = pb2pa.get("receptor_pdbqts") or [pb2pa["pdbqt"]]
+
     log.info(
-        f"  Docking all compounds against allosteric site "
-        f"({len(receptor_pdbqts)} PBP2a conformer(s))…"
+        f"  Docking all {len(records)} compounds against PBP2a active site "
+        f"({len(receptor_pdbqts)} conformers)…"
     )
 
-    allosteric_best = _run_consensus_dock(
-        records, receptor_pdbqts, allosteric_center, allosteric_box, work_dir, "allosteric",
+    active_best = _run_consensus_dock(
+        records, receptor_pdbqts, active_center, active_box, work_dir, "active",
     )
+
     n_scored = 0
     for rec in records:
-        rec.pb2pa_allosteric_energy = allosteric_best.get(rec.compound_id)
-        if rec.pb2pa_allosteric_energy is not None:
+        rec.pb2pa_active_energy = active_best.get(rec.compound_id)
+        if rec.pb2pa_active_energy is not None:
             n_scored += 1
-        if rec.pb2pa_allosteric_energy is not None and rec.pb2pa_allosteric_energy < -11.0:
-            rec.suspect_score = True
-            log.warning(f"  ⚠  {rec.compound_id}: Vina score {rec.pb2pa_allosteric_energy:.2f} < -11.0 — flagged suspect")
+            if rec.pb2pa_active_energy < -11.0:
+                rec.suspect_score = True
+                log.warning(f"  ⚠  {rec.compound_id}: Vina score {rec.pb2pa_active_energy:.2f} < -11 — flagged suspect")
 
-    log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
+    log.info(f"  Active-site docking complete: {n_scored}/{len(records)} scored.")
 
-    scored = sorted(
-        [r for r in records if r.pb2pa_allosteric_energy is not None],
-        key=lambda r: r.pb2pa_allosteric_energy,
-    )
-    active_top_n = min(50, max(5, len(scored)))
-
-    if len(scored) >= 5:
-        top_active = scored[:active_top_n]
-        log.info(
-            f"  Docking top {len(top_active)} compounds against active site "
-            f"({len(receptor_pdbqts)} PBP2a conformer(s))…"
-        )
-        active_best = _run_consensus_dock(
-            top_active, receptor_pdbqts, active_center, active_box, work_dir, "active",
-        )
-        for rec in top_active:
-            rec.pb2pa_active_energy = active_best.get(rec.compound_id)
-
-    top10 = select_top(records, "pb2pa_allosteric_energy")
-    log.info(f"  Top {len(top10)} candidates selected.")
-    for i, r in enumerate(top10):
+    top_n = select_top(records, "pb2pa_active_energy")
+    log.info(f"  Top {len(top_n)} candidates by active-site energy.")
+    for i, r in enumerate(top_n[:10]):
         energy_str = (
-            f"{r.pb2pa_allosteric_energy:.2f}" if r.pb2pa_allosteric_energy is not None
+            f"{r.pb2pa_active_energy:.2f}" if r.pb2pa_active_energy is not None
             else "N/A"
         )
         log.info(f"    {i + 1}. {r.compound_id}: {energy_str} kcal/mol")
 
     log.info("─── Phase 3 complete ───")
-    return top10
+    return top_n
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1723,14 +1685,6 @@ def _pose_based_resistance_notes(
             f"Avoids conserved catalytic network (min d={best_conserved:.2f} Å) — high resistance risk"
         )
 
-    # Allosteric binder note
-    if (
-        record.pb2pa_allosteric_energy is not None
-        and record.pb2pa_allosteric_energy < -7.0
-    ):
-        if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
-            notes.append("Allosteric binder (Tyr105/Gln199/Glu237 pocket). Novel mechanism.")
-
     return notes
 
 
@@ -1748,18 +1702,13 @@ def _run_resistance_profiling(
     Uses the active-site pose captured during ``screen_library``
     (``record.active_docked_pdbqt``) to compute the binding-interaction
     fingerprint, then runs :func:`profile_resistance_risk`. When no pose was
-    retained (e.g. the RDKit fallback path), the analysis gracefully notes
-    "no pose" rather than fabricating a pose.
-
-    Also runs allosteric-site interaction analysis (hydrophobic contacts with
-    Tyr105, Gln199, Glu237) using the allosteric docked pose when available.
+    retained, the analysis gracefully notes "no pose".
     """
     pb2pa = targets.get("PBP2a", {})
     cleaned_pdb = pb2pa.get("cleaned_pdb")
 
     for rec in top:
         interactions = None
-        allosteric_interactions = None
 
         if cleaned_pdb and os.path.exists(cleaned_pdb):
             out_pdbqt = getattr(rec, "active_docked_pdbqt", None)
@@ -1769,23 +1718,7 @@ def _run_resistance_profiling(
                 except Exception:
                     interactions = None
 
-            # ── Allosteric-site interaction analysis ──
-            allosteric_pdbqt = getattr(rec, "allosteric_docked_pdbqt", None)
-            if allosteric_pdbqt and os.path.exists(allosteric_pdbqt):
-                try:
-                    allosteric_interactions = analyze_allosteric_interactions(
-                        allosteric_pdbqt, cleaned_pdb,
-                    )
-                except Exception:
-                    allosteric_interactions = None
-
-        # Stash the interaction fingerprints on the record so the CSV report
-        # can derive per-residue columns without re-parsing the pose.
         rec.interactions = interactions
-        rec.allosteric_interactions = allosteric_interactions
-        rec.allosteric_contact = bool(
-            allosteric_interactions and allosteric_interactions.get("allosteric_contact")
-        )
 
         rec.resistance_notes = profile_resistance_risk(
             rec, work_dir,
@@ -1861,10 +1794,7 @@ def analyze_selectivity_and_resistance(
             if label in sel_panel and e is not None and e <= 0.0
         ]
 
-        pb2pa_best = (
-            rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None
-            else rec.pb2pa_allosteric_energy
-        )
+        pb2pa_best = rec.pb2pa_active_energy
 
         # ── Supplementary transparency metric: SI_vs_Ceftaroline ──
         rec.si_vs_ceftaroline = (
@@ -1972,27 +1902,16 @@ def screen_single_compound(
 
     pb2pa = targets.get("PBP2a", {})
     receptor_pdbqt = pb2pa.get("pdbqt")
-    allosteric_center = pb2pa.get("allosteric_center")
     active_center = pb2pa.get("active_center")
 
-    if receptor_pdbqt:
-        if allosteric_center is not None:
-            allosteric_box = _auto_box_size(
-                pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"),
-                allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=22.0, site_residues=ALLOSTERIC_RESIDUES,
-            )
-            rec.pb2pa_allosteric_energy = dock_compound(
-                rec, receptor_pdbqt, allosteric_center,
-                allosteric_box, work_dir, "allosteric",
-            )
-        if active_center is not None:
-            active_box = _auto_box_size(
-                pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE, min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
-            )
-            rec.pb2pa_active_energy = dock_compound(
-                rec, receptor_pdbqt, active_center,
-                active_box, work_dir, "active",
-            )
+    if receptor_pdbqt and active_center is not None:
+        active_box = _auto_box_size(
+            pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE, min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+        )
+        rec.pb2pa_active_energy = dock_compound(
+            rec, receptor_pdbqt, active_center,
+            active_box, work_dir, "active",
+        )
     else:
         log.warning(
             "  Receptor PDBQT missing — screen_single_compound cannot score. "
@@ -2026,7 +1945,7 @@ def print_summary(
     deps: dict,
 ) -> None:
     """Log a final pipeline summary."""
-    n_docked = sum(1 for r in top10 if r.pb2pa_allosteric_energy is not None)
+    n_docked = sum(1 for r in top10 if r.pb2pa_active_energy is not None)
     n_selectivity_pass = sum(
         1 for r in top10
         if r.selectivity_index is not None and r.selectivity_index >= SELECTIVITY_INDEX_THRESHOLD
@@ -2448,9 +2367,6 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             set, the full library pipeline (phases 2/4/5) is skipped and a
             single compound is docked & summarised immediately.
     """
-    # Assert that allosteric residues are consistent across the pipeline
-    assert ALLOSTERIC_RESIDUES == ["TYR105", "GLN199", "GLU237"], \
-        f"ALLOSTERIC_RESIDUES mismatch: {ALLOSTERIC_RESIDUES}"
     assert ACTIVE_SITE_RESIDUES == ["SER403", "LYS406", "TYR446"], \
         f"ACTIVE_SITE_RESIDUES mismatch: {ACTIVE_SITE_RESIDUES}"
     ensure_output_dir()
@@ -2550,12 +2466,31 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     except Exception as exc:
         log.warning(f"  Could not read core RMSD for report: {exc}")
 
-    # ── Phase 1b: Enrichment validation (science mode, diagnostic) ──
-    enrichment_result = {}
-    try:
-        enrichment_result = run_enrichment_check(targets, work_dir, deps, config=config)
-    except Exception as exc:
-        log.warning(f"  ⚠  Enrichment check failed: {exc}")
+    # ── Phase 1b: Active-site validation gate ──
+    # Check that scripts/validate_active_site.py has been run and passed.
+    # Only enforced in science mode; CI/mock mode skips the gate.
+    # Setting AUTOANTIBIOTIC_FORCE=1 bypasses the gate.
+    if mode == "ci" or os.environ.get("AUTOANTIBIOTIC_FORCE") == "1":
+        log.info("  CI/force mode: skipping active-site validation gate.")
+    else:
+        validation_gate = os.path.join(OUTPUT_DIR, "validation_results.json")
+        validation_passed = False
+        if os.path.exists(validation_gate):
+            try:
+                with open(validation_gate) as fh:
+                    vdata = json.load(fh)
+                validation_passed = bool(vdata.get("passed", False)) and vdata.get("auc", 0) >= 0.70
+            except Exception:
+                pass
+
+        if not validation_passed:
+            log.error(
+                "  ✗  Active-site enrichment validation has NOT been passed.\n"
+                "     Run `python scripts/validate_active_site.py` first.\n"
+                "     This gate ensures the docking protocol can discriminate\n"
+                "     known active-site binders from decoys (AUC >= 0.70)."
+            )
+            sys.exit(1)
 
     # ── Phase 2: Library generation & filtering ──
     # Read pre-made molecules directly from an SDF file (RDKit) when provided,
@@ -2588,12 +2523,9 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
 
     # ── Phase 4.2: Final ranking ──
     # The simplified pipeline ranks the final candidates by PBP2a active-site
-    # consensus energy (falling back to allosteric energy when no active-site
-    # energy is available). The MM-GBSA-like MMFF rerank was removed in v4.0.
+    # consensus energy. The MM-GBSA-like MMFF rerank was removed in v4.0.
     def _final_rank_key(rec: CompoundRecord):
-        energy = rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None \
-            else rec.pb2pa_allosteric_energy
-        energy = energy if energy is not None else float("inf")
+        energy = rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None else float("inf")
         return energy
 
     top10 = sorted(top10, key=_final_rank_key)
@@ -2668,12 +2600,10 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         log.warning(f"  Could not generate PyMOL script: {exc}")
 
     # ── Filter funnel summary ──
-    n_docked_allosteric = sum(1 for r in top10 if r.pb2pa_allosteric_energy is not None)
     n_docked_active = sum(1 for r in top10 if r.pb2pa_active_energy is not None)
     n_si_passing = sum(1 for r in top10 if r.selectivity_index is not None
                        and r.selectivity_index >= SI_PROMISING_THRESHOLD)
     funnel_counts.update({
-        "docked_allosteric": n_docked_allosteric,
         "docked_active": n_docked_active,
         "si_passing": n_si_passing,
         "reported": len(top10),
@@ -2694,7 +2624,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             top10,
             output_dir=OUTPUT_DIR,
             receptor_pdb=pb2pa.get("cleaned_pdb"),
-            enrichment_results=enrichment_result if enrichment_result else None,
+            enrichment_results=None,
             funnel_counts=funnel_counts,
         )
     except Exception as exc:

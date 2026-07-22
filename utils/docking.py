@@ -183,37 +183,17 @@ def dock_compound(
         flex_pdbqt=flex_pdbqt,
     )
 
-    # Keep the docked pose for the active site so downstream pose analysis
-    # (MM-GBSA rerank, H-bond flags, mutation scan) can reuse it instead of
-    # re-docking. Consensus docking uses per-conformer tags ("active_c0"…) and
-    # flexible docking uses "active_flex"; all of these are active-site poses
-    # and must be retained. Mutant scans use "mut_*" and are NOT retained.
-    #
-    # Similarly, the allosteric-site pose is retained for allosteric interaction
-    # analysis (hydrophobic contact checking to Tyr105, Gln199, Glu237).
-    #
-    # IMPORTANT: only record the pose when the dock actually SUCCEEDED (energy
-    # is not None AND the output file was written). Otherwise a failed dock —
-    # e.g. a flexible ("active_flex") re-dock that Vina rejects — would clobber
-    # a previously-retained good rigid pose with a path to a non-existent file,
-    # silently breaking MM-GBSA / H-bond / mutation analysis downstream.
     is_active_pose = tag == "active" or tag.startswith("active_")
-    is_allosteric_pose = tag.startswith("allosteric_")
     dock_succeeded = (
         energy is not None
         and os.path.exists(out_pdbqt)
         and os.path.getsize(out_pdbqt) > 0
     )
-    keep_out = (is_active_pose or is_allosteric_pose) and dock_succeeded
-    if keep_out:
-        if is_active_pose:
-            record.active_docked_pdbqt = out_pdbqt
-        if is_allosteric_pose:
-            record.allosteric_docked_pdbqt = out_pdbqt
+    if is_active_pose and dock_succeeded:
+        record.active_docked_pdbqt = out_pdbqt
 
-    # Cleanup temp files (keep the pose for later analysis)
     for f in (lig_pdbqt, out_pdbqt):
-        if keep_out and f == out_pdbqt:
+        if is_active_pose and dock_succeeded and f == out_pdbqt:
             continue
         try:
             os.remove(f)

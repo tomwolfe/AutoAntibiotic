@@ -17,7 +17,7 @@ from rdkit.Chem import BRICS, Descriptors, Crippen, rdMolDescriptors, AllChem, Q
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.constants import BETA_LACTAM_SMARTS
-from utils.library_gen import PBP2A_SCAFFOLDS
+from utils.library_gen import SEED_SCAFFOLDS
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("build_decoys")
@@ -101,7 +101,7 @@ def generate_diverse_pool(target_size=2000):
                     continue
 
     # Source 2: BRICS from PBP2a scaffolds
-    for smi in PBP2A_SCAFFOLDS:
+    for smi in SEED_SCAFFOLDS:
         m = Chem.MolFromSmiles(smi)
         if m is not None:
             try:
