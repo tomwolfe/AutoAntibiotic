@@ -153,72 +153,29 @@ class CompoundRecord:
 #  SCAFFOLDS & CONTROLS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 40 diverse scaffolds (natural products, drug-like, antibacterial chemotypes)
-# Enriched for BRICS-compatible bonds to generate a larger fragment pool.
-NATURAL_PRODUCT_SCAFFOLDS = [
-    # ── Flavonoids / polyphenols ──
-    "O=c1c(O)c2c(oc3cc(O)cc(O)c3c2=O)c(O)c1O",                    # Quercetin
-    "Oc1ccc(C=Cc2ccc(O)cc2)cc1",                                   # Resveratrol
-    "O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12",                       # 7-Hydroxyflavone
-    "Oc1ccc2c(c1)OC(C3=CC(=C(C=C3)O)O)C(=O)C2",                   # Eriodictyol
-    "COc1ccc2c(c1)CC(=O)C3=C(C=CC(=C3O)OC)O2",                     # 7-O-methylnaringenin
-    "COc1cc(OC)c2c(c1)OC(C(C2=O)C3=CC=C(C=C3)O)C4=CC=C(C=C4)O",   # 3,5-dihydroxyflavone derivative
+# 12 scaffolds derived from KNOWN PBP2a allosteric inhibitors and diverse
+# drug-like heterocycles. These replace the earlier natural-product scaffolds
+# that led to chemotype bias.
+PBP2A_SCAFFOLDS = [
+    # ── Tan 2012 oxadiazoles (3 scaffolds) ──
+    "O=C(Nc1ccc(-c2nc(C3=CC=C(O)C=C3)no2)cc1)c1ccccc1",            # Tan oxadiazole core 1
+    "O=C(O)c1ccc(C2=NOC(=N2)c3ccc(NC(=O)c4ccco4)cc3)cc1",         # Tan oxadiazole core 2
+    "CCCC(=O)Nc1ccc(-c2nc(C3=CC=C(C(=O)O)C=C3)no2)cc1",           # Tan oxadiazole core 3
 
-    # ── Curcuminoids / diarylheptanoids ──
-    "COc1ccc(C=CC(=O)CC(=O)C=Cc2ccc(OC)c(O)c2)cc1O",              # Curcumin
-    "COc1cc(OC)c(C=CC(=O)CC(=O)C=Cc2ccc(O)c(OC)c2)cc1O",          # Demethoxycurcumin
-    "Oc1ccc(C=CC(=O)CCC(=O)C=Cc2ccc(O)cc2)cc1",                   # Bisdemethoxycurcumin
+    # ── Troczi 2013 benzothiazole/quinazolinone hits (3 scaffolds) ──
+    "O=C(Nc1ccc(-c2nc3ccccc3s2)cc1)c1ccc(O)cc1",                   # Benzothiazole amide
+    "O=C1Nc2ccc(-c3ccccc3)cc2C(=O)N1c1ccccc1",                     # Quinazolinone core
+    "O=C(Nc1ccc(-c2nc3ccccc3[nH]2)cc1)c1ccccc1",                   # Benzoxazole/benzimidazole
 
-    # ── Alkaloids ──
-    "COc1cc2c(cc1OC)[n+]1ccc3cc4c(cc3c1CC2)OCO4",                 # Berberine
-    "COc1cc2c(cc1OC)CCN3C2CC(C1=C3COC1=O)C(=O)OC",               # Yohimbine-like core
-    "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",                               # Caffeine
-    "CN1CCC23C4C5C=CC2(C1)C3=C(C=C5)C(=C4O)OC",                  # Morphine-like core
-    "O=C1OC2CC3C4=C(C=CC=C4)CCN3CC2N1C5=CC=CC=C5",               # Aporphine-like core
+    # ── Simonet 2021 allosteric-site fragments (2 scaffolds) ──
+    "O=C(Nc1ccc(O)cc1)C1C2CC3CC(C2)CC1C3",                         # Adamantane carboxamide
+    "O=C(Nc1ccccc1)c1ccc(C(=O)Nc2ccccc2)cc1",                      # Terephthalamide
 
-    # ── Terpenoids / macrolides ──
-    "CC1(C)OC2C3C(=O)OC4C(OO5)C3C5C2C4O1",                        # Artemisinin (approximate)
-    "CC1OCCCC(=O)C1",                                              # Macrolide-like lactone core
-    "CC1(C)CCC2C(C1=O)C3(C)CCC4C5(C)CCC(=O)C(C)(C)C5CCC4C3CC2",  # Limonoid-like core
-    "O=C1OC2CC3C4C(C3(C)C)CCC4C2(C)C1",                           # Sesquiterpene lactone core
-
-    # ── Antibacterial / PBP2a-relevant chemotypes ──
-    "CC1(C)SC2C(NC(=O)Cc3ccccc3)C(=O)N2C1C(=O)O",                # Penicillin core (6-APA)
-    "CC1=C(C(=O)O)CSCC2C(=O)N3C(=O)C=C(C3C2=O)C(=O)O",            # Cephalosporin core (7-ACA)
-    "CC1C2C(C(=O)N2C(=C1C(=O)O)C(=O)O)SC3CCNC3=O",               # Carbapenem core (thienamycin-like)
-    "CC1(C)SC2C(N)C(=O)N2C1C(=O)O",                               # 6-APA (penicillin nucleus)
-    "O=C1NC2C3SC(C)(C)C(NC3C2=O)C(=O)O",                          # Penam ring system
-
-    # ── Phenolic / catechol ──
-    "Oc1c(O)c(O)cc(C(=O)O)c1",                                    # Gallic acid
-    "Oc1ccccc1C(=O)O",                                            # Salicylic acid
-    "CC1=C(C=C(C=C1)O)O",                                         # Hydroquinone
-    "Oc1ccc(CCc2ccc(O)cc2)cc1",                                   # 4,4'-biphenol
-
-    # ── Macrocyclic / complex ──
-    "COc1cc2c(cc1OC)C(=O)C3=C(O)C=CC(=C3O2)C",                   # Rottlerin
-    "COc1cc2c(cc1OC)C3CC4=C(C=C(C=C4)OC)CCN3C2",                 # Papaverine-like
-    "CC1(C)Oc2ccccc2C(=O)N1",                                     # Dihydrobenzoxazinone
-    "O=C1NC2=CC=CC=C2C(=O)N1",                                     # Isatin
-    "CCCCCCCCCCCC(=O)O",                                           # Lauric acid (fatty acid)
-    "O=C1CCCC2=C1C=CC=C2",                                        # Tetralone
-    "CC1=CC(=O)C2=C(O1)C(=C(C=C2)O)O",                            # Chromone core
-    "C1=CC=C2C(=C1)C3=CC=CC=C3C2",                                 # Fluorene
-    "O=C1CCN2CC3=CC=CC=C3CC2C1",                                  # Benzazepinone
-    "CC1(C)OCC2C3C(C2O1)C(=O)OC3C4=COC=C4",                       # Spiroketal core
-    "O=C1OC2=C(C3=C(C=C2)C=CC=C3)C=C1",                            # Coumarin derivative
-    "CC(=O)Nc1ccc(O)cc1",                                          # Paracetamol (amide phenol)
-    "O=c1[nH]c(=O)n(Cc2ccccc2)cc1C=Cc3ccc(O)cc3",                 # Styrylxanthine
-
-    # ── Task 1a: BROADENED scaffold set for diverse PBP2a library ──
-    "c1ccc(-c2ccnc(-c3ccccc3)n2)cc1",                              # Diarylpyrimidine core
-    "O=C1Nc2ccccc2C(=O)N1",                                        # Quinazolinone
-    "NS(=O)(=O)c1ccc(-c2ccccc2)cc1",                               # Sulfonamide
-    "c1ccc2nc(Nc3ccccc3)sc2c1",                                    # Benzothiazole
-    "O=C(Nc1ccccc1)c1c[nH]c2ccccc12",                              # Indole-3-carboxamide
-    "c1ccc(-c2cc3ncnc(Nc4ccccc4)c3n2)cc1",                        # Pyrazolopyrimidine
-    "O=C1NC(=O)S1",                                                # Thiazolidinone
-    "O=C1Nc2ccccc2C1",                                             # Oxindole
+    # ── Diverse drug-like heterocycles (4 scaffolds) ──
+    "O=c1[nH]c2ccccc2n1-c1ccccc1",                                  # Indole/benzimidazole
+    "O=c1cc(-c2ccccc2)nc2[nH]ccn12",                                 # Triazolopyridine
+    "O=C1CSC(=O)N1c1ccccc1",                                        # Thiazolidinone
+    "O=C1C=C(c2ccccc2)n2ccnc21",                                    # Pyrazolopyrimidine
 ]
 
 # Positive control SMILES (to verify pipeline)
@@ -310,6 +267,26 @@ def _save_brics_cache(cache_path: str, fragments: List[str]) -> None:
 # reusing the existing input_csv logic. This lets users inject curated/de novo
 # compounds without editing source.
 EXTERNAL_LIB_CSV_ENV = "AUTOANTIBIOTIC_LIB_CSV"
+
+# ── Pharmacophore pre-filter ──
+# Each generated compound must have ≥1 H-bond donor OR acceptor AND
+# ≥2 aromatic/hydrophobic rings. Reject otherwise.
+def _passes_pharmacophore_filter(mol: Chem.Mol) -> bool:
+    from rdkit.Chem import Descriptors, rdMolDescriptors
+    try:
+        hbd = Descriptors.NumHDonors(mol)
+        hba = Descriptors.NumHAcceptors(mol)
+        if hbd + hba < 1:
+            return False
+        ring_info = rdMolDescriptors.CalcNumAromaticRings(mol)
+        # Count all rings (aromatic + aliphatic) as hydrophobic rings
+        all_rings = rdMolDescriptors.CalcNumRings(mol)
+        if ring_info + (all_rings - ring_info) < 2:
+            return False
+        return True
+    except Exception:
+        return False
+
 
 # Known β-lactam / PBP2a-binding fragments used to bias BRICS recombination:
 # their BRICS fragments are allowed into the fragment pool so the recombinant
@@ -454,7 +431,7 @@ def generate_candidate_library(
         log.info(f"  Loaded {len(records)} compounds from external CSV (BRICS skipped).")
         return [_enrich_record_properties(r) for r in records]
 
-    all_scaffolds = NATURAL_PRODUCT_SCAFFOLDS
+    all_scaffolds = PBP2A_SCAFFOLDS
     scaffold_mols = []
     for smi in all_scaffolds:
         mol = Chem.MolFromSmiles(smi)
@@ -476,7 +453,7 @@ def generate_candidate_library(
         all_fragments = set()
         for mol in scaffold_mols:
             try:
-                fragments = BRICS.BRICSDecompose(mol, minFragmentSize=6)
+                fragments = BRICS.BRICSDecompose(mol, minFragmentSize=4)
                 for frag_smi in fragments:
                     frag_mol = Chem.MolFromSmiles(frag_smi)
                     if frag_mol is not None and _count_atoms(frag_mol) >= 6:
@@ -497,7 +474,7 @@ def generate_candidate_library(
             if mol is None:
                 continue
             try:
-                for frag_smi in BRICS.BRICSDecompose(mol, minFragmentSize=6):
+                for frag_smi in BRICS.BRICSDecompose(mol, minFragmentSize=4):
                     frag_mol = Chem.MolFromSmiles(frag_smi)
                     if frag_mol is not None and _count_atoms(frag_mol) >= 6:
                         all_fragments.add(frag_smi)
@@ -536,13 +513,54 @@ def generate_candidate_library(
             ))
         return [_enrich_record_properties(r) for r in candidates]
 
+    # Scaffold family definitions for capping (15% per family of target_count)
+    SCAFFOLD_FAMILIES = {
+        0: list(range(0, 3)),     # Tan 2012 oxadiazoles (scaffolds 0-2)
+        1: list(range(3, 6)),     # Troczi 2013 (scaffolds 3-5)
+        2: list(range(6, 8)),     # Simonet 2021 (scaffolds 6-7)
+        3: [8],                   # Indole/benzimidazole (scaffold 8)
+        4: [9],                   # Triazolopyridine (scaffold 9)
+        5: [10],                  # Thiazolidinone (scaffold 10)
+        6: [11],                  # Pyrazolopyrimidine (scaffold 11)
+    }
+    FAMILY_MAX = max(1, int(0.15 * target_count))
+
+    # Precompute scaffold fingerprints for family assignment
+    from rdkit import DataStructs
+    from rdkit.Chem import AllChem
+    scaffold_fps = []
+    for smi in PBP2A_SCAFFOLDS:
+        m = Chem.MolFromSmiles(smi)
+        if m:
+            scaffold_fps.append(AllChem.GetMorganFingerprintAsBitVect(m, radius=2, nBits=2048))
+        else:
+            scaffold_fps.append(None)
+
+    def _assign_family(mol):
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+        best_sim = -1
+        best_idx = 0
+        for i, s_fp in enumerate(scaffold_fps):
+            if s_fp is None:
+                continue
+            sim = DataStructs.TanimotoSimilarity(fp, s_fp)
+            if sim > best_sim:
+                best_sim = sim
+                best_idx = i
+        for fam, indices in SCAFFOLD_FAMILIES.items():
+            if best_idx in indices:
+                return fam
+        return 0
+
     # Recombine fragments to create novel analogs via BRICSBuild
     seen_smiles = set()
     records = []
+    family_counts = {f: 0 for f in SCAFFOLD_FAMILIES}
     import random as _random
     _random.seed(seed)
 
     log.info(f"  Building recombinant library via BRICS.BRICSBuild (target ≤ {target_count})…")
+    log.info(f"  Scaffold family cap: {FAMILY_MAX} per family.")
 
     # Multiple shuffled passes to maximise chemical diversity from the fragment pool.
     # BRICSBuild enumeration order is deterministic; shuffling the fragment list
@@ -568,6 +586,55 @@ def generate_candidate_library(
                 continue
             if not smi or len(smi) < 10:
                 continue
+
+            # Pharmacophore pre-filter
+            if not _passes_pharmacophore_filter(product):
+                continue
+
+            # MW 250-500
+            from rdkit.Chem import Descriptors
+            mw = Descriptors.MolWt(product)
+            if mw < 250 or mw > 500:
+                continue
+
+            # SA < 4.0
+            if _HAVE_SA_SCORER and sascorer is not None:
+                try:
+                    sa = sascorer.calculateScore(product)
+                    if sa >= 4.0:
+                        continue
+                except Exception:
+                    pass
+
+            # QED > 0.5
+            from rdkit.Chem import QED
+            try:
+                qed_val = QED.qed(product)
+                if qed_val <= 0.5:
+                    continue
+            except Exception:
+                continue
+
+            # No beta-lactam
+            from config.constants import BETA_LACTAM_SMARTS
+            lactam_pat = Chem.MolFromSmarts(BETA_LACTAM_SMARTS)
+            if lactam_pat and product.HasSubstructMatch(lactam_pat):
+                continue
+
+            # No PAINS
+            from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
+            pains_params = FilterCatalogParams()
+            pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
+            pains_cat = FilterCatalog(pains_params)
+            if pains_cat.HasMatch(product):
+                continue
+
+            # Assign to family and cap
+            fam = _assign_family(product)
+            if family_counts[fam] >= FAMILY_MAX:
+                continue
+            family_counts[fam] += 1
+
             seen_smiles.add(smi)
 
             cid = f"AA-{len(records):04d}"
@@ -588,6 +655,29 @@ def generate_candidate_library(
             log.info(f"  Pass {_pass + 1}/{max_passes}: no new compounds (combinatorial space exhausted).")
             break
         log.info(f"  Pass {_pass + 1}/{max_passes}: {len(records)} unique compounds so far; reshuffling…")
+
+    # Enforce pairwise Morgan Tanimoto ≤ 0.35 across the library
+    log.info(f"  Enforcing pairwise Tanimoto ≤ 0.35 across {len(records)} candidates…")
+    from rdkit import DataStructs
+    from rdkit.Chem import AllChem
+    tanimoto_threshold = 0.35
+    diversity_records = []
+    diversity_fps = []
+    for rec in records:
+        if rec.mol is None:
+            rec.mol = Chem.MolFromSmiles(rec.smiles)
+        if rec.mol is None:
+            continue
+        fp = AllChem.GetMorganFingerprintAsBitVect(rec.mol, radius=2, nBits=2048)
+        is_diverse = all(
+            DataStructs.TanimotoSimilarity(fp, existing_fp) <= tanimoto_threshold
+            for existing_fp in diversity_fps
+        )
+        if is_diverse:
+            diversity_records.append(rec)
+            diversity_fps.append(fp)
+    records = diversity_records
+    log.info(f"  After Tanimoto filtering: {len(records)} diverse candidates.")
 
     # Add controls explicitly (ensures at least controls are always returned)
     for name, smi in CONTROL_SMILES.items():

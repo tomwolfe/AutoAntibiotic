@@ -155,11 +155,21 @@ def main():
 
     # Consensus docking against PBP2a active site
     log.info(f"  Docking {len(records)} compounds against PBP2a active site...")
-    docked = P._consensus_dock(
-        records, receptor_pdbqts, active_center, active_box,
-        work_dir, "active", use_vina=True,
-    )
-    energies = {rec.compound_id: e for rec, e in docked}
+    best_energies = {r.compound_id: None for r in records}
+    for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):
+        if receptor_pdbqt is None:
+            continue
+        results = P._dock_compounds_parallel(
+            records, receptor_pdbqt, active_center, active_box,
+            work_dir, f"enrich_c{conf_idx}",
+        )
+        for rec, energy in results:
+            if energy is None:
+                continue
+            cur = best_energies.get(rec.compound_id)
+            if cur is None or energy < cur:
+                best_energies[rec.compound_id] = energy
+    energies = best_energies
 
     # ROC / EF with true labels (NO fallback labeling from docking energy)
     ids = [r.compound_id for r in records]

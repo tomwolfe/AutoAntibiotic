@@ -106,6 +106,7 @@ from config.constants import (
     PBP2A_CONFORMER_IDS,
     ALLOSTERIC_BOX_SIZE,
     ACTIVE_BOX_SIZE,
+    SELECTIVITY_BOX_SIZE,
     VINA_TIMEOUT_S,
     N_JOBS,
     SIMILARITY_THRESHOLD,
@@ -1089,9 +1090,9 @@ def prepare_targets(
     # ── Compute allosteric + active site centres from cleaned apo ──
     cleaned_pdb = pbp2a_clean_pdb
 
-    log.info("  Computing allosteric site centroid (TYR105, GLN199, GLU237)…")
+    log.info("  Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain heavy atoms…")
     try:
-        allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES)
+        allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES, use_ca=False)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Allosteric residues {ALLOSTERIC_RESIDUES} missing: {exc}")
         log.warning("  Residue missing – grid center set to None; supply real PDB.")
@@ -1127,9 +1128,9 @@ def prepare_targets(
         trypsin_path,
         tryp_clean_pdb,
     )
-    log.info("  Computing trypsin active site centroid (His57, Asp102, Ser195)…")
+    log.info("  Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…")
     try:
-        tryp_center = compute_residue_centroid(tryp_clean_pdb, TRYPSIN_CATALYTIC_RESIDUES)
+        tryp_center = compute_residue_centroid(tryp_clean_pdb, TRYPSIN_CATALYTIC_RESIDUES, use_ca=False)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  Trypsin catalytic residues {TRYPSIN_CATALYTIC_RESIDUES} missing: {exc}")
         log.warning("  Residue missing – grid center set to None; supply real PDB.")
@@ -1144,9 +1145,9 @@ def prepare_targets(
         ces1_path,
         ces1_clean_pdb,
     )
-    log.info("  Computing CES1 active site centroid (Ser221, His468, Glu354)…")
+    log.info("  Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…")
     try:
-        ces1_center = compute_residue_centroid(ces1_clean_pdb, CES1_CATALYTIC_RESIDUES)
+        ces1_center = compute_residue_centroid(ces1_clean_pdb, CES1_CATALYTIC_RESIDUES, use_ca=False)
     except (ValueError, Exception) as exc:
         log.warning(f"  ⚠  CES1 catalytic residues {CES1_CATALYTIC_RESIDUES} missing: {exc}")
         log.warning("  Residue missing – grid center set to None; supply real PDB.")
@@ -1245,7 +1246,7 @@ def screen_library(
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
 
-    allosteric_box = _auto_box_size(pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=18.0, site_residues=ALLOSTERIC_RESIDUES) \
+    allosteric_box = _auto_box_size(pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=22.0, site_residues=ALLOSTERIC_RESIDUES) \
         if allosteric_center is not None else ALLOSTERIC_BOX_SIZE
     active_box = _auto_box_size(pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE, min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES) \
         if active_center is not None else ACTIVE_BOX_SIZE
@@ -1818,9 +1819,9 @@ def analyze_selectivity_and_resistance(
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
     trypsin_box = _auto_box_size(
         targets["trypsin"].get("cleaned_pdb"), targets["trypsin"]["active_center"],
-        (15.0, 15.0, 15.0), min_size=15.0, max_size=15.0, padding=0.0,
+        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=0.0,
         site_residues=TRYPSIN_CATALYTIC_RESIDUES,
-    ) if targets["trypsin"].get("active_center") is not None else (15.0, 15.0, 15.0)
+    ) if targets["trypsin"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
     trypsin_results = _dock_compounds_parallel(
         top10, targets["trypsin"]["pdbqt"],
         targets["trypsin"]["active_center"], trypsin_box,
@@ -1833,9 +1834,9 @@ def analyze_selectivity_and_resistance(
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
     ces1_box = _auto_box_size(
         targets["CES1"].get("cleaned_pdb"), targets["CES1"]["active_center"],
-        (15.0, 15.0, 15.0), min_size=15.0, max_size=15.0, padding=0.0,
+        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=0.0,
         site_residues=CES1_CATALYTIC_RESIDUES,
-    ) if targets["CES1"].get("active_center") is not None else (15.0, 15.0, 15.0)
+    ) if targets["CES1"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
         targets["CES1"]["active_center"], ces1_box,
@@ -1978,7 +1979,7 @@ def screen_single_compound(
         if allosteric_center is not None:
             allosteric_box = _auto_box_size(
                 pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"),
-                allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=18.0, site_residues=ALLOSTERIC_RESIDUES,
+                allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=22.0, site_residues=ALLOSTERIC_RESIDUES,
             )
             rec.pb2pa_allosteric_energy = dock_compound(
                 rec, receptor_pdbqt, allosteric_center,
@@ -2217,6 +2218,215 @@ def _generate_and_filter_library(
     return all_records, filtered, n_total, n_filtered, funnel_counts
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ENRICHMENT VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_enrichment_check(
+    targets: Dict[str, Dict],
+    work_dir: str,
+    deps: dict,
+    config: Optional[dict] = None,
+) -> dict:
+    """
+    Phase 1b — Enrichment validation benchmark (science mode only).
+
+    Docks known actives (from data/known_actives.csv) and property-matched
+    decoys (from data/known_decoys.csv, generated by scripts/build_decoys.py)
+    against the PBP2a active site, then computes ROC-AUC and EF_1%.
+
+    This is a DIAGNOSTIC check — results are logged and written to
+    output/enrichment_results.json but do NOT gate the pipeline.
+
+    Returns:
+        dict with keys: auc, ef_1pct, ef_5pct, n_actives, n_decoys.
+    """
+    log.info("─── Phase 1b: Enrichment Validation ───")
+    if config is None:
+        config = {}
+    mode = config.get("mode", "ci")
+
+    if mode != "science" or not deps.get("USE_VINA"):
+        log.info("  Skipping enrichment validation (not science mode or Vina unavailable).")
+        return {"auc": None, "ef_1pct": None, "ef_5pct": None,
+                "n_actives": 0, "n_decoys": 0, "skipped": True}
+
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    actives_path = os.path.join(DATA_DIR, "known_actives.csv")
+    decoys_path = os.path.join(DATA_DIR, "known_decoys.csv")
+
+    # Load known actives
+    import csv
+    records = []
+    labels = []
+    if os.path.exists(actives_path):
+        with open(actives_path, newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                smi = row.get("smiles", "").strip()
+                cid = row.get("compound_id", "").strip()
+                if smi:
+                    records.append(CompoundRecord(compound_id=cid, smiles=smi))
+                    labels.append(1)
+        log.info(f"  Loaded {sum(labels)} known actives")
+    else:
+        log.warning(f"  Known-actives CSV not found: {actives_path}")
+        return {"auc": None, "ef_1pct": None, "ef_5pct": None,
+                "n_actives": 0, "n_decoys": 0, "error": "no_actives"}
+
+    # Load or generate decoys
+    if not os.path.exists(decoys_path):
+        log.info("  Decoys file not found; generating decoys via build_decoys...")
+        try:
+            subprocess.run(
+                [sys.executable, os.path.join(DATA_DIR, "..", "scripts", "build_decoys.py")],
+                capture_output=True, timeout=300,
+            )
+        except Exception as exc:
+            log.warning(f"  Could not generate decoys: {exc}")
+    if os.path.exists(decoys_path):
+        with open(decoys_path, newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                smi = row.get("smiles", "").strip()
+                cid = row.get("compound_id", "").strip()
+                if smi:
+                    records.append(CompoundRecord(compound_id=cid, smiles=smi))
+                    labels.append(0)
+        log.info(f"  Loaded {labels.count(0)} decoys")
+    else:
+        log.warning("  No decoys available for enrichment check.")
+
+    if len(records) < 10 or sum(labels) < 3:
+        log.warning("  Too few actives/decoys for meaningful enrichment analysis.")
+        return {"auc": None, "ef_1pct": None, "ef_5pct": None,
+                "n_actives": sum(labels), "n_decoys": labels.count(0),
+                "error": "too_few"}
+
+    # Remove compounds with Boron (Vina cannot handle atom type B)
+    boron_ids = set()
+    for r in records:
+        mol = Chem.MolFromSmiles(r.smiles)
+        if mol and any(atom.GetAtomicNum() == 5 for atom in mol.GetAtoms()):
+            boron_ids.add(r.compound_id)
+    if boron_ids:
+        filtered = [(r, l) for r, l in zip(records, labels) if r.compound_id not in boron_ids]
+        records = [r for r, _ in filtered]
+        labels = [l for _, l in filtered]
+        log.info(f"  Filtered {len(boron_ids)} Boron-containing compounds (Vina incompatible): {boron_ids}")
+
+    # Dock against PBP2a allosteric site (most known actives target the allosteric pocket)
+    pb2pa = targets.get("PBP2a", {})
+    allosteric_center = pb2pa.get("allosteric_center")
+    receptor_pdbqts = pb2pa.get("receptor_pdbqts") or [pb2pa.get("pdbqt")]
+    cleaned_pdb = pb2pa.get("cleaned_pdb")
+
+    if allosteric_center is None or not receptor_pdbqts:
+        log.warning("  Cannot dock for enrichment: missing allosteric center or receptor.")
+        return {"auc": None, "ef_1pct": None, "ef_5pct": None,
+                "n_actives": sum(labels), "n_decoys": labels.count(0),
+                "error": "no_target"}
+
+    allosteric_box = _auto_box_size(
+        cleaned_pdb, allosteric_center, ALLOSTERIC_BOX_SIZE,
+        min_size=15.0, max_size=22.0, site_residues=ALLOSTERIC_RESIDUES,
+    )
+
+    enrich_dir = os.path.join(work_dir, "enrichment")
+    os.makedirs(enrich_dir, exist_ok=True)
+
+    log.info(f"  Docking {len(records)} enrichment compounds against PBP2a allosteric site...")
+    best_energies = {r.compound_id: None for r in records}
+    for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):
+        if receptor_pdbqt is None:
+            continue
+        results = _dock_compounds_parallel(
+            records, receptor_pdbqt, allosteric_center, allosteric_box,
+            enrich_dir, f"enrich_c{conf_idx}",
+        )
+        for rec, energy in results:
+            if energy is None:
+                continue
+            cur = best_energies.get(rec.compound_id)
+            if cur is None or energy < cur:
+                best_energies[rec.compound_id] = energy
+
+    # Compute ROC-AUC and EF
+    scores = [- (best_energies[r.compound_id] if best_energies[r.compound_id] is not None else 1e9)
+              for r in records]
+    order = np.argsort(-np.asarray(scores, dtype=float))
+    sorted_labels = np.asarray(labels, dtype=int)[order]
+    n_pos = int(sorted_labels.sum())
+    n_neg = len(sorted_labels) - n_pos
+
+    if n_pos == 0 or n_neg == 0:
+        log.warning("  Cannot compute ROC: only one class present.")
+        return {"auc": None, "ef_1pct": None, "ef_5pct": None,
+                "n_actives": n_pos, "n_decoys": n_neg}
+
+    # AUC
+    tpr_list = [0.0]
+    fpr_list = [0.0]
+    tp = fp = 0
+    prev_fpr = prev_tpr = 0.0
+    auc = 0.0
+    for lab in sorted_labels:
+        if lab == 1:
+            tp += 1
+        else:
+            fp += 1
+        cur_tpr = tp / n_pos
+        cur_fpr = fp / n_neg
+        auc += (cur_fpr - prev_fpr) * (cur_tpr + prev_tpr) / 2.0
+        tpr_list.append(cur_tpr)
+        fpr_list.append(cur_fpr)
+        prev_fpr, prev_tpr = cur_fpr, cur_tpr
+    auc += (1.0 - prev_fpr) * (1.0 + prev_tpr) / 2.0
+
+    # EF_1% and EF_5%
+    N = len(records)
+    k1 = max(1, round(0.01 * N))
+    k5 = max(1, round(0.05 * N))
+    id_to_label = {r.compound_id: labels[i] for i, r in enumerate(records)}
+    ranked_ids = sorted(
+        [r.compound_id for r in records],
+        key=lambda c: (best_energies[c] if best_energies[c] is not None else 1e9)
+    )
+    act_in_1 = sum(1 for c in ranked_ids[:k1] if id_to_label.get(c, 0) == 1)
+    act_in_5 = sum(1 for c in ranked_ids[:k5] if id_to_label.get(c, 0) == 1)
+    ef1 = (act_in_1 / n_pos) / (k1 / N) if n_pos else 0.0
+    ef5 = (act_in_5 / n_pos) / (k5 / N) if n_pos else 0.0
+
+    result = {
+        "n_compounds": N,
+        "n_actives": n_pos,
+        "n_decoys": n_neg,
+        "auc": round(float(auc), 4),
+        "ef_1pct": round(float(ef1), 3),
+        "ef_5pct": round(float(ef5), 3),
+        "label_source": "known_actives.csv / known_decoys.csv",
+    }
+    enrich_path = OUTPUT_DIR / "enrichment_results.json"
+    try:
+        with open(enrich_path, "w") as fh:
+            json.dump(result, fh, indent=2)
+        log.info(f"  Enrichment results saved: {enrich_path}")
+    except Exception as exc:
+        log.warning(f"  Could not write enrichment_results.json: {exc}")
+
+    if auc < 0.70:
+        log.warning(f"  ⚠  Enrichment AUC = {auc:.3f} < 0.70 — docking may have weak discriminative power.")
+    else:
+        log.info(f"  ✓  Enrichment AUC = {auc:.3f} (≥ 0.70).")
+
+    if ef1 < 3.0:
+        log.warning(f"  ⚠  Enrichment EF_1% = {ef1:.2f} < 3.0 — early enrichment is weak.")
+    else:
+        log.info(f"  ✓  Enrichment EF_1% = {ef1:.2f} (≥ 3.0).")
+
+    return result
+
+
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
           config: Optional[dict] = None, smiles: Optional[str] = None):
     """Orchestrate the full discovery pipeline end-to-end.
@@ -2339,6 +2549,13 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
                 redock_core_rmsd_for_report = _vdata.get("redock_rmsd", None)
     except Exception as exc:
         log.warning(f"  Could not read core RMSD for report: {exc}")
+
+    # ── Phase 1b: Enrichment validation (science mode, diagnostic) ──
+    enrichment_result = {}
+    try:
+        enrichment_result = run_enrichment_check(targets, work_dir, deps, config=config)
+    except Exception as exc:
+        log.warning(f"  ⚠  Enrichment check failed: {exc}")
 
     # ── Phase 2: Library generation & filtering ──
     # Read pre-made molecules directly from an SDF file (RDKit) when provided,
@@ -2468,6 +2685,20 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         log.info(f"  Filter funnel saved: {funnel_path}")
     except Exception as exc:
         log.warning(f"  Could not write filter_funnel.json: {exc}")
+
+    # ── Phase 5.4: Figures ──
+    try:
+        from utils.reporting import generate_figures
+        pb2pa = targets.get("PBP2a", {})
+        generate_figures(
+            top10,
+            output_dir=OUTPUT_DIR,
+            receptor_pdb=pb2pa.get("cleaned_pdb"),
+            enrichment_results=enrichment_result if enrichment_result else None,
+            funnel_counts=funnel_counts,
+        )
+    except Exception as exc:
+        log.warning(f"  Could not generate figures: {exc}")
 
     print_summary(
         n_total, n_filtered, top10,

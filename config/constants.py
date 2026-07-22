@@ -206,8 +206,9 @@ TRYPSIN_CATALYTIC_RESIDUES = _loaded_target_residues["TRYPSIN_CATALYTIC_RESIDUES
 CES1_CATALYTIC_RESIDUES = _loaded_target_residues["CES1_CATALYTIC_RESIDUES"]
 
 # Grid box defaults (Angstroms)
-ALLOSTERIC_BOX_SIZE = (15.0, 15.0, 15.0)
+ALLOSTERIC_BOX_SIZE = (20.0, 20.0, 20.0)
 ACTIVE_BOX_SIZE = (20.0, 20.0, 20.0)
+SELECTIVITY_BOX_SIZE = (18.0, 18.0, 18.0)
 
 # Docking
 # Default Vina per-dock timeout. Kept generous so large/flexible ligands (e.g.

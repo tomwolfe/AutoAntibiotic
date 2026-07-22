@@ -293,10 +293,16 @@ def _compute_core_rmsd(
         return None
 
 
-def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray:
+def compute_residue_centroid(pdb_path: str, resid_list: List[str],
+                              use_ca: bool = True) -> np.ndarray:
     """
-    Compute the geometric centroid of Cα atoms for the given list of
-    residue identifiers (format: 'ALA237').
+    Compute the geometric centroid of specified atoms for the given list of
+    residue identifiers (format: 'TYR105').
+
+    When ``use_ca=True`` (default), the centroid is based on Cα atoms only
+    (backwards-compatible behaviour). When ``use_ca=False``, ALL heavy atoms
+    of each residue are used — this is appropriate for side-chain-defined
+    binding pockets (allosteric site, catalytic triads).
 
     For homodimers like PBP2a (chains A/B) only the FIRST chain that
     contains any matching residue is used — averaging across chains
@@ -304,7 +310,8 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
 
     Args:
         pdb_path: Path to PDB structure.
-        resid_list: e.g. ["ALA237", "MET241", "TYR159"].
+        resid_list: e.g. ["TYR105", "GLN199", "GLU237"].
+        use_ca: If True, use Cα atoms only; if False, use all heavy atoms.
 
     Returns:
         (x, y, z) centroid as numpy array of shape (3,).
@@ -316,17 +323,15 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
     target = set()
     is_hetero_target = False
     for entry in resid_list:
-        # Standard residue format: exactly 3 alpha chars + digits (e.g. "SER403")
         m = re.match(r"^([A-Za-z]{3})(\d+)$", entry)
         if m:
             is_hetero_target = False
             target.add((m.group(1).upper(), int(m.group(2))))
         else:
-            # Non-standard residue / ligand (e.g. "AI8"): match only by name
             is_hetero_target = True
             target.add((entry.strip().upper(), None))
 
-    ca_coords = []
+    atom_coords = []
     found_chain = False
     for model in struct:
         if found_chain:
@@ -336,34 +341,39 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
                 break
             for residue in chain:
                 rid = residue.get_id()
-                # Only skip hetero atoms when searching for standard residues
                 if rid[0] != " " and not is_hetero_target:
                     continue
                 resname = residue.get_resname().strip().upper()
                 if is_hetero_target:
-                    # For non-standard residues (ligands), match by name only.
-                    # Use the FIRST matching residue only.
                     if any(t[0] == resname for t in target):
                         atoms = list(residue.get_atoms())
                         if atoms:
                             coords = np.array([a.get_vector().get_array() for a in atoms])
-                            ca_coords.append(coords.mean(axis=0))
+                            atom_coords.append(coords.mean(axis=0))
                             found_chain = True
                             break
                 else:
                     key = (resname, rid[1])
                     if key in target:
-                        if "CA" in residue:
-                            ca_coords.append(residue["CA"].get_vector().get_array())
-                            found_chain = True
+                        if use_ca:
+                            if "CA" in residue:
+                                atom_coords.append(residue["CA"].get_vector().get_array())
+                                found_chain = True
+                            else:
+                                atoms = list(residue.get_atoms())
+                                if atoms:
+                                    coords = np.array([a.get_vector().get_array() for a in atoms])
+                                    atom_coords.append(coords.mean(axis=0))
+                                    found_chain = True
                         else:
-                            atoms = list(residue.get_atoms())
+                            # Use all heavy atoms (side-chain + backbone)
+                            atoms = [a for a in residue if a.element and a.element.strip().upper() != "H"]
                             if atoms:
                                 coords = np.array([a.get_vector().get_array() for a in atoms])
-                                ca_coords.append(coords.mean(axis=0))
+                                atom_coords.append(coords.mean(axis=0))
                                 found_chain = True
 
-    if not ca_coords:
+    if not atom_coords:
         log.error(
             f"  ✗  None of the requested residues {resid_list} were found "
             f"in structure. Available residues: "
@@ -371,7 +381,7 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str]) -> np.ndarray
         )
         raise ValueError(f"No matching residues found in {pdb_path}")
 
-    centroid = np.mean(ca_coords, axis=0)
+    centroid = np.mean(atom_coords, axis=0)
     return centroid
 
 
