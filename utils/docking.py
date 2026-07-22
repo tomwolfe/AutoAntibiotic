@@ -20,28 +20,11 @@ from typing import List, Tuple, Optional, Callable
 import numpy as np
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors
-try:  # RDKit exposes a fast 3D alignment used by the offline fallback.
-    from rdkit.Chem import rdShapeHelpers
-except Exception:  # pragma: no cover - very old RDKit builds
-    rdShapeHelpers = None
+from rdkit.Chem import AllChem
 
 from .ligand_prep import prepare_ligand_pdbqt
 from .library_gen import CompoundRecord
 from config.constants import VINA_TIMEOUT_S, N_JOBS, RANDOM_SEED
-
-# Pharmacophore feature weights for the lightweight RDKit fallback scorer.
-# These approximate the broad physicochemical tendencies that drive binding
-# (H-bond donors/acceptors, hydrophobic/aromatic bulk, positive charge). They
-# are *qualitative* and must NOT be read as kcal/mol.
-_PHARM_WEIGHTS = {
-    "Donor": 0.6,
-    "Acceptor": 0.6,
-    "PosIonizable": 0.5,
-    "NegIonizable": 0.4,
-    "Aromatic": 0.3,
-    "Hydrophobe": 0.2,
-}
 
 # Shared logger: same name as the one configured in discovery_pipeline.
 log = logging.getLogger("AutoAntibiotic")
@@ -136,117 +119,7 @@ def _run_vina_docking(
         return None
 
 
-def _rdkit_fallback_score(
-    mol: Chem.Mol,
-    center: np.ndarray,
-    box_size: Tuple[float, float, float],
-) -> Optional[float]:
-    """
-    Lightweight RDKit shape/pharmacophore scoring used when AutoDock Vina is
-    unavailable (e.g. offline CI runs, ``--smiles`` without Vina).
 
-    This is a *heuristic* proxy, not a real docking energy. It estimates how
-    well a ligand fits a cubic grid centred on ``center`` with half-extents
-    ``box_size / 2`` and adds a crude pharmacophore term (H-bond /
-    hydrophobic / charge features). Lower (more negative) values rank better,
-    mirroring Vina's energy ordering, but the absolute numbers are meaningless
-    and must never be reported as binding energies.
-
-    Returns ``(score, None)`` where ``score`` is a synthetic negative number,
-    or ``None`` if the molecule cannot be embedded/scored.
-
-    Because these synthetic numbers can look like binding energies, a warning
-    is always logged whenever the fallback is used so that downstream callers
-    (and anyone reading logs) are never misled into treating them as Vina
-    kcal/mol. Reports should additionally prefix any fallback score with
-    ``"(fallback)"`` — see :func:`format_fallback_score`.
-    """
-    if mol is None:
-        log.warning(
-            "  ⚠  RDKit fallback scorer used (Vina unavailable). Scores are "
-            "HEURISTIC ONLY and must NOT be read as kcal/mol binding energies."
-        )
-        return None
-    try:
-        log.warning(
-            "  ⚠  Using RDKit shape/pharmacophore FALLBACK score (Vina "
-            "unavailable). This is a heuristic proxy, NOT a kcal/mol binding "
-            "energy. Prefix any reported value with \"(fallback)\"."
-        )
-        m = Chem.AddHs(mol)
-        # Embed into a 3D conformation; if embedding fails, fall back to a
-        # single-shot 2D->3D attempt with random coords.
-        params = AllChem.ETKDGv3()
-        params.randomSeed = RANDOM_SEED
-        if AllChem.EmbedMolecule(m, params) != 0:
-            if AllChem.EmbedMolecule(m) != 0:
-                return None
-        try:
-            AllChem.MMFFOptimizeMolecule(m)
-        except Exception:
-            pass
-
-        conf = m.GetConformer()
-        coords = conf.GetPositions()
-        if coords.size == 0:
-            return None
-
-        center = np.asarray(center, dtype=float)
-        half = np.asarray(box_size, dtype=float) / 2.0
-
-        # Distance from the ligand centroid to the grid centre (closer is
-        # better). Penalise compounds whose atoms spill well outside the box.
-        centroid = coords.mean(axis=0)
-        dist_to_center = float(np.linalg.norm(centroid - center))
-
-        # Spread (max distance from ligand centroid) — large ligands that
-        # cannot fit the box are penalised.
-        spread = float(np.linalg.norm(coords - centroid, axis=1).max())
-        max_half = float(half.max())
-        overflow = max(0.0, spread - max_half)
-
-        # Pharmacophore term: a cheap element/property heuristic instead of the
-        # full feature factory, to avoid extra RDKit factory construction cost.
-        n_hbd = rdMolDescriptors.CalcNumHBD(m)
-        n_hba = rdMolDescriptors.CalcNumHBA(m)
-        n_rot = rdMolDescriptors.CalcNumRotatableBonds(m)
-        n_aro = rdMolDescriptors.CalcNumAromaticRings(m)
-        n_rings = rdMolDescriptors.CalcNumRings(m)
-        pharm = (
-            _PHARM_WEIGHTS["Donor"] * n_hbd
-            + _PHARM_WEIGHTS["Acceptor"] * n_hba
-            + _PHARM_WEIGHTS["Aromatic"] * n_aro
-            + _PHARM_WEIGHTS["Hydrophobe"] * n_rings
-            + _PHARM_WEIGHTS["PosIonizable"] * (1 if Descriptors.NumHeteroatoms(m) else 0)
-        )
-
-        # Synthetic "energy": more negative for compact, centred, feature-rich
-        # ligands. Purely relative — not a physical kcal/mol value.
-        score = -(pharm - 0.15 * (dist_to_center + overflow + 0.2 * n_rot))
-        return float(score)
-    except Exception as exc:
-        log.warning(f"  RDKit fallback scoring failed: {exc}")
-        return None
-
-
-def format_fallback_score(score: Optional[float]) -> str:
-    """
-    Format a fallback score for human-readable reports.
-
-    Returns a string prefixed with ``"(fallback)"`` (and a clear "not kcal/mol"
-    note) so that synthetic heuristic scores are never mistaken for Vina
-    binding energies. When *score* is ``None`` (scoring failed) an explicit
-    placeholder is returned.
-
-    Args:
-        score: The synthetic fallback score (negative float) or ``None``.
-
-    Returns:
-        Human-readable string such as ``"(fallback) -3.21 (not kcal/mol)"``.
-    """
-    if score is None:
-        return "(fallback) N/A (not kcal/mol)"
-    return f"(fallback) {score:.3f} (not kcal/mol)"
 
 
 def dock_compound(
@@ -256,18 +129,11 @@ def dock_compound(
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str = "",
-    use_vina: bool = True,
     flex_pdbqt: Optional[str] = None,
     timeout: Optional[int] = None,
 ) -> Optional[float]:
     """
     Full docking pipeline for a single compound: PDBQT prep → Vina → parse.
-
-    When ``use_vina`` is ``False`` (AutoDock Vina unavailable), the function
-    does NOT raise. Instead it returns an approximate score from the built-in
-    RDKit shape/pharmacophore fallback (see :func:`_rdkit_fallback_score`).
-    These fallback scores are *qualitative only* — they rank candidates
-    relative to each other but are not physical binding energies.
 
     Args:
         record: Compound record (must have .mol).
@@ -276,36 +142,18 @@ def dock_compound(
         box_size: Grid box dimensions.
         work_dir: Scratch directory.
         tag: Label for temp files (e.g. 'allosteric').
-        use_vina: When ``False``, skip Vina and use the RDKit fallback scorer.
         flex_pdbqt: Optional flexible-residue PDBQT passed to Vina's ``--flex``
-            for local flexible docking (active-site step). Ignored when Vina is
-            unavailable.
-        timeout: Optional per-call Vina timeout override (seconds). Used to give
-            flexible (``--flex``) docking jobs a larger timeout than rigid jobs
-            so they do not fall back to rigid docking on a transient timeout
-            (Phase 3.5: robust flexible docking).
+            for local flexible docking (active-site step).
+        timeout: Optional per-call Vina timeout override (seconds).
 
     Returns:
-        Best binding energy (Vina) or fallback score, or None on failure.
+        Best binding energy (Vina) or None on failure.
     """
     if record.mol is None:
         mol = Chem.MolFromSmiles(record.smiles)
         if mol is None:
             return None
         record.mol = mol
-
-    # Offline fallback path — no PDBQT prep, no Vina invocation.
-    if not use_vina:
-        log.info(
-            f"  Vina unavailable — using RDKit shape/pharmacophore fallback "
-            f"for {record.compound_id} ({tag})."
-        )
-        score = _rdkit_fallback_score(record.mol, center, box_size)
-        if tag == "active" and score is not None:
-            # No real pose file in fallback mode; clear any stale pose so pose
-            # analysis is skipped downstream rather than mis-attributed.
-            record.active_docked_pdbqt = None
-        return score
 
     # Generate unique filenames
     safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
@@ -342,7 +190,7 @@ def dock_compound(
     # and must be retained. Mutant scans use "mut_*" and are NOT retained.
     #
     # Similarly, the allosteric-site pose is retained for allosteric interaction
-    # analysis (hydrophobic contact checking to Ala237, Met241, Tyr159).
+    # analysis (hydrophobic contact checking to Tyr105, Gln199, Glu237).
     #
     # IMPORTANT: only record the pose when the dock actually SUCCEEDED (energy
     # is not None AND the output file was written). Otherwise a failed dock —
@@ -384,7 +232,6 @@ def _dock_compounds_parallel(
     tag: str,
     n_jobs: Optional[int] = None,
     dock_func: Optional[Callable] = None,
-    use_vina: bool = True,
 ) -> List[Tuple["CompoundRecord", Optional[float]]]:
     """
     Dock a list of compounds in parallel, returning ``(record, energy)`` pairs.
@@ -413,8 +260,6 @@ def _dock_compounds_parallel(
         tag: Label for temporary files (e.g. ``"allosteric"``).
         n_jobs: Number of worker processes.
         dock_func: Docking callable; mainly useful for testing.
-        use_vina: When ``False``, the default *dock_func* uses the RDKit
-            shape/pharmacophore fallback instead of invoking Vina.
 
     Returns:
         List of ``(CompoundRecord, energy_or_None)`` tuples.
@@ -438,7 +283,6 @@ def _dock_compounds_parallel(
         for i, payload in enumerate(payloads):
             rec, energy, pose = _dock_worker(
                 payload, dock_func, receptor_pdbqt, center, box_size, work_dir, tag,
-                use_vina,
             )
             parent = by_id[rec.compound_id]
             results.append((parent, energy))
@@ -455,7 +299,7 @@ def _dock_compounds_parallel(
         futures = {
             pool.submit(
                 _dock_worker, payload, dock_func,
-                receptor_pdbqt, center, box_size, work_dir, tag, use_vina,
+                receptor_pdbqt, center, box_size, work_dir, tag,
             ): payload[0]
             for payload in payloads
         }
@@ -485,7 +329,6 @@ def _dock_worker(
     box_size: Tuple[float, float, float],
     work_dir: str,
     tag: str,
-    use_vina: bool = True,
 ) -> Tuple["CompoundRecord", Optional[float]]:
     """
     Module-level docking wrapper so it can be pickled by ``ProcessPoolExecutor``.
@@ -500,7 +343,7 @@ def _dock_worker(
     rec = CompoundRecord(compound_id=compound_id, smiles=smiles)
     try:
         energy = dock_func(
-            rec, receptor_pdbqt, center, box_size, work_dir, tag, use_vina,
+            rec, receptor_pdbqt, center, box_size, work_dir, tag,
         )
         # The active-site pose (record.active_docked_pdbqt) is set inside the
         # worker process (dock_compound, tag == "active"). Because the worker

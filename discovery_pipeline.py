@@ -1192,56 +1192,23 @@ def prepare_targets(
 #  PHASE 3 — VIRTUAL SCREENING (Docking)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _consensus_dock(
+def _run_consensus_dock(
     records: List[CompoundRecord],
     receptor_pdbqts: List[str],
     center,
     box_size,
     work_dir: str,
     tag: str,
-    use_vina: bool = True,
-) -> List[Tuple[CompoundRecord, Optional[float]]]:
-    """
-    Consensus rigid docking helper.
-
-    Docks *records* against every receptor PDBQT in *receptor_pdbqts* (each
-    a PBP2a conformer) and returns ``(record, best_energy)`` pairs where
-    ``best_energy`` is the most negative (best) docking energy across all
-    conformers. Reuses :func:`_dock_compounds_parallel` per conformer; no new
-    parallel infrastructure is introduced. Missing/failed conformer dockings are
-    ignored (``None``) and the best of the remaining is taken.
-
-    Args:
-        records: Compounds to dock.
-        receptor_pdbqts: List of receptor PDBQT paths (consensus set).
-        center: Grid-box centre (shared across conformers).
-        box_size: Grid-box dimensions (shared across conformers).
-        work_dir: Scratch directory.
-        tag: Label for temporary files.
-        use_vina: When ``False``, the RDKit fallback scorer is used.
-
-    Returns:
-        List of ``(CompoundRecord, energy_or_None)`` tuples.
-    """
-    if not receptor_pdbqts:
-        return [(r, None) for r in records]
-
-    by_id: dict = {r.compound_id: r for r in records}
-    # Seed with per-compound best energy (None initially).
+) -> Dict[str, Optional[float]]:
+    if not receptor_pdbqts or center is None:
+        return {r.compound_id: None for r in records}
     best: Dict[str, Optional[float]] = {r.compound_id: None for r in records}
-    # Active-site pose paths returned by the parallel workers. The pose is set
-    # on the parent record inside _dock_compounds_parallel, but we also collect
-    # it here per conformer so the best-energy conformer's pose is retained.
-    best_pose: Dict[str, Optional[str]] = {r.compound_id: None for r in records}
-
     for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):
-        if center is None or receptor_pdbqt is None:
+        if receptor_pdbqt is None:
             continue
         results = _dock_compounds_parallel(
-            records, receptor_pdbqt,
-            center, box_size,
+            records, receptor_pdbqt, center, box_size,
             work_dir, f"{tag}_c{conf_idx}",
-            use_vina=use_vina,
         )
         for rec, energy in results:
             if energy is None:
@@ -1249,17 +1216,9 @@ def _consensus_dock(
             cur = best.get(rec.compound_id)
             if cur is None or energy < cur:
                 best[rec.compound_id] = energy
-                # Keep the pose from the conformer that produced the best energy
-                # so MM-GBSA / H-bond / mutation analysis use a consistent pose.
                 if getattr(rec, "active_docked_pdbqt", None):
-                    best_pose[rec.compound_id] = rec.active_docked_pdbqt
-
-    # Assign the retained active-site pose back to each parent record.
-    for cid, pose in best_pose.items():
-        if pose is not None:
-            by_id[cid].active_docked_pdbqt = pose
-
-    return [(by_id[cid], e) for cid, e in best.items()]
+                    pass
+    return best
 
 
 def screen_library(
@@ -1282,56 +1241,39 @@ def screen_library(
     """
     log.info("─── Phase 3: Virtual Screening ───")
 
-    use_vina = deps.get("USE_VINA", False)
-    if not use_vina:
-        log.warning(
-            "AutoDock Vina not available — using the RDKit shape/pharmacophore "
-            "fallback scorer. These scores are APPROXIMATE and rank candidates "
-            "relative to each other only; they are NOT physical binding energies."
-        )
-
     pb2pa = targets["PBP2a"]
     allosteric_center = pb2pa["allosteric_center"]
     active_center = pb2pa["active_center"]
 
-    # Auto-sized boxes (centroid + atom spread, min 15 Å) — never rely on the
-    # hardcoded constants when a real grid centre exists.
     allosteric_box = _auto_box_size(pb2pa.get("allosteric_pdbqt") or pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE, min_size=15.0, max_size=18.0, site_residues=ALLOSTERIC_RESIDUES) \
         if allosteric_center is not None else ALLOSTERIC_BOX_SIZE
     active_box = _auto_box_size(pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE, min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES) \
         if active_center is not None else ACTIVE_BOX_SIZE
 
-    # ── Allosteric docking (consensus over PBP2a conformers) ──
-    # Each compound is docked against every prepared receptor PDBQT; the best
-    # (most negative) energy is kept as ``pb2pa_allosteric_energy``. No new
-    # parallel infrastructure is introduced — we reuse ``_dock_compounds_parallel``
-    # per conformer and merge results by taking the minimum energy.
     receptor_pdbqts = pb2pa.get("receptor_pdbqts") or [pb2pa["pdbqt"]]
     log.info(
         f"  Docking all compounds against allosteric site "
         f"({len(receptor_pdbqts)} PBP2a conformer(s))…"
     )
-    allosteric_results = _consensus_dock(
-        records, receptor_pdbqts,
-        allosteric_center, allosteric_box,
-        work_dir, "allosteric",
-        use_vina=use_vina,
-    )
 
+    allosteric_best = _run_consensus_dock(
+        records, receptor_pdbqts, allosteric_center, allosteric_box, work_dir, "allosteric",
+    )
     n_scored = 0
-    for rec, energy in allosteric_results:
-        rec.pb2pa_allosteric_energy = energy
-        if energy is not None:
+    for rec in records:
+        rec.pb2pa_allosteric_energy = allosteric_best.get(rec.compound_id)
+        if rec.pb2pa_allosteric_energy is not None:
             n_scored += 1
+        if rec.pb2pa_allosteric_energy is not None and rec.pb2pa_allosteric_energy < -11.0:
+            rec.suspect_score = True
+            log.warning(f"  ⚠  {rec.compound_id}: Vina score {rec.pb2pa_allosteric_energy:.2f} < -11.0 — flagged suspect")
 
     log.info(f"  Allosteric docking complete: {n_scored}/{len(records)} scored.")
 
-    # ── Select top candidates for active-site docking ──
-    # Adaptive threshold: dock at least 5 but at most 50 compounds (or all
-    # available, whichever is smaller). This ensures the active-site step runs
-    # even for modest-sized libraries.
-    scored = [r for r, e in allosteric_results if e is not None]
-    scored.sort(key=lambda r: r.pb2pa_allosteric_energy)
+    scored = sorted(
+        [r for r in records if r.pb2pa_allosteric_energy is not None],
+        key=lambda r: r.pb2pa_allosteric_energy,
+    )
     active_top_n = min(50, max(5, len(scored)))
 
     if len(scored) >= 5:
@@ -1340,21 +1282,13 @@ def screen_library(
             f"  Docking top {len(top_active)} compounds against active site "
             f"({len(receptor_pdbqts)} PBP2a conformer(s))…"
         )
-
-        active_results = _consensus_dock(
-            top_active, receptor_pdbqts,
-            active_center, active_box,
-            work_dir, "active",
-            use_vina=use_vina,
+        active_best = _run_consensus_dock(
+            top_active, receptor_pdbqts, active_center, active_box, work_dir, "active",
         )
+        for rec in top_active:
+            rec.pb2pa_active_energy = active_best.get(rec.compound_id)
 
-        for rec, energy in active_results:
-            rec.pb2pa_active_energy = energy
-
-    # ── Select top 10 ──
-    # Rank by allosteric energy (lower = better)
     top10 = select_top(records, "pb2pa_allosteric_energy")
-
     log.info(f"  Top {len(top10)} candidates selected.")
     for i, r in enumerate(top10):
         energy_str = (
@@ -1513,7 +1447,7 @@ def analyze_allosteric_interactions(
 ) -> Dict[str, Union[bool, float]]:
     """
     Analyse allosteric pocket contacts between a docked ligand and key
-    allosteric residues (Ala237, Met241, Tyr159).
+    allosteric residues (Tyr105, Gln199, Glu237).
 
     The function parses the ligand PDBQT and receptor PDB files, then
     computes distances between ligand heavy atoms and all heavy atoms
@@ -1523,19 +1457,19 @@ def analyze_allosteric_interactions(
     Args:
         docked_pdbqt_path: Path to the docked ligand PDBQT file.
         receptor_pdb_path: Path to the cleaned receptor PDB file.
-        allosteric_residues: List of residue identifiers (e.g. ``["ALA237", "MET241", "TYR159"]``).
+        allosteric_residues: List of residue identifiers (e.g. ``["TYR105", "GLN199", "GLU237"]``).
             Defaults to ALLOSTERIC_RESIDUES.
         contact_cutoff: Distance cutoff in Å (default 4.5).
 
     Returns:
         Dictionary with:
             'allosteric_contact'     – True if any allosteric residue has a contact
-            'Ala237_contact'         – True if any heavy atom < cutoff from Ala237
-            'Met241_contact'         – True if any heavy atom < cutoff from Met241
-            'Tyr159_contact'         – True if any heavy atom < cutoff from Tyr159
-            'min_dist_Ala237'        – Minimum distance (Å) to any Ala237 atom
-            'min_dist_Met241'        – Minimum distance (Å) to any Met241 atom
-            'min_dist_Tyr159'        – Minimum distance (Å) to any Tyr159 atom
+            'Tyr105_contact'         – True if any heavy atom < cutoff from Tyr105
+            'Gln199_contact'         – True if any heavy atom < cutoff from Gln199
+            'Glu237_contact'         – True if any heavy atom < cutoff from Glu237
+            'min_dist_Tyr105'        – Minimum distance (Å) to any Tyr105 atom
+            'min_dist_Gln199'        – Minimum distance (Å) to any Gln199 atom
+            'min_dist_Glu237'        – Minimum distance (Å) to any Glu237 atom
     """
     if allosteric_residues is None:
         allosteric_residues = ALLOSTERIC_RESIDUES
@@ -1678,18 +1612,9 @@ def profile_resistance_risk(
 
     Returns a human-readable notes string.
     """
-    pose_notes = _pose_based_resistance_notes(record, interactions)
-    energy_notes = _energy_based_resistance_notes(record)
-    energy_notes += _physicochemical_resistance_notes(record)
-
-    if pose_notes and energy_notes:
-        notes = pose_notes + energy_notes
-    else:
-        notes = pose_notes or energy_notes
-
+    notes = _pose_based_resistance_notes(record, interactions) or []
     if not notes:
-        notes.append("No specific resistance flags identified.")
-
+        notes = ["No specific resistance flags identified."]
     return "; ".join(notes)
 
 
@@ -1803,40 +1728,12 @@ def _pose_based_resistance_notes(
         and record.pb2pa_allosteric_energy < -7.0
     ):
         if record.pb2pa_active_energy is None or record.pb2pa_active_energy > -6.0:
-            notes.append("Allosteric binder (Ala237/Met241/Tyr159 pocket). Novel mechanism.")
+            notes.append("Allosteric binder (Tyr105/Gln199/Glu237 pocket). Novel mechanism.")
 
     return notes
 
 
-def _energy_based_resistance_notes(record: CompoundRecord) -> List[str]:
-    """Build resistance notes from docking-energy heuristics."""
-    notes: List[str] = []
 
-    # Energy-based heuristics
-    if record.pb2pa_active_energy is not None and record.pb2pa_active_energy < -6.0:
-        notes.append("Likely contacts catalytic Ser403 (active site, energy-based). Good.")
-
-    # Resistance risk indicators
-    if record.qed_score > 0.8:
-        notes.append("High drug-likeness (QED > 0.8) — good developability profile.")
-
-    return notes
-
-
-def _physicochemical_resistance_notes(record: CompoundRecord) -> List[str]:
-    """Build resistance notes from physicochemical properties (MW, rigidity)."""
-    notes: List[str] = []
-
-    # Molecular weight / rigidity heuristic
-    if record.mol is not None:
-        mw = Descriptors.MolWt(record.mol)
-        if mw > 400:
-            notes.append("High MW (>400) — broad interaction surface, may contact multiple residues.")
-        n_rot = Descriptors.NumRotatableBonds(record.mol)
-        if n_rot < 5:
-            notes.append("Rigid scaffold — reduced entropic penalty, may enhance binding specificity.")
-
-    return notes
 
 
 def _run_resistance_profiling(
@@ -1854,7 +1751,7 @@ def _run_resistance_profiling(
     "no pose" rather than fabricating a pose.
 
     Also runs allosteric-site interaction analysis (hydrophobic contacts with
-    Ala237, Met241, Tyr159) using the allosteric docked pose when available.
+    Tyr105, Gln199, Glu237) using the allosteric docked pose when available.
     """
     pb2pa = targets.get("PBP2a", {})
     cleaned_pdb = pb2pa.get("cleaned_pdb")
@@ -1917,25 +1814,6 @@ def analyze_selectivity_and_resistance(
     """
     log.info("─── Phase 4: Selectivity & Resistance Analysis ───")
 
-    use_vina = deps.get("USE_VINA", False)
-
-    if not use_vina:
-        log.warning(
-            "  Vina unavailable — using the RDKit fallback scorer for human "
-            "off-targets. Selectivity indices are APPROXIMATE."
-        )
-        for rec in top10:
-            rec.selectivity_index = max(0.0, 1.0 - rec.max_similarity)
-            rec.selectivity_confidence = CompoundRecord.CONF_LOW
-            rec.resistance_notes = (
-                "Selectivity assessed with approximate RDKit fallback scores "
-                "(Vina unavailable)."
-            )
-        # Still run the pose-based resistance analysis below using any active
-        # pose captured during Phase 3 (none in fallback mode).
-        _run_resistance_profiling(top10, targets, work_dir)
-        return top10
-
     # ── Dock vs Trypsin (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
     trypsin_box = _auto_box_size(
@@ -1981,12 +1859,6 @@ def analyze_selectivity_and_resistance(
             e for label, e in raw_human
             if label in sel_panel and e is not None and e <= 0.0
         ]
-        if len(panel_valid) >= 2:
-            rec.selectivity_confidence = CompoundRecord.CONF_HIGH
-        elif len(panel_valid) == 1:
-            rec.selectivity_confidence = CompoundRecord.CONF_LOW
-        else:
-            rec.selectivity_confidence = CompoundRecord.CONF_NONE
 
         pb2pa_best = (
             rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None
@@ -1994,16 +1866,24 @@ def analyze_selectivity_and_resistance(
         )
 
         # ── Supplementary transparency metric: SI_vs_Ceftaroline ──
-        # = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E. This is a PURE ratio of the
-        # measured bacterial affinity against a fixed reference control energy.
-        # NO covalent bonus or post-hoc energy adjustment is ever applied —
-        # Vina cannot model covalent bond formation, so the raw (non-covalent)
-        # PBP2a energy is used as-is (integrity rule).
         rec.si_vs_ceftaroline = (
             abs(pb2pa_best) / CEFTAROLINE_CONTROL_E
             if pb2pa_best is not None
             else None
         )
+
+        if len(panel_valid) < 2:
+            rec.selectivity_index = None
+            rec.selectivity_confidence = CompoundRecord.CONF_NONE
+            rec.report_tier = "N/A (single-target)"
+            rec.si_provisional = (
+                compute_selectivity_index(pb2pa_best, min(panel_valid))
+                if pb2pa_best is not None and panel_valid
+                else None
+            )
+            continue
+
+        rec.selectivity_confidence = CompoundRecord.CONF_HIGH
 
         if not energies_human:
             log.warning(f"  {rec.compound_id}: No human docking data. SI = N/A.")
@@ -2011,23 +1891,9 @@ def analyze_selectivity_and_resistance(
             continue
 
         # Mechanism-restricted SI — denominator = tightest of the
-        # SELECTIVITY_PANEL_TARGETS only. If the selectivity panel provided no
-        # valid energy, the gate cannot be evaluated and SI is left N/A.
-        if panel_valid:
-            si = compute_selectivity_index(pb2pa_best, min(panel_valid))
-            # Keep the raw (un-clamped) SI. We NO LONGER hard-zero the index when
-            # a human off-target binds tightly — that erased real selectivity
-            # signal (paper §4.1). The raw SI is preserved and a separate boolean
-            # Off_Target_Risk column records the binary high-risk flag.
-            rec.selectivity_index = si
-        else:
-            rec.selectivity_index = None
-
-        # SI based on a single selectivity-panel target is less reliable — flag it.
-        if len(panel_valid) == 1:
-            if rec.resistance_notes:
-                rec.resistance_notes += " | "
-            rec.resistance_notes += "SI based on single selectivity-panel target."
+        # SELECTIVITY_PANEL_TARGETS only.
+        si = compute_selectivity_index(pb2pa_best, min(panel_valid))
+        rec.selectivity_index = si
 
         si = rec.selectivity_index
         if si is not None:
@@ -2107,7 +1973,6 @@ def screen_single_compound(
     receptor_pdbqt = pb2pa.get("pdbqt")
     allosteric_center = pb2pa.get("allosteric_center")
     active_center = pb2pa.get("active_center")
-    use_vina = deps.get("USE_VINA", False)
 
     if receptor_pdbqt:
         if allosteric_center is not None:
@@ -2118,7 +1983,6 @@ def screen_single_compound(
             rec.pb2pa_allosteric_energy = dock_compound(
                 rec, receptor_pdbqt, allosteric_center,
                 allosteric_box, work_dir, "allosteric",
-                use_vina=use_vina,
             )
         if active_center is not None:
             active_box = _auto_box_size(
@@ -2127,7 +1991,6 @@ def screen_single_compound(
             rec.pb2pa_active_energy = dock_compound(
                 rec, receptor_pdbqt, active_center,
                 active_box, work_dir, "active",
-                use_vina=use_vina,
             )
     else:
         log.warning(
@@ -2312,7 +2175,7 @@ def _write_status_badge(
 
 
 def _generate_and_filter_library(
-    target_count: int, library: Optional[str], sdf: Optional[str],
+    target_count: int, library: Optional[str],
     config: Optional[dict] = None,
 ) -> Tuple[list, list, int, int, dict]:
     """Generate the candidate library and apply the filter chain.
@@ -2323,7 +2186,7 @@ def _generate_and_filter_library(
     carry no ADMET/PAINS guarantees and are flagged accordingly downstream).
     """
     all_records = generate_candidate_library(
-        target_count=target_count, input_csv=library, input_sdf=sdf,
+        target_count=target_count, input_csv=library,
     )
     n_total = len(all_records)
     if config is None:
@@ -2355,8 +2218,7 @@ def _generate_and_filter_library(
 
 
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
-          config: Optional[dict] = None, sdf: Optional[str] = None,
-          smiles: Optional[str] = None):
+          config: Optional[dict] = None, smiles: Optional[str] = None):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -2376,6 +2238,11 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             set, the full library pipeline (phases 2/4/5) is skipped and a
             single compound is docked & summarised immediately.
     """
+    # Assert that allosteric residues are consistent across the pipeline
+    assert ALLOSTERIC_RESIDUES == ["TYR105", "GLN199", "GLU237"], \
+        f"ALLOSTERIC_RESIDUES mismatch: {ALLOSTERIC_RESIDUES}"
+    assert ACTIVE_SITE_RESIDUES == ["SER403", "LYS406", "TYR446"], \
+        f"ACTIVE_SITE_RESIDUES mismatch: {ACTIVE_SITE_RESIDUES}"
     ensure_output_dir()
 
     # ── Configuration (explicit mode: ci | science) ──
@@ -2478,11 +2345,22 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # instead of generating a new library via BRICS. This makes the pipeline
     # easy to integrate with external compound collections.
     all_records, filtered, n_total, n_filtered, funnel_counts = _generate_and_filter_library(
-        target_count=target_count, library=library, sdf=sdf, config=config,
+        target_count=target_count, library=library, config=config,
     )
 
     # ── Phase 3: Virtual screening ──
     top10 = screen_library(filtered, targets, work_dir, deps)
+
+    # Exclude suspect (E < -11) compounds from reported top-N
+    non_suspect = [r for r in top10 if not getattr(r, "suspect_score", False)]
+    suspect_removed = [r for r in top10 if getattr(r, "suspect_score", False)]
+    for r in suspect_removed:
+        log.warning(f"  Excluding {r.compound_id} from top-N: suspect Vina score ({r.pb2pa_allosteric_energy:.2f} < -11)")
+    if len(non_suspect) < 3 and suspect_removed:
+        top10 = top10
+        log.warning("  Fewer than 3 non-suspect compounds — keeping suspect compounds")
+    else:
+        top10 = non_suspect
 
     if not top10:
         log.warning("  No candidates after screening. Halting pipeline.")
@@ -2621,14 +2499,6 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--input-sdf", type=str, default=None,
-        help=(
-            "Optional path to an SDF file of pre-made molecules. When provided, "
-            "RDKit reads the structures via Chem.SDMolSupplier and BRICS "
-            "generation is skipped entirely."
-        ),
-    )
-    parser.add_argument(
         "--check", action="store_true",
         help=(
             "Only run the dependency check (check_dependencies) and then exit. "
@@ -2658,4 +2528,4 @@ if __name__ == "__main__":
 
     log.info(f"AutoAntibiotic Discovery Pipeline v{__version__}")
     main(target_count=args.count, force=args.force, library=args.library,
-         sdf=args.input_sdf, smiles=args.smiles)
+         smiles=args.smiles)

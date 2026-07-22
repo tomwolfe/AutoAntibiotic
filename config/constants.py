@@ -67,8 +67,8 @@ BETA_LACTAM_SMARTS = "[C;H1,D3]1[C;H0,D3](=[O;D1])[N;H1,D2][C;H1,D3]1"
 # ``config/targets.yaml`` at runtime (see :func:`_load_target_residues`).
 # The hardcoded values below are kept as defaults so that the pipeline still
 # works if ``targets.yaml`` is missing, unreadable, or pyyaml is unavailable.
-_ALLOSTERIC_RESIDUES_DEFAULT = ["ALA237", "MET241", "TYR159"]
-_ACTIVE_SITE_RESIDUES_DEFAULT = ["SER403"]
+_ALLOSTERIC_RESIDUES_DEFAULT = ["TYR105", "GLN199", "GLU237"]
+_ACTIVE_SITE_RESIDUES_DEFAULT = ["SER403", "LYS406", "TYR446"]
 _CONSERVED_RESIDUES_DEFAULT = ["SER403", "LYS406", "TYR446"]
 _TRYPSIN_CATALYTIC_RESIDUES_DEFAULT = ["HIS57", "ASP102", "SER195"]
 _CES1_CATALYTIC_RESIDUES_DEFAULT = ["SER221", "HIS468", "GLU354"]

@@ -212,12 +212,14 @@ def generate_csv_report(
                 else "N/A"
             ),
             "Human_Trypsin_Energy": (
-                f"{rec.human_trypsin_energy:.2f}" if rec.human_trypsin_energy is not None
-                else "N/A"
+                "CLASH (no pose)" if rec.human_trypsin_energy is not None and rec.human_trypsin_energy > 0.0
+                else (f"{rec.human_trypsin_energy:.2f}" if rec.human_trypsin_energy is not None
+                else "N/A")
             ),
             "Human_CES1_Energy": (
-                f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
-                else "N/A"
+                "CLASH (no pose)" if rec.human_ces1_energy is not None and rec.human_ces1_energy > 0.0
+                else (f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
+                else "N/A")
             ),
 
             "Human_OffTarget_Max_Energy": (
@@ -298,6 +300,13 @@ def generate_csv_report(
             "Passes_Selectivity_Gate": str(
                 rec.selectivity_index is not None
                 and rec.selectivity_index >= SELECTIVITY_INDEX_THRESHOLD
+            ),
+            "Score_Flag": (
+                "SUSPECT: E < -11" if getattr(rec, "suspect_score", False) else ""
+            ),
+            "SI_Provisional": (
+                f"{rec.si_provisional:.2f}" if getattr(rec, "si_provisional", None) is not None
+                else "N/A"
             ),
         })
 

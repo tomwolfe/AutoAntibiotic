@@ -28,13 +28,13 @@ from discovery_pipeline import (
     fetch_structure,
     _find_downloaded_pdb,
     _redocking_box_size,
-    _consensus_dock,
+
     analyze_selectivity_and_resistance,
     log,
 )
 from utils.filtering import apply_filters
 from utils.library_gen import generate_candidate_library, CompoundRecord
-from utils.docking import _run_vina_docking, _dock_compounds_parallel, format_fallback_score
+from utils.docking import _run_vina_docking, _dock_compounds_parallel
 from utils.ligand_prep import LigandPreparator
 from utils.reporting import generate_csv_report, generate_pymol_script, diversify_top_n, si_tier
 from rdkit.DataStructs import TanimotoSimilarity
@@ -499,22 +499,6 @@ class TestProtocolTrustThresholds:
         assert protocol_trust("science", 1.8) == "Validated (Marginal)"
         assert protocol_trust("science", 2.5).startswith("CAUTION: High RMSD")
         assert protocol_trust("ci", 0.5) == "CI Mode (Skipped)"
-
-# ── Test: RDKit fallback score labeling ──────────────────────────────────
-
-class TestFallbackScoreLabeling:
-    def test_format_fallback_score_prefixes_value(self):
-        """format_fallback_score prefixes the value with '(fallback)' and a disclaimer."""
-        s = format_fallback_score(-3.21)
-        assert s.startswith("(fallback)")
-        assert "kcal/mol" in s
-        assert "-3.21" in s
-
-    def test_format_fallback_score_handles_none(self):
-        """A None score yields a clear non-kcal/mol placeholder."""
-        s = format_fallback_score(None)
-        assert s.startswith("(fallback)")
-        assert "N/A" in s
 
 # ── Test: Error Handling ───────────────────────────────────────────────────
 
@@ -1018,7 +1002,11 @@ class TestMainRedockingGate:
                 "pdbqt": "/dev/null",
                 "allosteric_center": np.array([0.0, 0.0, 0.0]),
                 "active_center": np.array([0.0, 0.0, 0.0]),
+                "cleaned_pdb": "/dev/null",
+                "receptor_pdbqts": ["/dev/null"],
             },
+            "trypsin": {"pdbqt": "/dev/null", "active_center": np.array([0.0, 0.0, 0.0]), "cleaned_pdb": "/dev/null"},
+            "CES1": {"pdbqt": "/dev/null", "active_center": np.array([0.0, 0.0, 0.0]), "cleaned_pdb": "/dev/null"},
         }
 
         def mock_screen_library(records, targets, work_dir, deps):
@@ -1032,7 +1020,7 @@ class TestMainRedockingGate:
             return out
 
         with patch("discovery_pipeline.check_dependencies",
-                   return_value={"vina": False, "USE_VINA": False}):
+                    return_value={"vina": False, "USE_VINA": False}):
             with patch("discovery_pipeline.prepare_targets",
                         return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
@@ -1071,7 +1059,11 @@ class TestMainRedockingGate:
                 "pdbqt": "/dev/null",
                 "allosteric_center": np.array([0.0, 0.0, 0.0]),
                 "active_center": np.array([0.0, 0.0, 0.0]),
+                "cleaned_pdb": "/dev/null",
+                "receptor_pdbqts": ["/dev/null"],
             },
+            "trypsin": {"pdbqt": "/dev/null", "active_center": np.array([0.0, 0.0, 0.0]), "cleaned_pdb": "/dev/null"},
+            "CES1": {"pdbqt": "/dev/null", "active_center": np.array([0.0, 0.0, 0.0]), "cleaned_pdb": "/dev/null"},
         }
 
         def mock_screen_library(records, targets, work_dir, deps):
@@ -1085,7 +1077,7 @@ class TestMainRedockingGate:
             return out
 
         with patch("discovery_pipeline.check_dependencies",
-                   return_value={"vina": False, "USE_VINA": False}):
+                    return_value={"vina": False, "USE_VINA": False}):
             with patch("discovery_pipeline.prepare_targets",
                         return_value=mock_targets):
                 with patch("discovery_pipeline.run_redocking_validation",
@@ -1446,8 +1438,8 @@ class TestTargetResidueLoading:
         finally:
             constants.TARGETS_FILE = old
 
-        assert result["ALLOSTERIC_RESIDUES"] == ["ALA237", "MET241", "TYR159"]
-        assert result["ACTIVE_SITE_RESIDUES"] == ["SER403"]
+        assert result["ALLOSTERIC_RESIDUES"] == ["TYR105", "GLN199", "GLU237"]
+        assert result["ACTIVE_SITE_RESIDUES"] == ["SER403", "LYS406", "TYR446"]
         assert result["CONSERVED_RESIDUES"] == ["SER403", "LYS406", "TYR446"]
         assert result["TRYPSIN_CATALYTIC_RESIDUES"] == ["HIS57", "ASP102", "SER195"]
         assert result["CES1_CATALYTIC_RESIDUES"] == ["SER221", "HIS468", "GLU354"]
@@ -1463,7 +1455,7 @@ class TestTargetResidueLoading:
         )
 
         assert ALLOSTERIC_RESIDUES == ["TYR105", "GLN199", "GLU237"]
-        assert ACTIVE_SITE_RESIDUES == ["SER403"]
+        assert ACTIVE_SITE_RESIDUES == ["SER403", "LYS406", "TYR446"]
         assert CONSERVED_RESIDUES == ["SER403", "LYS406", "TYR446"]
         assert TRYPSIN_CATALYTIC_RESIDUES == ["HIS57", "ASP102", "SER195"]
         assert CES1_CATALYTIC_RESIDUES == ["SER221", "HIS468", "GLU354"]
@@ -1652,7 +1644,8 @@ class TestGeneratePyMOLScript:
 
 class TestConsensusDocking:
     def test_returns_best_energy_across_conformers(self, tmp_path):
-        """_consensus_dock keeps the most negative energy over all conformers."""
+        """_run_consensus_dock keeps the most negative energy over all conformers."""
+        from discovery_pipeline import _run_consensus_dock
         records = [
             CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
                            mol=Chem.MolFromSmiles("c1ccccc1")),
@@ -1660,38 +1653,36 @@ class TestConsensusDocking:
                            mol=Chem.MolFromSmiles("Cc1ccccc1")),
         ]
 
-        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, use_vina=True):
-            # Two conformers: conformer 0 gives -5.0, conformer 1 gives -9.0
-            # for every record. Best (most negative) must be -9.0.
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag):
             conf_idx = int(tag.rsplit("_c", 1)[-1])
             e = -5.0 if conf_idx == 0 else -9.0
             return [(r, e) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
-            results = _consensus_dock(
+            results = _run_consensus_dock(
                 records,
                 ["r0.pdbqt", "r1.pdbqt"],
                 np.zeros(3), (20.0, 20.0, 20.0),
-                str(tmp_path), "allosteric", use_vina=True,
+                str(tmp_path), "allosteric",
             )
-        by_id = {r.compound_id: e for r, e in results}
-        assert by_id["AA-0001"] == -9.0, "Expected best of -5.0/-9.0 = -9.0"
-        assert by_id["AA-0002"] == -9.0
+        assert results["AA-0001"] == -9.0, "Expected best of -5.0/-9.0 = -9.0"
+        assert results["AA-0002"] == -9.0
 
     def test_single_conformer_fallback(self, tmp_path):
-        """With one receptor, _consensus_dock returns that single energy."""
+        """With one receptor, _run_consensus_dock returns that single energy."""
+        from discovery_pipeline import _run_consensus_dock
         records = [CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
                                  mol=Chem.MolFromSmiles("c1ccccc1"))]
 
-        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, use_vina=True):
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag):
             return [(r, -6.0) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
-            results = _consensus_dock(
+            results = _run_consensus_dock(
                 records, ["r0.pdbqt"], np.zeros(3),
-                (20.0, 20.0, 20.0), str(tmp_path), "active", use_vina=True,
+                (20.0, 20.0, 20.0), str(tmp_path), "active",
             )
-        assert results[0][1] == -6.0
+        assert results["AA-0001"] == -6.0
 
 # ── Test: Task 1 — Active-site pose propagated across workers ───────
 
@@ -1708,7 +1699,7 @@ class TestActivePosePropagation:
         result = _dock_worker(
             ("AA-0001", "c1ccccc1"),
             fake_dock, "r.pdbqt", np.zeros(3),
-            (20.0, 20.0, 20.0), str(tmp_path), "active", True,
+            (20.0, 20.0, 20.0), str(tmp_path), "active",
         )
         assert len(result) == 3, "worker must return a 3-tuple"
         rec, energy, pose = result
@@ -1767,7 +1758,7 @@ class TestActivePosePropagation:
              patch("utils.docking._run_vina_docking", side_effect=fake_vina):
             energy = dock_compound(
                 rec, "r.pdbqt", np.zeros(3), (20.0, 20.0, 20.0),
-                str(tmp_path), tag, use_vina=True,
+                str(tmp_path), tag,
             )
         assert energy == -7.5
         if should_keep:
@@ -1800,7 +1791,7 @@ class TestActivePosePropagation:
         with patch("utils.docking.prepare_ligand_pdbqt", return_value=True), \
              patch("utils.docking._run_vina_docking", side_effect=good_vina):
             dock_compound(rec, "r.pdbqt", np.zeros(3), (20.0, 20.0, 20.0),
-                          str(tmp_path), "active_c0", use_vina=True)
+                          str(tmp_path), "active_c0")
         good_pose = rec.active_docked_pdbqt
         assert good_pose is not None and os.path.exists(good_pose)
 
@@ -1811,7 +1802,7 @@ class TestActivePosePropagation:
         with patch("utils.docking.prepare_ligand_pdbqt", return_value=True), \
              patch("utils.docking._run_vina_docking", side_effect=failed_vina):
             dock_compound(rec, "r.pdbqt", np.zeros(3), (20.0, 20.0, 20.0),
-                          str(tmp_path), "active_flex", use_vina=True,
+                          str(tmp_path), "active_flex",
                           flex_pdbqt="flex.pdbqt")
 
         # The good rigid pose must survive; not clobbered by the failed flex dock.
@@ -1841,7 +1832,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": trypsin_e, "ces1": ces1_e}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None, use_vina=True):
+                          dock_func=None):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -1871,7 +1862,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": -4.0, "ces1": -3.0}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None, use_vina=True):
+                          dock_func=None):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -1901,7 +1892,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": -9.0, "ces1": -3.0}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None, use_vina=True):
+                          dock_func=None):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -1909,9 +1900,7 @@ class TestMechanismRestrictedSelectivity:
                 records, targets, str(tmp_path),
                 {"vina": True, "USE_VINA": True},
             )
-        # Raw SI = 9.0 / 9.0 = 1.0 — must NOT be zeroed.
         assert out[0].selectivity_index == pytest.approx(1.0)
-        # High-risk flag lives in the separate boolean column now.
         assert out[0].off_target_risk is True
 
     def test_invalid_positive_human_energy_ignored(self, tmp_path):
@@ -1931,7 +1920,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": 5.0, "ces1": -3.0}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None, use_vina=True):
+                          dock_func=None):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -1939,11 +1928,11 @@ class TestMechanismRestrictedSelectivity:
                 records, targets, str(tmp_path),
                 {"vina": True, "USE_VINA": True},
             )
-        # The +5.0 trypsin value is ignored; only CES1 (-3.0) counts.
-        # SI = 9.0 / 3.0 = 3.0 (not 9.0/5.0 nor zeroed).
-        assert out[0].selectivity_index == pytest.approx(3.0)
-        # A clash (>0) is not a real binder, so no off-target risk.
+        # Only 1 valid panel energy -> SI = None (requires 2+)
+        assert out[0].selectivity_index is None
         assert out[0].off_target_risk is False
+        # si_provisional shows the single-target ratio
+        assert out[0].si_provisional == pytest.approx(9.0 / 3.0)
 
     def test_si_vs_ceftaroline_transparency(self, tmp_path):
         """SI_vs_Ceftaroline = |E_PBP2a_best| / CEFTAROLINE_CONTROL_E (7.3),
