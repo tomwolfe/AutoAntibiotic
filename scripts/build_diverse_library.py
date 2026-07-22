@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)-8s | %(message)s")
 log = logging.getLogger("build_diverse_library")
 
 BETA_LACTAM_PATTERN = Chem.MolFromSmarts(BETA_LACTAM_SMARTS)
-OUTPUT_CSV = os.path.join("data", "diverse_pbp2a_library.csv")
+OUTPUT_CSV = os.path.join("data", "screen_library_v3.csv")
 
 
 def _valid_mol(smi):
@@ -59,26 +59,34 @@ def main():
         records.append((canon, cid))
         return True
 
-    # 1. novel_seed.csv
-    for _, row in pd.read_csv("novel_seed.csv").iterrows():
-        smi = str(row["smiles"]).strip()
-        cid = str(row["compound_id"]).strip()
-        if smi and smi.lower() not in ("nan", "none"):
-            try_add(smi, cid)
-    log.info(f"novel_seed: {len(records)}")
+    # 1. novel_seed.csv (if it exists)
+    novel_path = "novel_seed.csv"
+    if os.path.exists(novel_path):
+        for _, row in pd.read_csv(novel_path).iterrows():
+            smi = str(row["smiles"]).strip()
+            cid = str(row["compound_id"]).strip()
+            if smi and smi.lower() not in ("nan", "none"):
+                try_add(smi, cid)
+        log.info(f"novel_seed: {len(records)}")
+    else:
+        log.info("novel_seed.csv not found — skipping.")
 
-    # 2. expanded_seed.csv NEW* entries
-    for _, row in pd.read_csv("expanded_seed.csv").iterrows():
-        smi = str(row["smiles"]).strip()
-        cid = str(row["compound_id"]).strip()
-        if smi and cid.startswith("NEW") and smi.lower() not in ("nan", "none"):
-            try_add(smi, cid)
-    log.info(f"+ NEW entries: {len(records)}")
+    # 2. expanded_seed.csv NEW* entries (if it exists)
+    expanded_path = "expanded_seed.csv"
+    if os.path.exists(expanded_path):
+        for _, row in pd.read_csv(expanded_path).iterrows():
+            smi = str(row["smiles"]).strip()
+            cid = str(row["compound_id"]).strip()
+            if smi and cid.startswith("NEW") and smi.lower() not in ("nan", "none"):
+                try_add(smi, cid)
+        log.info(f"+ NEW entries: {len(records)}")
+    else:
+        log.info("expanded_seed.csv not found — skipping.")
 
     # 3. Generate BRICS with relaxed SA (< 5.0) for max diversity, then apply
     #    final SA < 4.5 on output. Also relax MW to 180-600 during gen.
     log.info("Generating BRICS recombinants...")
-    brics = generate_candidate_library(target_count=20000)
+    brics = generate_candidate_library(target_count=500)
     log.info(f"BRICS generated {len(brics)} raw")
     b_added = 0
     for rec in brics:

@@ -12,7 +12,6 @@ import pandas as pd
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import BRICS, rdMolDescriptors, Descriptors, AllChem, DataStructs, QED
-from rdkit.Chem.FilterCatalog import FilterCatalogParams, FilterCatalog
 
 from config.constants import RANDOM_SEED, BETA_LACTAM_SMARTS
 
@@ -137,12 +136,6 @@ def _passes_hard_filters(mol: Chem.Mol) -> bool:
 
     lactam_pat = Chem.MolFromSmarts(BETA_LACTAM_SMARTS)
     if lactam_pat and mol.HasSubstructMatch(lactam_pat):
-        return False
-
-    pains_params = FilterCatalogParams()
-    pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
-    pains_cat = FilterCatalog(pains_params)
-    if pains_cat.HasMatch(mol):
         return False
 
     for atom in mol.GetAtoms():

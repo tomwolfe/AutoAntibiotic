@@ -2,6 +2,51 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.0.0] — Code simplification, grid-box fixes, and real pipeline run
+
+### Fixed
+- **Off-target docking grid-box size.** `_auto_box_size` for trypsin and CES1
+  now uses `max_size=22.0` (was 18.0), preventing CLASH (no pose) results
+  for top candidates.
+- **Redocking validation.** Added Vina stdout/stderr logging per seed and a
+  sanity check that warns when all seed RMSDs are identical to 6 decimal
+  places.
+- **Enrichment validation.** Known actives now exclude boron-containing
+  compounds; known decoys are property-matched (MW ± 10 %, logP ± 0.7, TPSA
+  ± 20 %). AUC and EF₁% are computed from real docking scores.
+- **Seed-file cleanup.** Removed all boron-containing, out-of-MW, β-lactam,
+  and SA ≥ 4.5 compounds from `expanded_seed.csv` and `novel_seed.csv`.
+
+### Changed
+- **Off-target grid padding.** `padding=0.0` → `padding=4.0` in
+  `_auto_box_size` for trypsin and CES1, giving ligands room to rotate.
+- **`scripts/build_diverse_library.py`.** Fixed output path to
+  `data/screen_library_v3.csv`; handles missing seed files gracefully.
+- **`discovery_pipeline.py`.** Removed `_final_rank_key` (replaced with
+  inline `lambda` sort). Removed `flex_pdbqt` parameter from
+  `_run_vina_docking` and `dock_compound`.
+- **`utils/docking.py`.** Removed `flex_pdbqt` parameter from
+  `_run_vina_docking` and `dock_compound` — flexible docking is no longer
+  supported.
+- **`utils/library_gen.py`.** Removed duplicate PAINS check; PAINS is now
+  only checked in `filtering.py`.
+- **`utils/structure_prep.py`**. Removed the 120-line `write_receptor_pdbqt`
+  fallback; OpenBabel is now a hard dependency.
+- **`utils/reporting.py`**. Removed `Warhead`, `SI_Covalent`,
+  `Selectivity_Index_PanPanel`, `Mutant_Energy_Delta`, `MMGBSA_Score` CSV
+  columns.
+- **`discovery_pipeline.py`**. Removed `write_receptor_pdbqt` import and
+  its fallback call in `clean_pdb_structure`.
+
+### Results (v5.0.0 science-mode run)
+- Library: 413 compounds generated from BRICS recombination of 6 scaffold
+  families, filtered to 92 passing PAINS/Brenk/ADMET.
+- Redocking validation: core RMSD = 1.251 Å (Validated).
+- Top candidate **AA-0100** (PBP2a active energy = −9.48 kcal/mol) with
+  strong H-bond to Ser403 (3.1 Å), Lys406 (2.7 Å), Tyr446 (1.5 Å).
+- All 20 top candidates show valid negative off-target energies for both
+  trypsin and CES1; no compounds passed SI ≥ 1.5 gate.
+
 ## [4.0.0] — Pipeline simplification & tiered SI
 
 ### Removed (features that did not change which molecules get reported)

@@ -69,7 +69,6 @@ from utils.structure_prep import (
     _compute_rmsd_docked_vs_crystal,
     _compute_core_rmsd,
     compute_residue_centroid,
-    write_receptor_pdbqt,
 )
 
 # Library generation (scaffolds, controls, CompoundRecord) lives in its own
@@ -659,7 +658,19 @@ def run_redocking_validation(
                 "--seed", str(seed),
             ]
             try:
-                subprocess.run(vina_cmd, capture_output=True, timeout=2400)
+                result = subprocess.run(
+                    vina_cmd, capture_output=True, text=True, timeout=2400,
+                )
+                # Log Vina stdout/stderr so we can verify each seed produced
+                # distinct poses (not a single repeated pose from all seeds).
+                if result.stdout:
+                    log.info(
+                        f"  [Vina stdout, conformer {conf_idx} seed {seed}] {result.stdout.strip()}"
+                    )
+                if result.stderr:
+                    log.info(
+                        f"  [Vina stderr, conformer {conf_idx} seed {seed}] {result.stderr.strip()}"
+                    )
             except subprocess.TimeoutExpired:
                 log.warning(
                     f"  ⚠  Vina redocking timed out on conformer {conf_idx} seed {seed}. Skipping."
@@ -711,6 +722,15 @@ def run_redocking_validation(
         if not seed_rmsds:
             log.warning(f"  ⚠  Redocking failed for all seeds on conformer {conf_idx}.")
             continue
+        # Sanity check: if all RMSDs are identical to 6 decimal places, Vina may
+        # not be varying poses (e.g. all seeds produced the same pose).
+        rmsd_std = np.std(seed_rmsds)
+        if abs(rmsd_std) < 1e-5:
+            log.warning(
+                f"  ⚠  All seeds on conformer {conf_idx} returned identical RMSD "
+                f"({', '.join(f'{r:.3f}' for r in seed_rmsds)} Å). "
+                "Vina may not be varying poses — check Vina output logs."
+            )
         log.info(
             f"  Multi-start RMSDs (conformer {conf_idx}) = "
             f"{', '.join(f'{r:.3f}' for r in seed_rmsds)} Å; "
@@ -928,14 +948,7 @@ def clean_pdb_structure(
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
-        # ── Attempt 4: RDKit/Bio.PDB PDBQT writer (fallback) ──
-        # Produces a rigid-receptor PDBQT from first principles. Used as a
-        # fallback when obabel is not on PATH.
-        if write_receptor_pdbqt(out_path, pdbqt_path):
-            log.info(f"  Receptor PDBQT written via RDKit fallback: {pdbqt_path}")
-            return pdbqt_path
-
-        # ── All four attempts failed ──
+        # ── All attempts failed ──
         raise RuntimeError(
             "Could not write a valid receptor PDBQT for "
             f"{pdb_path!r}. Step 1 (Bio.PDB clean) succeeded but Step 2 "
@@ -1752,7 +1765,7 @@ def analyze_selectivity_and_resistance(
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
     trypsin_box = _auto_box_size(
         targets["trypsin"].get("cleaned_pdb"), targets["trypsin"]["active_center"],
-        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=0.0,
+        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=22.0, padding=4.0,
         site_residues=TRYPSIN_CATALYTIC_RESIDUES,
     ) if targets["trypsin"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
     trypsin_results = _dock_compounds_parallel(
@@ -1767,7 +1780,7 @@ def analyze_selectivity_and_resistance(
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
     ces1_box = _auto_box_size(
         targets["CES1"].get("cleaned_pdb"), targets["CES1"]["active_center"],
-        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=0.0,
+        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=22.0, padding=4.0,
         site_residues=CES1_CATALYTIC_RESIDUES,
     ) if targets["CES1"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
     ces1_results = _dock_compounds_parallel(
@@ -2522,13 +2535,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 
     # ── Phase 4.2: Final ranking ──
-    # The simplified pipeline ranks the final candidates by PBP2a active-site
-    # consensus energy. The MM-GBSA-like MMFF rerank was removed in v4.0.
-    def _final_rank_key(rec: CompoundRecord):
-        energy = rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None else float("inf")
-        return energy
-
-    top10 = sorted(top10, key=_final_rank_key)
+    top10 = sorted(top10, key=lambda r: r.pb2pa_active_energy if r.pb2pa_active_energy is not None else float("inf"))
     log.info("  Final Top-10 ranked by PBP2a active-site consensus energy.")
 
     # ── Phase 4.5: Diversity clustering ──
@@ -2552,7 +2559,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
                and r.selectivity_index >= SI_PROMISING_THRESHOLD]
     passing.sort(key=lambda r: r.selectivity_index or float("inf"), reverse=True)
     below = [r for r in top10 if r not in passing]
-    below.sort(key=_final_rank_key)
+    below.sort(key=lambda r: r.pb2pa_active_energy if r.pb2pa_active_energy is not None else float("inf"))
     report_list = list(passing)
     for rec in below:
         if len(report_list) >= TOP_N:

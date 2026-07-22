@@ -9,8 +9,6 @@ N#Cc1ccc(NC(=O)N2C(c3ccccc3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN01,5.0,
 N#Cc1ccc(NC(=O)N2C(c3ccc(F)cc3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN02,4.8,15.8,Bouley 2015 JACS
 CC1(C)SC2C(NC(=O)Cc3ccc(O)cc3)C(=O)N2C1C(=O)O,AAB_ODAN01,5.0,10.0,O'Daniel 2014 JACS
 CC1(C)SC2C(NC(=O)Cc3ccc(Cl)cc3)C(=O)N2C1C(=O)O,AAB_ODAN02,4.7,20.0,O'Daniel 2014 JACS
-OB(O)CNC(=O)c1ccccc1,AAB_BOR01,4.3,50.0,Dzhekieva 2012 Biochemistry
-OB(O)CNC(=O)c1ccccc1Cc1ccccc1,AAB_BOR02,4.0,100.0,Dzhekieva 2012 Biochemistry
 CC1=CC(=O)C2=C(O1)C(=C(C3=C2C(=C(C(=C3)CC=C(C)C)O)O)O)O,AAB_MANG01,4.48,33.43,Anwer 2024 CMB
 Cc1ccc(C(=O)Nc2ccc(-c3cc(nn3C)c4ccc(F)cc4)cc2)cc1,AAB_PYRZ01,4.5,31.6,Shalaby 2019 APS
 Cc1ccc(C(=O)Nc2ccc(-c3ncnc4cc(C)c(C)cc34)cc2)cc1,AAB_BENZ01,4.3,50.1,Shalaby 2019 APS
