@@ -1699,11 +1699,7 @@ def analyze_selectivity_and_resistance(
 
     # ── Dock vs Trypsin (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
-    trypsin_box = _auto_box_size(
-        targets["trypsin"].get("cleaned_pdb"), targets["trypsin"]["active_center"],
-        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=22.0, padding=4.0,
-        site_residues=TRYPSIN_CATALYTIC_RESIDUES,
-    ) if targets["trypsin"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
+    trypsin_box = (15.0, 15.0, 15.0)
     trypsin_results = _dock_compounds_parallel(
         top10, targets["trypsin"]["pdbqt"],
         targets["trypsin"]["active_center"], trypsin_box,
@@ -1714,11 +1710,7 @@ def analyze_selectivity_and_resistance(
 
     # ── Dock vs CES1 (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
-    ces1_box = _auto_box_size(
-        targets["CES1"].get("cleaned_pdb"), targets["CES1"]["active_center"],
-        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=22.0, padding=4.0,
-        site_residues=CES1_CATALYTIC_RESIDUES,
-    ) if targets["CES1"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
+    ces1_box = (16.0, 16.0, 16.0)
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
         targets["CES1"]["active_center"], ces1_box,
@@ -1770,9 +1762,9 @@ def analyze_selectivity_and_resistance(
             rec.selectivity_index = None
             continue
 
-        # Mechanism-restricted SI — denominator = tightest of the
+        # Mechanism-restricted SI — denominator = mean of the
         # SELECTIVITY_PANEL_TARGETS only.
-        si = compute_selectivity_index(pb2pa_best, min(panel_valid))
+        si = compute_selectivity_index(pb2pa_best, np.mean(panel_valid))
         rec.selectivity_index = si
 
         si = rec.selectivity_index

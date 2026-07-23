@@ -170,7 +170,7 @@ def dock_compound(
         timeout=timeout,
     )
 
-    is_active_pose = tag == "active" or tag.startswith("active_") or tag == "allosteric" or tag.startswith("allosteric_")
+    is_active_pose = tag == "active" or tag.startswith("active_")
     dock_succeeded = (
         energy is not None
         and os.path.exists(out_pdbqt)

@@ -385,24 +385,3 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str],
     return centroid
 
 
-# Vina atom types are single/short tokens; we map the PDB element column to a
-# valid Vina atom type so the receptor PDBQT we write is actually consumable.
-_RECEPTOR_PDBQT_ATOM_TYPE = {
-    "C": "C",
-    "N": "N",
-    "O": "O",
-    "S": "S",
-    "P": "P",
-    "F": "F",
-    "CL": "Cl",
-    "BR": "Br",
-    "I": "I",
-    "H": "H",
-    "NA": "Na",
-    "MG": "Mg",
-    "ZN": "Zn",
-    "FE": "Fe",
-    "CA": "Ca",
-    "MN": "Mn",
-}
-
