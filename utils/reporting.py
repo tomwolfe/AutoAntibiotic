@@ -726,7 +726,7 @@ def generate_figures(
             ys = []
             colors = []
             for r in top10:
-                active_e = r.pb2pa_active_energy if r.pb2pa_active_energy is not None else r.pb2pa_allosteric_energy
+                active_e = r.pb2pa_active_energy
                 si = r.selectivity_index
                 if active_e is not None and si is not None:
                     xs.append(active_e)
@@ -844,7 +844,6 @@ def _print_single_summary(rec: CompoundRecord) -> None:
     print("=" * 64)
     print(f"  {'Compound ID':<20}: {rec.compound_id}")
     print(f"  {'SMILES':<20}: {rec.smiles}")
-    print(f"  {'Allosteric Energy':<20}: {fmt(rec.pb2pa_allosteric_energy)}")
-    print(f"  {'Active Energy':<20}: {fmt(rec.pb2pa_active_energy)}")
+    print(f"  {'Active Energy (consensus)':<20}: {fmt(rec.pb2pa_active_energy)}")
     print(f"  {'Key Interactions':<20}: {key_str}")
     print("=" * 64 + "\n")
