@@ -1,6 +1,4 @@
 smiles,compound_id,pIC50,ki_uM,citation
-CN1C(=O)C(N=C1C(=O)O)SC2=C(C3N(C2=O)C(=C(CS3)C(=O)O)C(=O)N(C4=CC=C(C=C4)N5CCCC5)C6=CC=C(C=C6)N7CCCC7)C(=O)O,CTRL_Ceftaroline,9.0,0.001,Kosowska-Shick 2010 AAC
-CC12C3C(C(=O)N3C(=C1SC4CC(NC4)C(=O)O)C(=O)O)N2C(=O)C5=C(C(=C(C=N5)OC)OC)O,CTRL_Ceftobiprole,5.72,1.9,Queenan 2009 AAC
 CC(C)(C=O)c1cc(C2=NOC(=N2)c3ccc4c(c3)OCC(=O)N4)ccc1O,AAB_TAN01,6.0,1.0,Tan 2012 NCB
 CCCC(=O)Nc1ccc(-c2nc(C3=CC=C(C(=O)O)C=C3)no2)cc1,AAB_TAN02,5.7,2.0,Tan 2012 NCB
 O=C(O)c1ccc(C2=NOC(=N2)c3ccc(NC(=O)c4ccco4)cc3)cc1,AAB_TAN03,5.5,3.2,Tan 2012 NCB
@@ -12,9 +10,6 @@ CC1(C)SC2C(NC(=O)Cc3ccc(Cl)cc3)C(=O)N2C1C(=O)O,AAB_ODAN02,4.7,20.0,O'Daniel 2014
 CC1=CC(=O)C2=C(O1)C(=C(C3=C2C(=C(C(=C3)CC=C(C)C)O)O)O)O,AAB_MANG01,4.48,33.43,Anwer 2024 CMB
 Cc1ccc(C(=O)Nc2ccc(-c3cc(nn3C)c4ccc(F)cc4)cc2)cc1,AAB_PYRZ01,4.5,31.6,Shalaby 2019 APS
 Cc1ccc(C(=O)Nc2ccc(-c3ncnc4cc(C)c(C)cc34)cc2)cc1,AAB_BENZ01,4.3,50.1,Shalaby 2019 APS
-CC1OC(Oc2cc(-c3cc(=O)c4c(O)c(OC5OC(C)C(O)C(O)C5O)c(C(=O)O)cc4o3)ccc2O)C(O)C(O)C1O,AAB_RUTIN01,4.0,100.0,Molecules 2020
 CC1C(C(C(O1)Oc2ccc3c(c2)C(=O)C=C(O3)c4ccc(O)c(OC)c4)O)O,AAB_DIOSM01,4.0,100.0,Molecules 2020
 O=C(O)C(CN1CCCC1)C1C2CC3CC1CC(C2)C3,AAB_AA_ADA,4.3,50.0,Adamantane scaffold
 O=C(O)C(CCN1CCCC1)C12CC(CC1)(CC2),AAB_AA_SPIRO,4.0,100.0,Spiro scaffold
-CC1C2C(C(=O)N2C(=C1SC3CC(NC3)C(=O)O)C(=O)O)(C)O,CTRL_Meropenem,4.0,100.0,Lamba 2021
-CC12C3C(C(=O)N3C(=C1S)C(=O)O)N2C(=O)CC4=CC=CC=C4,CTRL_Imipenem,3.7,200.0,Queenan 2007

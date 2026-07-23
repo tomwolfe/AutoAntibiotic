@@ -1172,15 +1172,22 @@ def prepare_targets(
         except Exception as exc:
             log.warning(f"  ⚠  Could not prepare PBP2a conformer {cid}: {exc}")
 
-    # ── Compute active site centre from cleaned apo ──
-    cleaned_pdb = pbp2a_clean_pdb
-
-    log.info("  Computing active site centroid (conserved residues SER403, LYS406, TYR446)…")
+    # ── Compute active site centre from holo structure (3ZG0) using side-chain atoms ──
+    # The holo structure with bound ligand provides the relevant active-site geometry;
+    # using side-chain (non-CA) atoms yields a centroid closer to the actual binding
+    # pocket than the backbone-CA centroid from the apo structure.
+    holo_clean_pdb = os.path.join(work_dir, "PBP2a_holo_clean.pdb")
+    log.info("  Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…")
     try:
-        active_center = compute_residue_centroid(cleaned_pdb, CONSERVED_RESIDUES)
+        active_center = compute_residue_centroid(holo_clean_pdb, CONSERVED_RESIDUES, use_ca=False)
     except (ValueError, Exception) as exc:
-        log.warning(f"  ⚠  Conserved residues {CONSERVED_RESIDUES} missing: {exc}")
-        active_center = None
+        log.warning(f"  ⚠  Conserved residues {CONSERVED_RESIDUES} missing in holo: {exc}")
+        log.info("  Falling back to apo structure for active-site centroid.")
+        try:
+            active_center = compute_residue_centroid(pbp2a_clean_pdb, CONSERVED_RESIDUES, use_ca=False)
+        except (ValueError, Exception) as exc2:
+            log.warning(f"  ⚠  Conserved residues also missing in apo: {exc2}")
+            active_center = None
     log.info(f"    Active site center: {active_center}")
 
     if active_center is None and mode == "science":
@@ -1880,7 +1887,7 @@ def analyze_selectivity_and_resistance(
 
         # Mechanism-restricted SI — denominator = mean of the
         # SELECTIVITY_PANEL_TARGETS only.
-        si = compute_selectivity_index(pb2pa_best, min(panel_valid))
+        si = compute_selectivity_index(pb2pa_best, np.mean(panel_valid))
         rec.selectivity_index = si
 
         si = rec.selectivity_index
