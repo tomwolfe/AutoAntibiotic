@@ -211,6 +211,15 @@ def generate_csv_report(
                 f"{rec.pb2pa_active_energy:.2f}" if rec.pb2pa_active_energy is not None
                 else "N/A"
             ),
+            "PBP2a_Allosteric_Energy": (
+                f"{rec.pb2pa_allosteric_energy:.2f}" if rec.pb2pa_allosteric_energy is not None
+                else "N/A"
+            ),
+            "PBP2a_Best_Energy": (
+                f"{rec.pb2pa_best_energy:.2f}" if rec.pb2pa_best_energy is not None
+                else "N/A"
+            ),
+            "Binding_Site": rec.binding_site if rec.binding_site else "N/A",
             "Human_Trypsin_Energy": (
                 "CLASH (no pose)" if rec.human_trypsin_energy is not None and rec.human_trypsin_energy > 0.0
                 else (f"{rec.human_trypsin_energy:.2f}" if rec.human_trypsin_energy is not None

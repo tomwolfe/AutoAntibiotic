@@ -40,6 +40,9 @@ class CompoundRecord:
     mol: Optional[Chem.Mol] = None
 
     pb2pa_active_energy: Optional[float] = None
+    pb2pa_allosteric_energy: Optional[float] = None
+    pb2pa_best_energy: Optional[float] = None
+    binding_site: str = ""
     human_trypsin_energy: Optional[float] = None
     human_ces1_energy: Optional[float] = None
     selectivity_index: Optional[float] = None

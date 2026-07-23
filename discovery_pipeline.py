@@ -95,6 +95,7 @@ from config.constants import (
     PDB_IDS,
     REFERENCE_ANTIBIOTICS,
     BETA_LACTAM_SMARTS,
+    ALLOSTERIC_RESIDUES,
     ACTIVE_SITE_RESIDUES,
     CONSERVED_RESIDUES,
     TRYPSIN_CATALYTIC_RESIDUES,
@@ -102,6 +103,7 @@ from config.constants import (
     FP_RADIUS,
     FP_NBITS,
     PBP2A_CONFORMER_IDS,
+    ALLOSTERIC_BOX_SIZE,
     ACTIVE_BOX_SIZE,
     SELECTIVITY_BOX_SIZE,
     VINA_TIMEOUT_S,
@@ -1114,11 +1116,20 @@ def prepare_targets(
         log.error(msg)
         raise MissingGridCenterError(msg)
 
+    log.info("  Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…")
+    try:
+        allosteric_center = compute_residue_centroid(cleaned_pdb, ALLOSTERIC_RESIDUES, use_ca=False)
+    except (ValueError, Exception) as exc:
+        log.warning(f"  ⚠  Allosteric residues {ALLOSTERIC_RESIDUES} missing: {exc}")
+        allosteric_center = None
+    log.info(f"    Allosteric site center: {allosteric_center}")
+
     result["PBP2a"] = {
         "pdbqt": pbp2a_pdbqt,
         "receptor_pdbqts": receptor_pdbqts,
         "cleaned_pdb": pbp2a_clean_pdb,
         "active_center": active_center,
+        "allosteric_center": allosteric_center,
     }
 
     # ── Clean trypsin ──
@@ -1225,8 +1236,9 @@ def screen_library(
     """
     Phase 3 — Virtual screening.
 
-    Docks ALL filtered compounds against PBP2a active site across 3 conformers,
-    taking the consensus (best) energy. No allosteric docking.
+    Docks ALL filtered compounds against PBP2a active AND allosteric sites
+    across 3 conformers each, taking the consensus (best) energy per site.
+    The best of both sites (pb2pa_best_energy) is used for ranking.
 
     Returns top candidates with docking scores populated.
 
@@ -1236,11 +1248,17 @@ def screen_library(
 
     pb2pa = targets["PBP2a"]
     active_center = pb2pa["active_center"]
+    allosteric_center = pb2pa.get("allosteric_center")
 
     active_box = _auto_box_size(
         pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
         min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
     ) if active_center is not None else ACTIVE_BOX_SIZE
+
+    allosteric_box = _auto_box_size(
+        pb2pa.get("cleaned_pdb"), allosteric_center, ALLOSTERIC_BOX_SIZE,
+        min_size=15.0, max_size=18.0, site_residues=ALLOSTERIC_RESIDUES,
+    ) if allosteric_center is not None else ALLOSTERIC_BOX_SIZE
 
     receptor_pdbqts = pb2pa.get("receptor_pdbqts") or [pb2pa["pdbqt"]]
 
@@ -1253,25 +1271,60 @@ def screen_library(
         records, receptor_pdbqts, active_center, active_box, work_dir, "active",
     )
 
-    n_scored = 0
+    n_scored_active = 0
     for rec in records:
         rec.pb2pa_active_energy = active_best.get(rec.compound_id)
         if rec.pb2pa_active_energy is not None:
-            n_scored += 1
+            n_scored_active += 1
             if rec.pb2pa_active_energy < -11.0:
                 rec.suspect_score = True
                 log.warning(f"  ⚠  {rec.compound_id}: Vina score {rec.pb2pa_active_energy:.2f} < -11 — flagged suspect")
 
-    log.info(f"  Active-site docking complete: {n_scored}/{len(records)} scored.")
+    log.info(f"  Active-site docking complete: {n_scored_active}/{len(records)} scored.")
 
-    top_n = select_top(records, "pb2pa_active_energy")
-    log.info(f"  Top {len(top_n)} candidates by active-site energy.")
+    # ── Allosteric site docking ──
+    n_scored_alloc = 0
+    allosteric_best: Dict[str, Optional[float]] = {}
+    if allosteric_center is not None:
+        log.info(
+            f"  Docking all {len(records)} compounds against PBP2a allosteric site "
+            f"({len(receptor_pdbqts)} conformers)…"
+        )
+        allosteric_best = _run_consensus_dock(
+            records, receptor_pdbqts, allosteric_center, allosteric_box, work_dir, "allosteric",
+        )
+        for rec in records:
+            rec.pb2pa_allosteric_energy = allosteric_best.get(rec.compound_id)
+            if rec.pb2pa_allosteric_energy is not None:
+                n_scored_alloc += 1
+    else:
+        log.warning("  Allosteric center not computed — skipping allosteric-site docking.")
+
+    log.info(f"  Allosteric-site docking complete: {n_scored_alloc}/{len(records)} scored.")
+
+    # ── Best energy across both sites ──
+    for rec in records:
+        active_e = rec.pb2pa_active_energy
+        allosteric_e = rec.pb2pa_allosteric_energy
+        candidates = [(active_e, "active"), (allosteric_e, "allosteric")]
+        valid = [(e, site) for e, site in candidates if e is not None]
+        if valid:
+            best_e, best_site = min(valid, key=lambda x: x[0])
+            rec.pb2pa_best_energy = best_e
+            rec.binding_site = best_site
+        else:
+            rec.pb2pa_best_energy = None
+            rec.binding_site = ""
+
+    top_n = select_top(records, "pb2pa_allosteric_energy")
+    log.info(f"  Top {len(top_n)} candidates by allosteric energy.")
     for i, r in enumerate(top_n[:10]):
         energy_str = (
-            f"{r.pb2pa_active_energy:.2f}" if r.pb2pa_active_energy is not None
+            f"{r.pb2pa_allosteric_energy:.2f}" if r.pb2pa_allosteric_energy is not None
             else "N/A"
         )
-        log.info(f"    {i + 1}. {r.compound_id}: {energy_str} kcal/mol")
+        site_str = r.binding_site if r.binding_site else "unknown"
+        log.info(f"    {i + 1}. {r.compound_id}: {energy_str} kcal/mol (active: {r.pb2pa_active_energy:.2f})")
 
     log.info("─── Phase 3 complete ───")
     return top_n
@@ -1690,7 +1743,7 @@ def analyze_selectivity_and_resistance(
             if label in sel_panel and e is not None and e <= 0.0
         ]
 
-        pb2pa_best = rec.pb2pa_active_energy
+        pb2pa_best = rec.pb2pa_allosteric_energy if rec.pb2pa_allosteric_energy is not None else (rec.pb2pa_best_energy if rec.pb2pa_best_energy is not None else rec.pb2pa_active_energy)
 
         # ── Supplementary transparency metric: SI_vs_Ceftaroline ──
         rec.si_vs_ceftaroline = (
@@ -1841,7 +1894,7 @@ def print_summary(
     deps: dict,
 ) -> None:
     """Log a final pipeline summary."""
-    n_docked = sum(1 for r in top10 if r.pb2pa_active_energy is not None)
+    n_docked = sum(1 for r in top10 if r.pb2pa_best_energy is not None)
     n_selectivity_pass = sum(
         1 for r in top10
         if r.selectivity_index is not None and r.selectivity_index >= SELECTIVITY_INDEX_THRESHOLD
@@ -2183,8 +2236,8 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 
     # ── Phase 4.2: Final ranking ──
-    top10 = sorted(top10, key=lambda r: r.pb2pa_active_energy if r.pb2pa_active_energy is not None else float("inf"))
-    log.info("  Final Top-10 ranked by PBP2a active-site consensus energy.")
+    top10 = sorted(top10, key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else (r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf")))
+    log.info("  Final Top-10 ranked by PBP2a allosteric energy.")
 
     # ── Phase 4.5: Diversity clustering ──
     # Pick a maximally dissimilar final set (Morgan Tanimoto ≤ 0.4) to fill the
@@ -2207,7 +2260,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
                and r.selectivity_index >= SI_PROMISING_THRESHOLD]
     passing.sort(key=lambda r: r.selectivity_index or float("inf"), reverse=True)
     below = [r for r in top10 if r not in passing]
-    below.sort(key=lambda r: r.pb2pa_active_energy if r.pb2pa_active_energy is not None else float("inf"))
+    below.sort(key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else (r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf")))
     report_list = list(passing)
     for rec in below:
         if len(report_list) >= TOP_N:
