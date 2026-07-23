@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AutoAntibiotic Discovery Pipeline v4.0
+AutoAntibiotic Discovery Pipeline v5.1.0
 ========================================
 Principal Computational Chemist & AI Pipeline Architect
 Project: AutoAntibiotic Discovery — MRSA PBP2a Inhibitor Screening
@@ -136,7 +136,7 @@ try:
 
     __version__ = _pkg_version("autoantibiotic-discovery-pipeline")
 except Exception:  # pragma: no cover - local/dev fallback
-    __version__ = "4.0.0"
+    __version__ = "5.1.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -363,6 +363,78 @@ def _redocking_box_size(
             f"using default {default_box}."
         )
         return default_box
+
+
+def _parse_pdbqt_heavy_coords(pdbqt_path: str) -> List[np.ndarray]:
+    """Parse heavy-atom 3D coordinates from a PDBQT file. Skips hydrogens."""
+    coords: List[np.ndarray] = []
+    try:
+        with open(pdbqt_path) as f:
+            for line in f:
+                if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                try:
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    elem = line[76:78].strip()
+                except (ValueError, IndexError):
+                    continue
+                if elem and elem.upper() != "H":
+                    coords.append(np.array([x, y, z]))
+    except OSError:
+        pass
+    return coords
+
+
+class _CentroidCheckDock:
+    """Picklable callable that wraps dock_compound with a centroid distance check.
+
+    After docking, the best pose's heavy-atom centroid is compared against
+    *target_center*; if the distance exceeds *max_dist* the energy is rejected
+    (None returned).  This prevents off-target scores from surface-patch binding
+    artefacts in trypsin / CES1.
+    """
+
+    def __init__(self, target_center: np.ndarray, max_dist: float = 8.0):
+        self._target_center = tuple(target_center)
+        self._max_dist = max_dist
+
+    def __call__(
+        self,
+        record: CompoundRecord, receptor_pdbqt: str, center: np.ndarray,
+        box_size: Tuple[float, float, float], work_dir: str, tag: str,
+        timeout: Optional[int] = None,
+    ) -> Optional[float]:
+        energy = dock_compound(record, receptor_pdbqt, center, box_size,
+                               work_dir, tag, timeout=timeout)
+        if energy is not None:
+            safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
+            out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
+            if os.path.exists(out_pdbqt):
+                try:
+                    coords = _parse_pdbqt_heavy_coords(out_pdbqt)
+                    if coords:
+                        centroid = np.mean(coords, axis=0)
+                        dist = float(np.linalg.norm(centroid - np.asarray(self._target_center)))
+                        if dist > self._max_dist:
+                            log.warning(
+                                f"  {record.compound_id}: pose centroid {dist:.2f} Å from "
+                                f"catalytic center > {self._max_dist} Å — rejecting pose"
+                            )
+                            return None
+                except Exception:
+                    pass
+        return energy
+
+
+def _offtarget_dock_with_centroid_check(
+    target_center: np.ndarray,
+    max_dist: float = 8.0,
+) -> Callable:
+    """Return a dock_compound wrapper that rejects poses too far from the
+    catalytic-triad centroid. Used for trypsin and CES1 selectivity screening."""
+    return _CentroidCheckDock(target_center, max_dist=max_dist)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1147,7 +1219,7 @@ def prepare_targets(
         log.warning("  Residue missing – grid center set to None; supply real PDB.")
         tryp_center = None
     log.info(f"    Trypsin active site center: {tryp_center}")
-    result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center}
+    result["trypsin"] = {"pdbqt": tryp_pdbqt, "active_center": tryp_center, "cleaned_pdb": tryp_clean_pdb}
 
     # ── Clean CES1 ──
     log.info("  Cleaning Human Carboxylesterase 1 (1YAH)…")
@@ -1164,7 +1236,7 @@ def prepare_targets(
         log.warning("  Residue missing – grid center set to None; supply real PDB.")
         ces1_center = None
     log.info(f"    CES1 active site center: {ces1_center}")
-    result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center}
+    result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center, "cleaned_pdb": ces1_clean_pdb}
 
     # ── Write grid configuration files ──
     grid_dir = os.path.join(work_dir, "grid_configs")
@@ -1281,6 +1353,36 @@ def screen_library(
                 log.warning(f"  ⚠  {rec.compound_id}: Vina score {rec.pb2pa_active_energy:.2f} < -11 — flagged suspect")
 
     log.info(f"  Active-site docking complete: {n_scored_active}/{len(records)} scored.")
+
+    # ── Pharmacophore pre-filter: remove surface-binders ──
+    # After active-site docking, reject any compound whose best pose lacks
+    # a heavy atom within 4.0 Å of Ser403 OG AND within 4.5 Å of Lys406 NZ.
+    # This prevents surface-patch binders from inflating the SI numerator.
+    n_removed_ph4 = 0
+    cleaned_pdb = pb2pa.get("cleaned_pdb")
+    if cleaned_pdb and os.path.exists(cleaned_pdb):
+        for rec in records:
+            active_e = rec.pb2pa_active_energy
+            if active_e is None:
+                continue
+            pose_path = getattr(rec, "active_docked_pdbqt", None)
+            if not pose_path or not os.path.exists(pose_path):
+                continue
+            try:
+                inter = analyze_binding_interactions(pose_path, cleaned_pdb)
+                ser_ok = inter.get("min_dist_Ser403", float("inf")) < 4.0
+                lys_ok = inter.get("min_dist_Lys406", float("inf")) < 4.5
+                if (not ser_ok) and (not lys_ok):
+                    rec.pb2pa_active_energy = None
+                    n_removed_ph4 += 1
+                    log.info(
+                        f"  Pharmacophore filter removed {rec.compound_id}: "
+                        f"no Ser403 ({inter.get('min_dist_Ser403', float('inf')):.2f} Å) "
+                        f"and no Lys406 ({inter.get('min_dist_Lys406', float('inf')):.2f} Å) contact"
+                    )
+            except Exception:
+                continue
+    log.info(f"  Pharmacophore pre-filter removed {n_removed_ph4} surface-binder compounds.")
 
     # ── Allosteric site docking ──
     n_scored_alloc = 0
@@ -1699,22 +1801,36 @@ def analyze_selectivity_and_resistance(
 
     # ── Dock vs Trypsin (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Trypsin (1UTN)…")
-    trypsin_box = (15.0, 15.0, 15.0)
+    trypsin_box = _auto_box_size(
+        targets["trypsin"].get("cleaned_pdb"), targets["trypsin"].get("active_center"),
+        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=2.0,
+        site_residues=TRYPSIN_CATALYTIC_RESIDUES,
+    ) if targets["trypsin"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
+    tryp_center = targets["trypsin"].get("active_center")
+    trypsin_dock_func = _offtarget_dock_with_centroid_check(tryp_center) if tryp_center is not None else None
     trypsin_results = _dock_compounds_parallel(
         top10, targets["trypsin"]["pdbqt"],
-        targets["trypsin"]["active_center"], trypsin_box,
+        tryp_center, trypsin_box,
         work_dir, "trypsin", n_jobs=min(4, len(top10)),
+        dock_func=trypsin_dock_func,
     )
     for rec, energy in trypsin_results:
         rec.human_trypsin_energy = energy
 
     # ── Dock vs CES1 (using computed catalytic triad centre) ──
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
-    ces1_box = (16.0, 16.0, 16.0)
+    ces1_box = _auto_box_size(
+        targets["CES1"].get("cleaned_pdb"), targets["CES1"].get("active_center"),
+        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=2.0,
+        site_residues=CES1_CATALYTIC_RESIDUES,
+    ) if targets["CES1"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
+    ces1_center = targets["CES1"].get("active_center")
+    ces1_dock_func = _offtarget_dock_with_centroid_check(ces1_center) if ces1_center is not None else None
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
-        targets["CES1"]["active_center"], ces1_box,
+        ces1_center, ces1_box,
         work_dir, "ces1", n_jobs=min(4, len(top10)),
+        dock_func=ces1_dock_func,
     )
     for rec, energy in ces1_results:
         rec.human_ces1_energy = energy
@@ -1764,7 +1880,7 @@ def analyze_selectivity_and_resistance(
 
         # Mechanism-restricted SI — denominator = mean of the
         # SELECTIVITY_PANEL_TARGETS only.
-        si = compute_selectivity_index(pb2pa_best, np.mean(panel_valid))
+        si = compute_selectivity_index(pb2pa_best, min(panel_valid))
         rec.selectivity_index = si
 
         si = rec.selectivity_index
@@ -2078,8 +2194,95 @@ def _generate_and_filter_library(
     return all_records, filtered, n_total, n_filtered, funnel_counts
 
 
+def _run_enrichment_validation(
+    deps: dict, targets: dict, work_dir: str, config: Optional[dict] = None,
+) -> None:
+    """Phase 0.5 — Run enrichment validation (non-blocking).
+
+    Docks known actives and decoys against PBP2a active site, computes
+    ROC-AUC and EF_1%. Results are saved to output/enrichment_results.json.
+    This function is best-effort and never raises.
+    """
+    try:
+        import sys as _sys
+        _scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
+        if _scripts_dir not in _sys.path:
+            _sys.path.insert(0, _scripts_dir)
+        from enrichment_validation import load_benchmark, compute_roc
+        from config.constants import ACTIVE_BOX_SIZE, ACTIVE_SITE_RESIDUES
+    except ImportError:
+        log.warning("  \u26a0  enrichment_validation module not available \u2014 skipping Phase 0.5")
+        return
+
+    if not deps.get("USE_VINA"):
+        log.warning("  \u26a0  Vina unavailable \u2014 skipping enrichment validation")
+        return
+
+    log.info("--- Phase 0.5: Enrichment Validation ---")
+    pb2pa = targets.get("PBP2a", {})
+    receptor_pdbqts = pb2pa.get("receptor_pdbqts") or [pb2pa.get("pdbqt")]
+    active_center = pb2pa.get("active_center")
+    if not receptor_pdbqts or active_center is None:
+        log.warning("  \u26a0  No PBP2a receptor available \u2014 skipping enrichment")
+        return
+
+    from config.constants import ACTIVE_BOX_SIZE, ACTIVE_SITE_RESIDUES
+    active_box = _auto_box_size(
+        pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
+        min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+    ) if active_center is not None else ACTIVE_BOX_SIZE
+
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    records, labels = load_benchmark(data_dir)
+    if not records:
+        log.warning("  \u26a0  No benchmark records loaded \u2014 skipping enrichment")
+        return
+
+    best_energies: Dict[str, Optional[float]] = {r.compound_id: None for r in records}
+    for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):
+        if receptor_pdbqt is None:
+            continue
+        results = _dock_compounds_parallel(
+            records, receptor_pdbqt, active_center, active_box,
+            work_dir, f"enrich_c{conf_idx}",
+        )
+        for rec, energy in results:
+            if energy is None:
+                continue
+            cur = best_energies.get(rec.compound_id)
+            if cur is None or energy < cur:
+                best_energies[rec.compound_id] = energy
+
+    scores = [- (best_energies[r.compound_id] if best_energies[r.compound_id] is not None else 1e9) for r in records]
+    _fpr, _tpr, auc = compute_roc(labels, scores)
+
+    N = len(records)
+    n_act = sum(labels)
+    k1 = max(1, round(0.01 * N))
+    ids = [r.compound_id for r in records]
+    ranked = sorted(ids, key=lambda c: (best_energies[c] if best_energies[c] is not None else 1e9))
+    act_in_1 = sum(1 for c in ranked[:k1] if labels[ids.index(c)] == 1)
+    ef1 = (act_in_1 / n_act) / (k1 / N) if n_act else 0.0
+
+    result = {
+        "n_compounds": N,
+        "n_actives": n_act,
+        "n_decoys": N - n_act,
+        "auc": round(float(auc), 4),
+        "ef_1pct": round(float(ef1), 3),
+        "verdict": "PASS" if (auc >= 0.7 and ef1 >= 5) else "FAIL",
+        "label_source": "independent (known_actives.csv / known_decoys.csv)",
+    }
+    out_path = os.path.join(OUTPUT_DIR, "enrichment_results.json")
+    with open(out_path, "w") as fh:
+        json.dump(result, fh, indent=2)
+    log.info(f"  Enrichment results written: {out_path}")
+    log.info("--- Phase 0.5 complete ---")
+
+
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
-          config: Optional[dict] = None, smiles: Optional[str] = None):
+          config: Optional[dict] = None, smiles: Optional[str] = None,
+          refine: bool = False):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -2092,12 +2295,11 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             BRICS generation is skipped and the CSV compounds are used.
         config: Optional pre-loaded configuration dict (with a ``mode`` key).
             If None, :func:`load_config` is invoked to read ``config.yaml``.
-        sdf: Optional path to an SDF file of pre-made molecules. When set,
-            RDKit's ``Chem.SDMolSupplier`` reads the structures and BRICS
-            generation is skipped entirely.
         smiles: Optional SMILES string for single-compound screening. When
             set, the full library pipeline (phases 2/4/5) is skipped and a
             single compound is docked & summarised immediately.
+        refine: When True, enable one round of iterative BRICS library
+            refinement after Phase 3 (default: False).
     """
     assert ACTIVE_SITE_RESIDUES == ["SER403", "LYS406", "TYR446"], \
         f"ACTIVE_SITE_RESIDUES mismatch: {ACTIVE_SITE_RESIDUES}"
@@ -2183,6 +2385,29 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         validation_json=validation_json,
     )
 
+    # ── Phase 0.5: Enrichment Validation ──
+    # Non-blocking: dock known actives vs decoys, compute ROC-AUC and EF_1%.
+    # Logs a WARNING if AUC < 0.7 or EF_1% < 5, but never halts the pipeline.
+    try:
+        enrich_results_path = os.path.join(OUTPUT_DIR, "enrichment_results.json")
+        if not os.path.exists(enrich_results_path):
+            _run_enrichment_validation(deps, targets, work_dir, config)
+        if os.path.exists(enrich_results_path):
+            with open(enrich_results_path) as fh:
+                edata = json.load(fh)
+            auc = edata.get("auc", 0.0)
+            ef1 = edata.get("ef_1pct", 0.0)
+            if auc < 0.7 or ef1 < 5:
+                log.warning(
+                    f"  ⚠  Enrichment validation: AUC={auc:.3f} (need ≥0.7), "
+                    f"EF_1%={ef1:.2f} (need ≥5). Protocol may need tuning."
+                )
+            else:
+                log.info(f"  ✓  Enrichment validation: AUC={auc:.3f}, EF_1%={ef1:.2f}")
+        log.info("─── Phase 0.5 complete ───")
+    except Exception as exc:
+        log.warning(f"  ⚠  Enrichment validation skipped: {exc}")
+
     # ── Extract the core (binding-mode) RMSD for the trust badge ──
     # The headline protocol-quality metric is the core RMSD (flexible promoiety
     # excluded); read it back from validation_results.json so the CSV badge and
@@ -2223,6 +2448,96 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     if not top10:
         log.warning("  No candidates after screening. Halting pipeline.")
         return
+
+    # ── Phase 3.5: Iterative Library Refinement (one round, --refine only) ──
+    if refine and deps.get("USE_VINA"):
+        log.info("─── Phase 3.5: Iterative Library Refinement (--refine) ───")
+        try:
+            from rdkit.Chem import BRICS as _BRICS
+            from utils.library_gen import _passes_hard_filters
+            import random as _random
+            _random.seed(RANDOM_SEED)
+
+            refine_top = sorted(
+                [r for r in top10 if r.pb2pa_active_energy is not None],
+                key=lambda r: r.pb2pa_active_energy,
+            )[:20]
+            log.info(f"  Refining top {len(refine_top)} compounds by PBP2a active energy.")
+
+            frag_smiles: set = set()
+            for rec in refine_top:
+                if rec.mol is None:
+                    rec.mol = Chem.MolFromSmiles(rec.smiles)
+                if rec.mol:
+                    try:
+                        for f_smi in _BRICS.BRICSDecompose(rec.mol, minFragmentSize=4):
+                            fm = Chem.MolFromSmiles(f_smi)
+                            if fm and fm.GetNumHeavyAtoms() >= 4:
+                                frag_smiles.add(f_smi)
+                    except Exception:
+                        pass
+            log.info(f"  Generated {len(frag_smiles)} unique fragments from top-20.")
+
+            new_records: List[CompoundRecord] = []
+            seen_smiles: set = {r.smiles for r in top10}
+            frag_mols = [Chem.MolFromSmiles(s) for s in frag_smiles if Chem.MolFromSmiles(s)]
+            if len(frag_mols) >= 2:
+                builder = _BRICS.BRICSBuild(frag_mols)
+                for product in builder:
+                    try:
+                        Chem.SanitizeMol(product)
+                    except Exception:
+                        continue
+                    smi = Chem.MolToSmiles(product)
+                    if smi in seen_smiles:
+                        continue
+                    if not smi or len(smi) < 10:
+                        continue
+                    if not _passes_hard_filters(product):
+                        continue
+                    seen_smiles.add(smi)
+                    new_records.append(CompoundRecord(
+                        compound_id=f"REF-{len(new_records):04d}", smiles=smi, mol=product,
+                    ))
+                    if len(new_records) >= 200:
+                        break
+
+            log.info(f"  BRICS build produced {len(new_records)} new candidate compounds.")
+
+            if new_records:
+                from utils.filtering import apply_filters as _apply_filters
+                new_filtered = _apply_filters(new_records)
+                log.info(f"  After filtering new compounds: {len(new_filtered)}.")
+
+                if new_filtered:
+                    pb2pa = targets["PBP2a"]
+                    active_center = pb2pa["active_center"]
+                    active_box = _auto_box_size(
+                        pb2pa.get("cleaned_pdb"), active_center, ACTIVE_BOX_SIZE,
+                        min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+                    ) if active_center is not None else ACTIVE_BOX_SIZE
+                    receptor_pdbqts = pb2pa.get("receptor_pdbqts") or [pb2pa["pdbqt"]]
+
+                    refine_best = _run_consensus_dock(
+                        new_filtered, receptor_pdbqts, active_center, active_box,
+                        work_dir, "refine_active",
+                    )
+                    docked_new = []
+                    for rec in new_filtered:
+                        e = refine_best.get(rec.compound_id)
+                        if e is not None:
+                            rec.pb2pa_active_energy = e
+                            docked_new.append(rec)
+
+                    log.info(f"  Docked {len(docked_new)} new refinement compounds.")
+
+                    merged = list(top10) + docked_new
+                    merged.sort(key=lambda r: r.pb2pa_active_energy if r.pb2pa_active_energy is not None else float("inf"))
+                    top10 = merged[:TOP_N]
+                    log.info(f"  After refinement: top-{len(top10)} re-selected.")
+        except Exception as exc:
+            log.warning(f"  ⚠  Library refinement failed: {exc}")
+        log.info("─── Phase 3.5 complete ───")
 
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
@@ -2368,11 +2683,20 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--refine", action="store_true",
+        help=(
+            "Enable one round of iterative BRICS library refinement after Phase 3. "
+            "The top-20 compounds by PBP2a energy are fragmented, recombined with "
+            "the original fragment pool, and re-docked before selectivity analysis. "
+            "Off by default (CI mode)."
+        ),
+    )
+    parser.add_argument(
         "--smiles", type=str, default=None,
         help=(
             "Screen a single SMILES string instantly (e.g. "
             "'CN1C(=O)C(N=C1C(=O)O)S...'). Skips library generation and prints a "
-            "one-compound docking summary, then exits. Requires prepared targets."
+            "one-compound summary, then exits. Requires prepared targets."
         ),
     )
     parser.add_argument(
@@ -2389,4 +2713,4 @@ if __name__ == "__main__":
 
     log.info(f"AutoAntibiotic Discovery Pipeline v{__version__}")
     main(target_count=args.count, force=args.force, library=args.library,
-         smiles=args.smiles)
+         smiles=args.smiles, refine=args.refine)

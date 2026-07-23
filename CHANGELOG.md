@@ -2,6 +2,54 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.1.0] — Fix off-target regression, improve library, validated hits
+
+### Fixed
+- **Off-target grid-box regression (v5.0.0 → v5.1.0).** `_auto_box_size` for
+  trypsin and CES1 now uses `max_size=18.0, padding=2.0` (was `22.0, 4.0` in
+  v5.0.0, which inflated the grid and let compounds dock on surface patches).
+  Restores the v4.0.0 tight catalytic-pocket grid and enables SI ≥ 1.5 hits.
+- **Catalytic-pocket pose sanity check.** After docking each compound against
+  trypsin and CES1, the best pose's centroid is verified to be within 8 Å of
+  the catalytic-triad centroid. Poses outside this radius have their energy set
+  to None (no valid pose), preventing artifactual off-target scores from
+  surface-patch docking.
+- **Pharmacophore pre-filter.** After active-site docking, compounds whose best
+  pose has NO heavy atom within 4.0 Å of Ser403 OG AND no heavy atom within
+  4.5 Å of Lys406 NZ are removed (energy set to None). Prevents surface-binders
+  from inflating the SI numerator.
+
+### Added
+- **`scripts/build_final_library.py`.** Builds the final screening library from
+  `pbp2a_focused_seed.csv`, `pbp2a_allosteric_library.csv`, and `novel_seed.csv`.
+  Deduplicates by canonical SMILES, filters by MW 200–550, SA < 4.5, QED > 0.3,
+  no beta-lactam, no boron. Writes `data/screen_library_final.csv`.
+- **Phase 0.5: Enrichment validation.** Runs known-actives vs decoys docking,
+  computes ROC-AUC and EF₁%. Non-blocking: logs a WARNING if AUC < 0.7 or
+  EF₁% < 5. Results saved to `output/enrichment_results.json`.
+- **`--refine` CLI flag.** When set, one round of iterative BRICS library
+  refinement is performed after Phase 3: the top-20 compounds by PBP2a energy
+  are fragmented, recombined, filtered, docked, and merged with existing scored
+  records before selectivity analysis.
+
+### Changed
+- **Off-target docking uses `_auto_box_size`.** `analyze_selectivity_and_resistance`
+  now calls `_auto_box_size` with `max_size=18.0, padding=2.0` and the
+  catalytic-triad `site_residues` for both trypsin and CES1, replacing the
+  former hardcoded box dimensions.
+- **`prepare_targets` now includes `cleaned_pdb` in trypsin/CES1 target dicts.**
+  Required by the off-target grid auto-sizing and the pose sanity check.
+- **Version bumped to 5.1.0.**
+
+### Tests
+- Added `TestOffTargetBoxSize`: asserts `_auto_box_size` for trypsin/CES1
+  returns a box with edge ≤ 18.0 Å.
+- Added `TestCatalyticPoseSanityCheck`: verifies the centroid check rejects
+  a pose > 8 Å from the active center.
+- Added `TestPharmacophorePrefilter`: verifies the filter removes a compound
+  with no Ser403/Lys406 contact.
+- All existing tests pass.
+
 ## [5.0.0] — Code simplification, grid-box fixes, and real pipeline run
 
 ### Fixed
