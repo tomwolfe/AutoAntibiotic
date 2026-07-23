@@ -1418,11 +1418,11 @@ def screen_library(
             rec.pb2pa_best_energy = None
             rec.binding_site = ""
 
-    top_n = select_top(records, "pb2pa_allosteric_energy")
-    log.info(f"  Top {len(top_n)} candidates by allosteric energy.")
+    top_n = select_top(records, "pb2pa_best_energy")
+    log.info(f"  Top {len(top_n)} candidates by best energy.")
     for i, r in enumerate(top_n[:10]):
         energy_str = (
-            f"{r.pb2pa_allosteric_energy:.2f}" if r.pb2pa_allosteric_energy is not None
+            f"{r.pb2pa_best_energy:.2f}" if r.pb2pa_best_energy is not None
             else "N/A"
         )
         site_str = r.binding_site if r.binding_site else "unknown"
@@ -2543,8 +2543,8 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 
     # ── Phase 4.2: Final ranking ──
-    top10 = sorted(top10, key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else (r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf")))
-    log.info("  Final Top-10 ranked by PBP2a allosteric energy.")
+    top10 = sorted(top10, key=lambda r: r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf"))
+    log.info("  Final Top-10 ranked by PBP2a best energy.")
 
     # ── Phase 4.5: Diversity clustering ──
     # Pick a maximally dissimilar final set (Morgan Tanimoto ≤ 0.4) to fill the
@@ -2567,7 +2567,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
                and r.selectivity_index >= SI_PROMISING_THRESHOLD]
     passing.sort(key=lambda r: r.selectivity_index or float("inf"), reverse=True)
     below = [r for r in top10 if r not in passing]
-    below.sort(key=lambda r: r.pb2pa_allosteric_energy if r.pb2pa_allosteric_energy is not None else (r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf")))
+    below.sort(key=lambda r: r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf"))
     report_list = list(passing)
     for rec in below:
         if len(report_list) >= TOP_N:
