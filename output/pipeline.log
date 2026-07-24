@@ -1,0 +1,2367 @@
+2026-07-23 14:16:59 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 14:16:59 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 14:16:59 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 14:16:59 | INFO     |   ✓  All required Python packages found.
+2026-07-23 14:16:59 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 14:16:59 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 14:16:59 | INFO     |   Run mode (from config): science
+2026-07-23 14:16:59 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 14:16:59 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 14:16:59 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-23 14:16:59 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-23 14:16:59 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 14:16:59 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 14:16:59 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-23 14:16:59 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 14:16:59 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 14:17:00 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-23 14:18:04 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-23 14:18:04 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 14:18:04 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 14:18:05 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-23 14:18:05 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 14:18:05 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 14:18:05 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 14:18:06 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-23 14:19:12 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 14:19:12 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 14:19:12 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446)…
+2026-07-23 14:19:12 | INFO     |     Active site center: [23.75833321 25.94333394 87.42066956]
+2026-07-23 14:19:12 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 14:19:12 | INFO     |     Allosteric site center: [24.97548178 30.9366667  28.8698331 ]
+2026-07-23 14:19:12 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 14:19:12 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-23 14:19:12 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-23 14:19:12 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 14:19:13 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 14:19:13 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 14:19:13 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-23 14:21:11 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-23 14:21:11 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 14:21:11 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 14:21:11 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-23 14:21:11 | INFO     | ─── Phase 1 complete ───
+2026-07-23 14:21:11 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-23 14:21:11 | INFO     |   Native ligand (resname override 'AI8'): chain A, residue AI8
+2026-07-23 14:21:11 | INFO     |   Native ligand SMILES: CCONC(C(O)N[C@H](CO)[C@@H]1NC(C(O)O)[C@@H](SC2NC(C3CCN(C)CC3)CS2)CS1)[C@@H]1NSC(N)N1
+2026-07-23 14:21:11 | INFO     |   Native ligand PDBQT written to output/workdir/native_ligand.pdbqt
+2026-07-23 14:21:11 | INFO     |   Redocking native ligand into PBP2a…
+2026-07-23 14:21:11 | INFO     |   Redocking box: 18.7 x 29.1 x 21.4 Å (auto-sized from native ligand).
+2026-07-23 14:22:43 | INFO     |   [Vina stdout, conformer 0 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.952          0          0
+   2       -6.791      3.637      9.872
+   3        -6.77      3.405      7.121
+2026-07-23 14:22:44 | INFO     |   RMSD (Kabsch, 27 atoms) = 1.937 Å
+2026-07-23 14:22:44 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.251 Å
+2026-07-23 14:22:44 | INFO     |   Redocking RMSD (conformer 0, seed 1) = 1.937 Å (core 1.251 Å)
+2026-07-23 14:24:10 | INFO     |   [Vina stdout, conformer 0 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.857          0          0
+   2       -6.817      3.164      6.962
+   3       -6.515      12.27      15.95
+2026-07-23 14:24:11 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.091 Å
+2026-07-23 14:24:11 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.235 Å
+2026-07-23 14:24:11 | INFO     |   Redocking RMSD (conformer 0, seed 2) = 2.091 Å (core 1.235 Å)
+2026-07-23 14:25:38 | INFO     |   [Vina stdout, conformer 0 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.917          0          0
+   2       -6.581      1.606      2.145
+   3       -6.443      11.11      15.51
+2026-07-23 14:25:38 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.069 Å
+2026-07-23 14:25:38 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.223 Å
+2026-07-23 14:25:38 | INFO     |   Redocking RMSD (conformer 0, seed 3) = 2.069 Å (core 1.223 Å)
+2026-07-23 14:25:38 | INFO     |   Multi-start RMSDs (conformer 0) = 1.937, 2.091, 2.069 Å; best = 1.937 Å
+2026-07-23 14:27:07 | INFO     |   [Vina stdout, conformer 1 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.699          0          0
+   2       -6.482      1.962      2.954
+   3       -6.448       3.17       12.5
+2026-07-23 14:27:07 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.071 Å
+2026-07-23 14:27:07 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.114 Å
+2026-07-23 14:27:07 | INFO     |   Redocking RMSD (conformer 1, seed 1) = 2.071 Å (core 1.114 Å)
+2026-07-23 14:28:31 | INFO     |   [Vina stdout, conformer 1 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.832          0          0
+   2         -6.6      3.476      12.54
+   3       -6.597      3.647      7.467
+2026-07-23 14:28:31 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.146 Å
+2026-07-23 14:28:31 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.215 Å
+2026-07-23 14:28:31 | INFO     |   Redocking RMSD (conformer 1, seed 2) = 2.146 Å (core 1.215 Å)
+2026-07-23 14:29:56 | INFO     |   [Vina stdout, conformer 1 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1        -6.83          0          0
+   2       -6.593      3.473      12.56
+   3       -6.506      4.095      9.202
+2026-07-23 14:29:56 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.119 Å
+2026-07-23 14:29:56 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.187 Å
+2026-07-23 14:29:56 | INFO     |   Redocking RMSD (conformer 1, seed 3) = 2.119 Å (core 1.187 Å)
+2026-07-23 14:29:56 | INFO     |   Multi-start RMSDs (conformer 1) = 2.071, 2.146, 2.119 Å; best = 2.071 Å
+2026-07-23 14:31:20 | INFO     |   [Vina stdout, conformer 2 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.884          0          0
+   2       -7.843      2.742      4.296
+   3       -7.709      2.962      6.506
+2026-07-23 14:31:20 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.795 Å
+2026-07-23 14:31:20 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.154 Å
+2026-07-23 14:31:20 | INFO     |   Redocking RMSD (conformer 2, seed 1) = 2.795 Å (core 1.154 Å)
+2026-07-23 14:32:40 | INFO     |   [Vina stdout, conformer 2 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.832          0          0
+   2       -7.691       3.28      9.288
+   3       -7.665      2.342      3.761
+2026-07-23 14:32:41 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.838 Å
+2026-07-23 14:32:41 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.158 Å
+2026-07-23 14:32:41 | INFO     |   Redocking RMSD (conformer 2, seed 2) = 2.838 Å (core 1.158 Å)
+2026-07-23 14:34:01 | INFO     |   [Vina stdout, conformer 2 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.692          0          0
+   2       -7.616      2.931      6.421
+   3       -7.436       3.21      6.719
+2026-07-23 14:34:02 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.843 Å
+2026-07-23 14:34:02 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.157 Å
+2026-07-23 14:34:02 | INFO     |   Redocking RMSD (conformer 2, seed 3) = 2.843 Å (core 1.157 Å)
+2026-07-23 14:34:02 | INFO     |   Multi-start RMSDs (conformer 2) = 2.795, 2.838, 2.843 Å; best = 2.795 Å
+2026-07-23 14:34:02 | INFO     |   Best (consensus) Redocking RMSD = 1.937 Å (full-ligand); core (active-site scaffold) = 1.251 Å
+2026-07-23 14:34:02 | INFO     |   ✓  Redocking validated (core RMSD = 1.251 Å ≤ 2.0 Å).
+2026-07-23 14:34:02 | INFO     |   Validation results written: output/workdir/validation_results.json
+2026-07-23 14:34:02 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-23 14:34:02 | INFO     | --- Phase 0.5: Enrichment Validation ---
+2026-07-23 14:34:02 | INFO     |   Loaded 14 known actives
+2026-07-23 14:34:02 | INFO     |   Loaded 150 known decoys
+2026-07-23 14:36:14 | INFO     |     Docked 25 / 164 (enrich_c0)
+2026-07-23 14:38:35 | INFO     |     Docked 50 / 164 (enrich_c0)
+2026-07-23 14:40:51 | INFO     |     Docked 75 / 164 (enrich_c0)
+2026-07-23 14:43:07 | INFO     |     Docked 100 / 164 (enrich_c0)
+2026-07-23 14:46:05 | INFO     |     Docked 125 / 164 (enrich_c0)
+2026-07-23 14:48:34 | INFO     |     Docked 150 / 164 (enrich_c0)
+2026-07-23 14:51:42 | INFO     |     Docked 25 / 164 (enrich_c1)
+2026-07-23 14:53:40 | INFO     |     Docked 50 / 164 (enrich_c1)
+2026-07-23 14:55:41 | INFO     |     Docked 75 / 164 (enrich_c1)
+2026-07-23 14:57:43 | INFO     |     Docked 100 / 164 (enrich_c1)
+2026-07-23 15:00:25 | INFO     |     Docked 125 / 164 (enrich_c1)
+2026-07-23 15:02:41 | INFO     |     Docked 150 / 164 (enrich_c1)
+2026-07-23 15:05:41 | INFO     |     Docked 25 / 164 (enrich_c2)
+2026-07-23 15:07:45 | INFO     |     Docked 50 / 164 (enrich_c2)
+2026-07-23 15:09:51 | INFO     |     Docked 75 / 164 (enrich_c2)
+2026-07-23 15:12:07 | INFO     |     Docked 100 / 164 (enrich_c2)
+2026-07-23 15:14:59 | INFO     |     Docked 125 / 164 (enrich_c2)
+2026-07-23 15:17:28 | INFO     |     Docked 150 / 164 (enrich_c2)
+2026-07-23 15:18:19 | INFO     |   Enrichment results written: output/enrichment_results.json
+2026-07-23 15:18:19 | INFO     | --- Phase 0.5 complete ---
+2026-07-23 15:18:19 | WARNING  |   ⚠  Enrichment validation: AUC=0.159 (need ≥0.7), EF_1%=0.00 (need ≥5). Protocol may need tuning.
+2026-07-23 15:18:19 | INFO     | ─── Phase 0.5 complete ───
+2026-07-23 15:18:19 | INFO     | ─── Phase 2: Library Generation ───
+2026-07-23 15:18:19 | INFO     |   Loading external compound library from CSV: data/screen_library_final.csv
+2026-07-23 15:18:19 | INFO     |   Loaded 244 compounds from external CSV.
+2026-07-23 15:18:19 | INFO     | ─── Phase 2: Filtering ───
+2026-07-23 15:18:19 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-23 15:18:19 | INFO     |   Similarity filter (Tc < 0.3): 1 removed.
+2026-07-23 15:18:19 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 30 removed.
+2026-07-23 15:18:19 | INFO     |   PAINS filter: 2 removed.
+2026-07-23 15:18:19 | INFO     |   Brenk alerts: 13 removed.
+2026-07-23 15:18:19 | INFO     |   Passed filters: 198 compounds.
+2026-07-23 15:18:19 | INFO     | ─── Phase 2 complete ───
+2026-07-23 15:18:19 | INFO     | ─── Phase 3: Virtual Screening ───
+2026-07-23 15:18:19 | INFO     |   Docking all 198 compounds against PBP2a active site (3 conformers)…
+2026-07-23 15:19:18 | INFO     |     Docked 25 / 198 (active_c0)
+2026-07-23 15:20:08 | INFO     |     Docked 50 / 198 (active_c0)
+2026-07-23 15:21:05 | INFO     |     Docked 75 / 198 (active_c0)
+2026-07-23 15:22:25 | INFO     |     Docked 100 / 198 (active_c0)
+2026-07-23 15:23:25 | INFO     |     Docked 125 / 198 (active_c0)
+2026-07-23 15:24:31 | INFO     |     Docked 150 / 198 (active_c0)
+2026-07-23 15:25:53 | INFO     |     Docked 175 / 198 (active_c0)
+2026-07-23 15:27:42 | INFO     |     Docked 25 / 198 (active_c1)
+2026-07-23 15:28:23 | INFO     |     Docked 50 / 198 (active_c1)
+2026-07-23 15:29:10 | INFO     |     Docked 75 / 198 (active_c1)
+2026-07-23 15:30:12 | INFO     |     Docked 100 / 198 (active_c1)
+2026-07-23 15:30:58 | INFO     |     Docked 125 / 198 (active_c1)
+2026-07-23 15:31:53 | INFO     |     Docked 150 / 198 (active_c1)
+2026-07-23 15:33:01 | INFO     |     Docked 175 / 198 (active_c1)
+2026-07-23 15:34:34 | INFO     |     Docked 25 / 198 (active_c2)
+2026-07-23 15:35:13 | INFO     |     Docked 50 / 198 (active_c2)
+2026-07-23 15:35:56 | INFO     |     Docked 75 / 198 (active_c2)
+2026-07-23 15:36:52 | INFO     |     Docked 100 / 198 (active_c2)
+2026-07-23 15:37:40 | INFO     |     Docked 125 / 198 (active_c2)
+2026-07-23 15:38:30 | INFO     |     Docked 150 / 198 (active_c2)
+2026-07-23 15:39:44 | INFO     |     Docked 175 / 198 (active_c2)
+2026-07-23 15:40:34 | INFO     |   Active-site docking complete: 198/198 scored.
+2026-07-23 15:41:26 | INFO     |   Pharmacophore pre-filter removed 0 surface-binder compounds.
+2026-07-23 15:41:26 | INFO     |   Docking all 198 compounds against PBP2a allosteric site (3 conformers)…
+2026-07-23 15:42:18 | INFO     |     Docked 25 / 198 (allosteric_c0)
+2026-07-23 15:43:01 | INFO     |     Docked 50 / 198 (allosteric_c0)
+2026-07-23 15:43:50 | INFO     |     Docked 75 / 198 (allosteric_c0)
+2026-07-23 15:44:59 | INFO     |     Docked 100 / 198 (allosteric_c0)
+2026-07-23 15:45:47 | INFO     |     Docked 125 / 198 (allosteric_c0)
+2026-07-23 15:46:47 | INFO     |     Docked 150 / 198 (allosteric_c0)
+2026-07-23 15:48:01 | INFO     |     Docked 175 / 198 (allosteric_c0)
+2026-07-23 15:49:52 | INFO     |     Docked 25 / 198 (allosteric_c1)
+2026-07-23 15:50:33 | INFO     |     Docked 50 / 198 (allosteric_c1)
+2026-07-23 15:51:28 | INFO     |     Docked 75 / 198 (allosteric_c1)
+2026-07-23 15:52:33 | INFO     |     Docked 100 / 198 (allosteric_c1)
+2026-07-23 15:53:22 | INFO     |     Docked 125 / 198 (allosteric_c1)
+2026-07-23 15:54:19 | INFO     |     Docked 150 / 198 (allosteric_c1)
+2026-07-23 15:55:35 | INFO     |     Docked 175 / 198 (allosteric_c1)
+2026-07-23 15:57:27 | INFO     |     Docked 25 / 198 (allosteric_c2)
+2026-07-23 15:58:10 | INFO     |     Docked 50 / 198 (allosteric_c2)
+2026-07-23 15:59:02 | INFO     |     Docked 75 / 198 (allosteric_c2)
+2026-07-23 16:00:10 | INFO     |     Docked 100 / 198 (allosteric_c2)
+2026-07-23 16:01:02 | INFO     |     Docked 125 / 198 (allosteric_c2)
+2026-07-23 16:02:02 | INFO     |     Docked 150 / 198 (allosteric_c2)
+2026-07-23 16:03:21 | INFO     |     Docked 175 / 198 (allosteric_c2)
+2026-07-23 16:04:23 | INFO     |   Allosteric-site docking complete: 198/198 scored.
+2026-07-23 16:04:23 | INFO     |   Top 20 candidates by best energy.
+2026-07-23 16:04:23 | INFO     |     1. ALL_QU04: -10.09 kcal/mol (active: -10.09)
+2026-07-23 16:04:23 | INFO     |     2. ALL_SU08: -9.96 kcal/mol (active: -9.96)
+2026-07-23 16:04:23 | INFO     |     3. ALL_SU14: -9.83 kcal/mol (active: -9.83)
+2026-07-23 16:04:23 | INFO     |     4. ALL_QU05: -9.69 kcal/mol (active: -9.69)
+2026-07-23 16:04:23 | INFO     |     5. ALL_SU03: -9.48 kcal/mol (active: -9.48)
+2026-07-23 16:04:23 | INFO     |     6. ALL_QU09: -9.47 kcal/mol (active: -9.47)
+2026-07-23 16:04:23 | INFO     |     7. ALL_SU15: -9.40 kcal/mol (active: -9.40)
+2026-07-23 16:04:23 | INFO     |     8. ALL_SU04: -9.35 kcal/mol (active: -9.35)
+2026-07-23 16:04:23 | INFO     |     9. ALL_SU01: -9.32 kcal/mol (active: -9.32)
+2026-07-23 16:04:23 | INFO     |     10. ALL_SP12: -9.21 kcal/mol (active: -9.21)
+2026-07-23 16:04:23 | INFO     | ─── Phase 3 complete ───
+2026-07-23 16:04:23 | INFO     | ─── Phase 4: Selectivity & Resistance Analysis ───
+2026-07-23 16:04:23 | INFO     |   Docking top 10 vs Human Trypsin (1UTN)…
+2026-07-23 16:05:10 | INFO     |   Docking top 10 vs Human Carboxylesterase 1 (1YAH)…
+2026-07-23 16:06:01 | INFO     |   ALL_QU04: mechanism-restricted SI = 1.50 (pass).
+2026-07-23 16:06:01 | WARNING  |   ALL_SU08: Low mechanism-restricted selectivity (SI = 1.39 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | WARNING  |   ALL_SU14: Low mechanism-restricted selectivity (SI = 1.49 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | INFO     |   ALL_QU05: mechanism-restricted SI = 1.97 (pass).
+2026-07-23 16:06:01 | WARNING  |   ALL_SU03: Low mechanism-restricted selectivity (SI = 1.26 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | INFO     |   ALL_SU15: mechanism-restricted SI = 1.56 (pass).
+2026-07-23 16:06:01 | WARNING  |   ALL_SU04: Low mechanism-restricted selectivity (SI = 1.18 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | WARNING  |   ALL_SU01: Low mechanism-restricted selectivity (SI = 1.15 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | WARNING  |   ALL_TE07: Low mechanism-restricted selectivity (SI = 1.28 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | WARNING  |   ALL_IN08: Low mechanism-restricted selectivity (SI = 1.22 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | WARNING  |   ALL_SU10: Low mechanism-restricted selectivity (SI = 1.05 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | WARNING  |   ALL_SU09: Low mechanism-restricted selectivity (SI = 1.30 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:01 | WARNING  |   ALL_IN10: Low mechanism-restricted selectivity (SI = 1.46 < 1.5). Flagged for off-target risk.
+2026-07-23 16:06:07 | INFO     | ─── Phase 4 complete ───
+2026-07-23 16:06:07 | INFO     |   Final Top-10 ranked by PBP2a best energy.
+2026-07-23 16:06:07 | INFO     |   Diversified final set: 5 diverse + 15 filler = 20 candidate(s).
+2026-07-23 16:06:07 | INFO     |   Final report: 3 candidate(s) at SI >= 1.5, filled to 20 total.
+2026-07-23 16:06:07 | INFO     | ─── Phase 5: Reporting ───
+2026-07-23 16:06:07 | INFO     |   CSV report saved: output/top_candidates.csv
+2026-07-23 16:06:07 | INFO     |   JSON candidates saved: output/top_candidates.json
+2026-07-23 16:06:07 | INFO     |   Image saved: output/top1_ALL_QU05.png
+2026-07-23 16:06:07 | INFO     |   Image saved: output/top2_ALL_SU15.png
+2026-07-23 16:06:07 | INFO     |   Image saved: output/top3_ALL_QU04.png
+2026-07-23 16:06:07 | INFO     |   Interaction diagram saved: output/interaction_ALL_QU05.png
+2026-07-23 16:06:07 | INFO     |   Interaction diagram saved: output/interaction_ALL_SU15.png
+2026-07-23 16:06:07 | INFO     |   Interaction diagram saved: output/interaction_ALL_QU04.png
+2026-07-23 16:06:07 | INFO     | Interaction diagrams saved to output/
+2026-07-23 16:06:07 | INFO     |   PyMOL script saved: output/visualization.pml (3 ligand pose(s) loaded).
+2026-07-23 16:06:07 | INFO     |   Filter funnel saved: output/filter_funnel.json
+2026-07-23 16:06:07 | INFO     |   ROC curve saved: output/figures/roc_curve.png
+2026-07-23 16:06:07 | INFO     |   Energy distribution saved: output/figures/energy_distribution.png
+2026-07-23 16:06:07 | INFO     |   SI scatter plot saved: output/figures/si_scatter.png
+2026-07-23 16:06:07 | INFO     |   Filter funnel saved: output/figures/filter_funnel.png
+2026-07-23 16:06:07 | INFO     |   Binding diagram saved: output/figures/top3_binding_1_ALL_QU05.png
+2026-07-23 16:06:07 | INFO     |   Binding diagram saved: output/figures/top3_binding_2_ALL_SU15.png
+2026-07-23 16:06:07 | INFO     |   Binding diagram saved: output/figures/top3_binding_3_ALL_QU04.png
+2026-07-23 16:06:07 | INFO     |   All figures saved to output/figures
+2026-07-23 16:06:07 | INFO     | ============================================================
+2026-07-23 16:06:07 | INFO     |   PIPELINE SUMMARY
+2026-07-23 16:06:07 | INFO     | ============================================================
+2026-07-23 16:06:07 | INFO     |   Total compounds generated:     244
+2026-07-23 16:06:07 | INFO     |   After filtering:               198
+2026-07-23 16:06:07 | INFO     |   Top candidates reported:       20
+2026-07-23 16:06:07 | INFO     |   Successfully docked:           20
+2026-07-23 16:06:07 | INFO     |   Selectivity pass (SI >= 2.0):  3
+2026-07-23 16:06:07 | INFO     |   Docking engine:                Vina
+2026-07-23 16:06:07 | INFO     |   Redocking RMSD:                1.937 Å
+2026-07-23 16:06:07 | INFO     |   Redocking validated:           True
+2026-07-23 16:06:07 | INFO     |   Protocol validation: RMSD 1.937 Å (Validated)
+2026-07-23 16:06:07 | INFO     |   CSV report:                    output/top_candidates.csv
+2026-07-23 16:06:07 | INFO     |   Open output/visualization.pml in PyMOL to inspect binding poses.
+2026-07-23 16:06:07 | INFO     | ============================================================
+2026-07-23 16:06:07 | INFO     | Pipeline complete. Exiting.
+2026-07-23 16:08:30 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 16:08:30 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 16:08:30 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 16:08:30 | INFO     |   ✓  All required Python packages found.
+2026-07-23 16:08:30 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 16:08:30 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 16:08:30 | INFO     |   Run mode (from config): science
+2026-07-23 16:08:30 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 16:08:30 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 16:08:30 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-23 16:08:30 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-23 16:08:30 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 16:08:30 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 16:08:30 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-23 16:08:30 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 16:08:30 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 16:08:30 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-23 16:09:34 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-23 16:09:34 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 16:09:35 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 16:09:35 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-23 16:09:35 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 16:09:35 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 16:09:35 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 16:09:36 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-23 16:10:42 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 16:10:42 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 16:10:42 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 16:10:42 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 16:10:42 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 16:10:42 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 16:10:42 | INFO     |     Allosteric site center: None
+2026-07-23 16:10:42 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 16:10:42 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-23 16:10:42 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-23 16:10:42 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 16:10:42 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 16:10:42 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 16:10:43 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-23 16:12:41 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-23 16:12:41 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 16:12:41 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 16:12:41 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-23 16:12:41 | INFO     | ─── Phase 1 complete ───
+2026-07-23 16:12:41 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-23 16:12:41 | INFO     |   Native ligand (resname override 'AI8'): chain A, residue AI8
+2026-07-23 16:12:41 | INFO     |   Native ligand SMILES: CCONC(C(O)N[C@H](CO)[C@@H]1NC(C(O)O)[C@@H](SC2NC(C3CCN(C)CC3)CS2)CS1)[C@@H]1NSC(N)N1
+2026-07-23 16:12:41 | INFO     |   Native ligand PDBQT written to output/workdir/native_ligand.pdbqt
+2026-07-23 16:12:41 | INFO     |   Redocking native ligand into PBP2a…
+2026-07-23 16:12:41 | INFO     |   Redocking box: 18.7 x 29.1 x 21.4 Å (auto-sized from native ligand).
+2026-07-23 16:14:15 | INFO     |   [Vina stdout, conformer 0 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.952          0          0
+   2       -6.791      3.637      9.872
+   3        -6.77      3.405      7.121
+2026-07-23 16:14:15 | INFO     |   RMSD (Kabsch, 27 atoms) = 1.937 Å
+2026-07-23 16:14:15 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.251 Å
+2026-07-23 16:14:15 | INFO     |   Redocking RMSD (conformer 0, seed 1) = 1.937 Å (core 1.251 Å)
+2026-07-23 16:15:44 | INFO     |   [Vina stdout, conformer 0 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.857          0          0
+   2       -6.817      3.164      6.962
+   3       -6.515      12.27      15.95
+2026-07-23 16:15:45 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.091 Å
+2026-07-23 16:15:45 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.235 Å
+2026-07-23 16:15:45 | INFO     |   Redocking RMSD (conformer 0, seed 2) = 2.091 Å (core 1.235 Å)
+2026-07-23 16:17:14 | INFO     |   [Vina stdout, conformer 0 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.917          0          0
+   2       -6.581      1.606      2.145
+   3       -6.443      11.11      15.51
+2026-07-23 16:17:14 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.069 Å
+2026-07-23 16:17:14 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.223 Å
+2026-07-23 16:17:14 | INFO     |   Redocking RMSD (conformer 0, seed 3) = 2.069 Å (core 1.223 Å)
+2026-07-23 16:17:14 | INFO     |   Multi-start RMSDs (conformer 0) = 1.937, 2.091, 2.069 Å; best = 1.937 Å
+2026-07-23 16:18:44 | INFO     |   [Vina stdout, conformer 1 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.699          0          0
+   2       -6.482      1.962      2.954
+   3       -6.448       3.17       12.5
+2026-07-23 16:18:44 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.071 Å
+2026-07-23 16:18:44 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.114 Å
+2026-07-23 16:18:44 | INFO     |   Redocking RMSD (conformer 1, seed 1) = 2.071 Å (core 1.114 Å)
+2026-07-23 16:20:10 | INFO     |   [Vina stdout, conformer 1 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.832          0          0
+   2         -6.6      3.476      12.54
+   3       -6.597      3.647      7.467
+2026-07-23 16:20:11 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.146 Å
+2026-07-23 16:20:11 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.215 Å
+2026-07-23 16:20:11 | INFO     |   Redocking RMSD (conformer 1, seed 2) = 2.146 Å (core 1.215 Å)
+2026-07-23 16:21:37 | INFO     |   [Vina stdout, conformer 1 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1        -6.83          0          0
+   2       -6.593      3.473      12.56
+   3       -6.506      4.095      9.202
+2026-07-23 16:21:38 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.119 Å
+2026-07-23 16:21:38 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.187 Å
+2026-07-23 16:21:38 | INFO     |   Redocking RMSD (conformer 1, seed 3) = 2.119 Å (core 1.187 Å)
+2026-07-23 16:21:38 | INFO     |   Multi-start RMSDs (conformer 1) = 2.071, 2.146, 2.119 Å; best = 2.071 Å
+2026-07-23 16:23:02 | INFO     |   [Vina stdout, conformer 2 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.884          0          0
+   2       -7.843      2.742      4.296
+   3       -7.709      2.962      6.506
+2026-07-23 16:23:03 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.795 Å
+2026-07-23 16:23:03 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.154 Å
+2026-07-23 16:23:03 | INFO     |   Redocking RMSD (conformer 2, seed 1) = 2.795 Å (core 1.154 Å)
+2026-07-23 16:24:22 | INFO     |   [Vina stdout, conformer 2 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.832          0          0
+   2       -7.691       3.28      9.288
+   3       -7.665      2.342      3.761
+2026-07-23 16:24:23 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.838 Å
+2026-07-23 16:24:23 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.158 Å
+2026-07-23 16:24:23 | INFO     |   Redocking RMSD (conformer 2, seed 2) = 2.838 Å (core 1.158 Å)
+2026-07-23 16:25:44 | INFO     |   [Vina stdout, conformer 2 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.692          0          0
+   2       -7.616      2.931      6.421
+   3       -7.436       3.21      6.719
+2026-07-23 16:25:44 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.843 Å
+2026-07-23 16:25:44 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.157 Å
+2026-07-23 16:25:44 | INFO     |   Redocking RMSD (conformer 2, seed 3) = 2.843 Å (core 1.157 Å)
+2026-07-23 16:25:44 | INFO     |   Multi-start RMSDs (conformer 2) = 2.795, 2.838, 2.843 Å; best = 2.795 Å
+2026-07-23 16:25:44 | INFO     |   Best (consensus) Redocking RMSD = 1.937 Å (full-ligand); core (active-site scaffold) = 1.251 Å
+2026-07-23 16:25:44 | INFO     |   ✓  Redocking validated (core RMSD = 1.251 Å ≤ 2.0 Å).
+2026-07-23 16:25:44 | INFO     |   Validation results written: output/workdir/validation_results.json
+2026-07-23 16:25:44 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-23 16:25:45 | INFO     | --- Phase 0.5: Enrichment Validation ---
+2026-07-23 16:25:45 | INFO     |   Loaded 14 known actives
+2026-07-23 16:25:45 | INFO     |   Loaded 150 known decoys
+2026-07-23 16:28:06 | INFO     |     Docked 25 / 164 (enrich_c0)
+2026-07-23 16:30:22 | INFO     |     Docked 50 / 164 (enrich_c0)
+2026-07-23 16:32:44 | INFO     |     Docked 75 / 164 (enrich_c0)
+2026-07-23 16:34:59 | INFO     |     Docked 100 / 164 (enrich_c0)
+2026-07-23 16:38:07 | INFO     |     Docked 125 / 164 (enrich_c0)
+2026-07-23 16:40:37 | INFO     |     Docked 150 / 164 (enrich_c0)
+2026-07-23 16:43:33 | INFO     |     Docked 25 / 164 (enrich_c1)
+2026-07-23 16:45:38 | INFO     |     Docked 50 / 164 (enrich_c1)
+2026-07-23 16:47:34 | INFO     |     Docked 75 / 164 (enrich_c1)
+2026-07-23 16:49:45 | INFO     |     Docked 100 / 164 (enrich_c1)
+2026-07-23 16:52:26 | INFO     |     Docked 125 / 164 (enrich_c1)
+2026-07-23 16:54:45 | INFO     |     Docked 150 / 164 (enrich_c1)
+2026-07-23 16:57:39 | INFO     |     Docked 25 / 164 (enrich_c2)
+2026-07-23 16:59:43 | INFO     |     Docked 50 / 164 (enrich_c2)
+2026-07-23 17:07:32 | INFO     |     Docked 75 / 164 (enrich_c2)
+2026-07-23 17:07:45 | INFO     |     Docked 100 / 164 (enrich_c2)
+2026-07-23 17:08:49 | INFO     |     Docked 125 / 164 (enrich_c2)
+2026-07-23 17:43:04 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 17:43:04 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 17:43:04 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 17:43:04 | INFO     |   ✓  All required Python packages found.
+2026-07-23 17:43:04 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 17:43:04 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 17:43:04 | INFO     |   Run mode (from config): science
+2026-07-23 17:43:04 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 17:43:04 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 17:43:04 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-23 17:43:04 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-23 17:43:04 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 17:43:04 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 17:43:04 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-23 17:43:04 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 17:43:04 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 17:43:04 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-23 17:44:08 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-23 17:44:08 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 17:44:09 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 17:44:09 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-23 17:44:09 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 17:44:09 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 17:44:09 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 17:44:10 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-23 17:46:58 | INFO     | AutoAntibiotic Discovery Pipeline v5.1.0
+2026-07-23 17:46:58 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 17:46:58 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 17:46:58 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 17:46:58 | INFO     |   ✓  All required Python packages found.
+2026-07-23 17:46:58 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 17:46:58 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 17:46:58 | INFO     |   Run mode (from config): science
+2026-07-23 17:46:58 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 17:46:58 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 17:46:58 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-23 17:46:58 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-23 17:46:58 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 17:46:58 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 17:46:58 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-23 17:46:58 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 17:46:58 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 17:46:58 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-23 17:48:02 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-23 17:48:02 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 17:48:03 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 17:48:03 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-23 17:48:03 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 17:48:03 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 17:48:03 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 17:48:04 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-23 17:49:10 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 17:49:10 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 17:49:10 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 17:49:10 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 17:49:10 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 17:49:10 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 17:49:10 | INFO     |     Allosteric site center: None
+2026-07-23 17:49:10 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 17:49:10 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-23 17:49:11 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-23 17:49:11 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 17:49:11 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 17:49:11 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 17:49:11 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-23 17:51:09 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-23 17:51:09 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 17:51:09 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 17:51:09 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-23 17:51:09 | INFO     | ─── Phase 1 complete ───
+2026-07-23 17:51:09 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-23 17:51:09 | INFO     |   Native ligand (resname override 'AI8'): chain A, residue AI8
+2026-07-23 17:51:09 | INFO     |   Native ligand SMILES: CCONC(C(O)N[C@H](CO)[C@@H]1NC(C(O)O)[C@@H](SC2NC(C3CCN(C)CC3)CS2)CS1)[C@@H]1NSC(N)N1
+2026-07-23 17:51:09 | INFO     |   Native ligand PDBQT written to output/workdir/native_ligand.pdbqt
+2026-07-23 17:51:09 | INFO     |   Redocking native ligand into PBP2a…
+2026-07-23 17:51:09 | INFO     |   Redocking box: 18.7 x 29.1 x 21.4 Å (auto-sized from native ligand).
+2026-07-23 17:52:42 | INFO     |   [Vina stdout, conformer 0 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.952          0          0
+   2       -6.791      3.637      9.872
+   3        -6.77      3.405      7.121
+2026-07-23 17:52:42 | INFO     |   RMSD (Kabsch, 27 atoms) = 1.937 Å
+2026-07-23 17:52:42 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.251 Å
+2026-07-23 17:52:42 | INFO     |   Redocking RMSD (conformer 0, seed 1) = 1.937 Å (core 1.251 Å)
+2026-07-23 17:54:09 | INFO     |   [Vina stdout, conformer 0 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.857          0          0
+   2       -6.817      3.164      6.962
+   3       -6.515      12.27      15.95
+2026-07-23 17:54:09 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.091 Å
+2026-07-23 17:54:09 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.235 Å
+2026-07-23 17:54:09 | INFO     |   Redocking RMSD (conformer 0, seed 2) = 2.091 Å (core 1.235 Å)
+2026-07-23 17:55:38 | INFO     |   [Vina stdout, conformer 0 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.917          0          0
+   2       -6.581      1.606      2.145
+   3       -6.443      11.11      15.51
+2026-07-23 17:55:38 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.069 Å
+2026-07-23 17:55:38 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.223 Å
+2026-07-23 17:55:38 | INFO     |   Redocking RMSD (conformer 0, seed 3) = 2.069 Å (core 1.223 Å)
+2026-07-23 17:55:38 | INFO     |   Multi-start RMSDs (conformer 0) = 1.937, 2.091, 2.069 Å; best = 1.937 Å
+2026-07-23 17:57:08 | INFO     | AutoAntibiotic Discovery Pipeline v5.1.0
+2026-07-23 17:57:08 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 17:57:08 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 17:57:08 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 17:57:08 | INFO     |   ✓  All required Python packages found.
+2026-07-23 17:57:08 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 17:57:08 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 17:57:08 | INFO     |   Run mode (from config): science
+2026-07-23 17:57:08 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 17:57:08 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 17:57:08 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-23 17:57:08 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-23 17:57:08 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 17:57:08 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 17:57:08 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-23 17:57:08 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 17:57:08 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 17:57:08 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-23 17:58:18 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-23 17:58:18 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 17:58:18 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 17:58:18 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-23 17:58:18 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 17:58:19 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 17:58:19 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 17:58:19 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-23 17:59:26 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 17:59:26 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 17:59:26 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 17:59:26 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 17:59:26 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 17:59:26 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 17:59:26 | INFO     |     Allosteric site center: None
+2026-07-23 17:59:26 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 17:59:26 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-23 17:59:27 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-23 17:59:27 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 17:59:27 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 17:59:27 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 17:59:27 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-23 18:01:27 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-23 18:01:27 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 18:01:27 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 18:01:27 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-23 18:01:27 | INFO     | ─── Phase 1 complete ───
+2026-07-23 18:01:27 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-23 18:01:28 | INFO     |   Native ligand (resname override 'AI8'): chain A, residue AI8
+2026-07-23 18:01:28 | INFO     |   Native ligand SMILES: CCONC(C(O)N[C@H](CO)[C@@H]1NC(C(O)O)[C@@H](SC2NC(C3CCN(C)CC3)CS2)CS1)[C@@H]1NSC(N)N1
+2026-07-23 18:01:28 | INFO     |   Native ligand PDBQT written to output/workdir/native_ligand.pdbqt
+2026-07-23 18:01:28 | INFO     |   Redocking native ligand into PBP2a…
+2026-07-23 18:01:28 | INFO     |   Redocking box: 18.7 x 29.1 x 21.4 Å (auto-sized from native ligand).
+2026-07-23 18:03:11 | INFO     |   [Vina stdout, conformer 0 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.952          0          0
+   2       -6.791      3.637      9.872
+   3        -6.77      3.405      7.121
+2026-07-23 18:03:11 | INFO     |   RMSD (Kabsch, 27 atoms) = 1.937 Å
+2026-07-23 18:03:11 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.251 Å
+2026-07-23 18:03:11 | INFO     |   Redocking RMSD (conformer 0, seed 1) = 1.937 Å (core 1.251 Å)
+2026-07-23 18:04:38 | INFO     |   [Vina stdout, conformer 0 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.857          0          0
+   2       -6.817      3.164      6.962
+   3       -6.515      12.27      15.95
+2026-07-23 18:04:38 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.091 Å
+2026-07-23 18:04:38 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.235 Å
+2026-07-23 18:04:38 | INFO     |   Redocking RMSD (conformer 0, seed 2) = 2.091 Å (core 1.235 Å)
+2026-07-23 18:06:11 | INFO     |   [Vina stdout, conformer 0 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.917          0          0
+   2       -6.581      1.606      2.145
+   3       -6.443      11.11      15.51
+2026-07-23 18:06:12 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.069 Å
+2026-07-23 18:06:12 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.223 Å
+2026-07-23 18:06:12 | INFO     |   Redocking RMSD (conformer 0, seed 3) = 2.069 Å (core 1.223 Å)
+2026-07-23 18:06:12 | INFO     |   Multi-start RMSDs (conformer 0) = 1.937, 2.091, 2.069 Å; best = 1.937 Å
+2026-07-23 18:07:40 | INFO     |   [Vina stdout, conformer 1 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.699          0          0
+   2       -6.482      1.962      2.954
+   3       -6.448       3.17       12.5
+2026-07-23 18:07:40 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.071 Å
+2026-07-23 18:07:40 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.114 Å
+2026-07-23 18:07:40 | INFO     |   Redocking RMSD (conformer 1, seed 1) = 2.071 Å (core 1.114 Å)
+2026-07-23 18:09:04 | INFO     |   [Vina stdout, conformer 1 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.832          0          0
+   2         -6.6      3.476      12.54
+   3       -6.597      3.647      7.467
+2026-07-23 18:09:05 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.146 Å
+2026-07-23 18:09:05 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.215 Å
+2026-07-23 18:09:05 | INFO     |   Redocking RMSD (conformer 1, seed 2) = 2.146 Å (core 1.215 Å)
+2026-07-23 18:10:37 | INFO     |   [Vina stdout, conformer 1 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1        -6.83          0          0
+   2       -6.593      3.473      12.56
+   3       -6.506      4.095      9.202
+2026-07-23 18:10:37 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.119 Å
+2026-07-23 18:10:37 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.187 Å
+2026-07-23 18:10:37 | INFO     |   Redocking RMSD (conformer 1, seed 3) = 2.119 Å (core 1.187 Å)
+2026-07-23 18:10:37 | INFO     |   Multi-start RMSDs (conformer 1) = 2.071, 2.146, 2.119 Å; best = 2.071 Å
+2026-07-23 18:12:00 | INFO     |   [Vina stdout, conformer 2 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.884          0          0
+   2       -7.843      2.742      4.296
+   3       -7.709      2.962      6.506
+2026-07-23 18:12:00 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.795 Å
+2026-07-23 18:12:00 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.154 Å
+2026-07-23 18:12:00 | INFO     |   Redocking RMSD (conformer 2, seed 1) = 2.795 Å (core 1.154 Å)
+2026-07-23 18:13:20 | INFO     |   [Vina stdout, conformer 2 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.832          0          0
+   2       -7.691       3.28      9.288
+   3       -7.665      2.342      3.761
+2026-07-23 18:13:20 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.838 Å
+2026-07-23 18:13:20 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.158 Å
+2026-07-23 18:13:20 | INFO     |   Redocking RMSD (conformer 2, seed 2) = 2.838 Å (core 1.158 Å)
+2026-07-23 18:14:40 | INFO     |   [Vina stdout, conformer 2 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.692          0          0
+   2       -7.616      2.931      6.421
+   3       -7.436       3.21      6.719
+2026-07-23 18:14:40 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.843 Å
+2026-07-23 18:14:40 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.157 Å
+2026-07-23 18:14:40 | INFO     |   Redocking RMSD (conformer 2, seed 3) = 2.843 Å (core 1.157 Å)
+2026-07-23 18:14:40 | INFO     |   Multi-start RMSDs (conformer 2) = 2.795, 2.838, 2.843 Å; best = 2.795 Å
+2026-07-23 18:14:40 | INFO     |   Best (consensus) Redocking RMSD = 1.937 Å (full-ligand); core (active-site scaffold) = 1.251 Å
+2026-07-23 18:14:40 | INFO     |   ✓  Redocking validated (core RMSD = 1.251 Å ≤ 2.0 Å).
+2026-07-23 18:14:40 | INFO     |   Validation results written: output/workdir/validation_results.json
+2026-07-23 18:14:40 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-23 18:14:41 | INFO     | --- Phase 0.5: Enrichment Validation ---
+2026-07-23 18:14:41 | INFO     |   Loaded 14 known actives
+2026-07-23 18:14:41 | INFO     |   Loaded 150 known decoys
+2026-07-23 18:17:07 | INFO     |     Docked 25 / 164 (enrich_c0)
+2026-07-23 18:19:23 | INFO     |     Docked 50 / 164 (enrich_c0)
+2026-07-23 18:21:47 | INFO     |     Docked 75 / 164 (enrich_c0)
+2026-07-23 18:24:07 | INFO     |     Docked 100 / 164 (enrich_c0)
+2026-07-23 18:27:17 | INFO     |     Docked 125 / 164 (enrich_c0)
+2026-07-23 18:29:51 | INFO     |     Docked 150 / 164 (enrich_c0)
+2026-07-23 18:32:55 | INFO     |     Docked 25 / 164 (enrich_c1)
+2026-07-23 18:34:52 | INFO     |     Docked 50 / 164 (enrich_c1)
+2026-07-23 18:37:00 | INFO     |     Docked 75 / 164 (enrich_c1)
+2026-07-23 18:39:10 | INFO     |     Docked 100 / 164 (enrich_c1)
+2026-07-23 18:41:52 | INFO     |     Docked 125 / 164 (enrich_c1)
+2026-07-23 18:44:06 | INFO     |     Docked 150 / 164 (enrich_c1)
+2026-07-23 18:47:02 | INFO     |     Docked 25 / 164 (enrich_c2)
+2026-07-23 18:48:58 | INFO     |     Docked 50 / 164 (enrich_c2)
+2026-07-23 18:50:55 | INFO     |     Docked 75 / 164 (enrich_c2)
+2026-07-23 18:53:15 | INFO     |     Docked 100 / 164 (enrich_c2)
+2026-07-23 18:56:07 | INFO     |     Docked 125 / 164 (enrich_c2)
+2026-07-23 18:58:37 | INFO     |     Docked 150 / 164 (enrich_c2)
+2026-07-23 18:59:32 | INFO     |   Enrichment results written: output/enrichment_results.json
+2026-07-23 18:59:32 | INFO     | --- Phase 0.5 complete ---
+2026-07-23 18:59:32 | WARNING  |   ⚠  Enrichment validation: AUC=0.113 (need ≥0.7), EF_1%=0.00 (need ≥5). Protocol may need tuning.
+2026-07-23 18:59:32 | INFO     | ─── Phase 0.5 complete ───
+2026-07-23 18:59:32 | INFO     | ─── Phase 2: Library Generation ───
+2026-07-23 18:59:32 | INFO     |   Fragment pool: 76 unique fragments.
+2026-07-23 19:00:09 | INFO     |   Pass 1: 500 unique so far.
+2026-07-23 19:00:09 | INFO     |   BRICS generated: 500 compounds.
+2026-07-23 19:00:09 | INFO     |   After adding seeds: 500 compounds.
+2026-07-23 19:00:09 | INFO     |   After adding known actives: 500 compounds.
+2026-07-23 19:00:09 | INFO     |   Enforcing diversity filters...
+2026-07-23 19:00:10 | INFO     |   After diversity filters: 15 candidates.
+2026-07-23 19:00:10 | INFO     |   Library generation complete: 20 compounds.
+2026-07-23 19:00:10 | INFO     | ─── Phase 2: Filtering ───
+2026-07-23 19:00:10 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-23 19:00:10 | INFO     |   Similarity filter (Tc < 0.3): 2 removed.
+2026-07-23 19:00:10 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 1 removed.
+2026-07-23 19:00:10 | INFO     |   PAINS filter: 1 removed.
+2026-07-23 19:00:10 | INFO     |   Brenk alerts: 1 removed.
+2026-07-23 19:00:10 | INFO     |   Passed filters: 15 compounds.
+2026-07-23 19:00:10 | INFO     |   Only 15 compounds passed filters (< 100). Relaxing similarity threshold to 0.5.
+2026-07-23 19:00:10 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-23 19:00:10 | INFO     |   Similarity filter (Tc < 0.5): 1 removed.
+2026-07-23 19:00:10 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 1 removed.
+2026-07-23 19:00:10 | INFO     |   PAINS filter: 1 removed.
+2026-07-23 19:00:10 | INFO     |   Brenk alerts: 1 removed.
+2026-07-23 19:00:10 | INFO     |   Passed filters: 16 compounds.
+2026-07-23 19:00:10 | INFO     | ─── Phase 2 complete ───
+2026-07-23 19:00:10 | INFO     | ─── Phase 3: Virtual Screening ───
+2026-07-23 19:00:10 | INFO     |   Docking all 16 compounds against PBP2a active site (3 conformers)…
+2026-07-23 19:02:28 | INFO     |   Active-site docking complete: 16/16 scored.
+2026-07-23 19:02:33 | INFO     |   Pharmacophore pre-filter removed 0 surface-binder compounds.
+2026-07-23 19:02:33 | WARNING  |   Allosteric center not computed — skipping allosteric-site docking.
+2026-07-23 19:02:33 | INFO     |   Allosteric-site docking complete: 0/16 scored.
+2026-07-23 19:02:33 | INFO     |   Top 16 candidates by best energy.
+2026-07-23 19:02:33 | INFO     |     1. AA-0126: -9.86 kcal/mol (active: -9.86)
+2026-07-23 19:02:33 | INFO     |     2. AA-0012: -9.59 kcal/mol (active: -9.59)
+2026-07-23 19:02:33 | INFO     |     3. AA-0023: -9.59 kcal/mol (active: -9.59)
+2026-07-23 19:02:33 | INFO     |     4. AA-0039: -9.14 kcal/mol (active: -9.14)
+2026-07-23 19:02:33 | INFO     |     5. AA-0058: -9.10 kcal/mol (active: -9.10)
+2026-07-23 19:02:33 | INFO     |     6. AA-0033: -8.91 kcal/mol (active: -8.91)
+2026-07-23 19:02:33 | INFO     |     7. AA-0103: -8.91 kcal/mol (active: -8.91)
+2026-07-23 19:02:33 | INFO     |     8. CTRL_POS_DIOSM01: -8.84 kcal/mol (active: -8.84)
+2026-07-23 19:02:33 | INFO     |     9. CTRL_POS_PYRZ01: -8.49 kcal/mol (active: -8.49)
+2026-07-23 19:02:33 | INFO     |     10. AA-0243: -8.43 kcal/mol (active: -8.43)
+2026-07-23 19:02:33 | INFO     | ─── Phase 3 complete ───
+2026-07-23 19:02:33 | INFO     | ─── Phase 4: Selectivity & Resistance Analysis ───
+2026-07-23 19:02:33 | INFO     |   Docking top 10 vs Human Trypsin (1UTN)…
+2026-07-23 19:03:23 | INFO     |   Docking top 10 vs Human Carboxylesterase 1 (1YAH)…
+2026-07-23 19:04:13 | INFO     |   AA-0039: mechanism-restricted SI = 2.31 (pass).
+2026-07-23 19:04:13 | INFO     |   AA-0033: mechanism-restricted SI = 1.94 (pass).
+2026-07-23 19:04:13 | INFO     |   AA-0103: mechanism-restricted SI = 1.83 (pass).
+2026-07-23 19:04:13 | WARNING  |   AA-0243: Low mechanism-restricted selectivity (SI = 1.45 < 1.5). Flagged for off-target risk.
+2026-07-23 19:04:13 | WARNING  |   CTRL_POS_ODAN01: Low mechanism-restricted selectivity (SI = 1.21 < 1.5). Flagged for off-target risk.
+2026-07-23 19:04:13 | WARNING  |   AA-0000: Low mechanism-restricted selectivity (SI = 1.13 < 1.5). Flagged for off-target risk.
+2026-07-23 19:04:13 | WARNING  |   AA-0333: Low mechanism-restricted selectivity (SI = 1.18 < 1.5). Flagged for off-target risk.
+2026-07-23 19:04:13 | WARNING  |   AA-0002: Low mechanism-restricted selectivity (SI = 1.17 < 1.5). Flagged for off-target risk.
+2026-07-23 19:04:13 | WARNING  |   AA-0001: Low mechanism-restricted selectivity (SI = 1.05 < 1.5). Flagged for off-target risk.
+2026-07-23 19:04:17 | INFO     | ─── Phase 4 complete ───
+2026-07-23 19:04:17 | INFO     |   Final Top-10 ranked by PBP2a best energy.
+2026-07-23 19:04:17 | INFO     |   Diversified final set: 6 diverse + 10 filler = 16 candidate(s).
+2026-07-23 19:04:17 | INFO     |   Final report: 3 candidate(s) at SI >= 1.5, filled to 16 total.
+2026-07-23 19:04:17 | INFO     | ─── Phase 5: Reporting ───
+2026-07-23 19:04:17 | INFO     |   CSV report saved: output/top_candidates.csv
+2026-07-23 19:04:17 | INFO     |   JSON candidates saved: output/top_candidates.json
+2026-07-23 19:04:17 | INFO     |   Image saved: output/top1_AA-0039.png
+2026-07-23 19:04:17 | INFO     |   Image saved: output/top2_AA-0033.png
+2026-07-23 19:04:17 | INFO     |   Image saved: output/top3_AA-0103.png
+2026-07-23 19:04:18 | INFO     |   Interaction diagram saved: output/interaction_AA-0039.png
+2026-07-23 19:04:18 | INFO     |   Interaction diagram saved: output/interaction_AA-0033.png
+2026-07-23 19:04:18 | INFO     |   Interaction diagram saved: output/interaction_AA-0103.png
+2026-07-23 19:04:18 | INFO     | Interaction diagrams saved to output/
+2026-07-23 19:04:18 | INFO     |   PyMOL script saved: output/visualization.pml (3 ligand pose(s) loaded).
+2026-07-23 19:04:18 | INFO     |   Filter funnel saved: output/filter_funnel.json
+2026-07-23 19:04:18 | INFO     |   ROC curve saved: output/figures/roc_curve.png
+2026-07-23 19:04:18 | INFO     |   Energy distribution saved: output/figures/energy_distribution.png
+2026-07-23 19:04:18 | INFO     |   SI scatter plot saved: output/figures/si_scatter.png
+2026-07-23 19:04:18 | INFO     |   Filter funnel saved: output/figures/filter_funnel.png
+2026-07-23 19:04:18 | INFO     |   Binding diagram saved: output/figures/top3_binding_1_AA-0039.png
+2026-07-23 19:04:18 | INFO     |   Binding diagram saved: output/figures/top3_binding_2_AA-0033.png
+2026-07-23 19:04:18 | INFO     |   Binding diagram saved: output/figures/top3_binding_3_AA-0103.png
+2026-07-23 19:04:18 | INFO     |   All figures saved to output/figures
+2026-07-23 19:04:18 | INFO     | ============================================================
+2026-07-23 19:04:18 | INFO     |   PIPELINE SUMMARY
+2026-07-23 19:04:18 | INFO     | ============================================================
+2026-07-23 19:04:18 | INFO     |   Total compounds generated:     20
+2026-07-23 19:04:18 | INFO     |   After filtering:               16
+2026-07-23 19:04:18 | INFO     |   Top candidates reported:       16
+2026-07-23 19:04:18 | INFO     |   Successfully docked:           16
+2026-07-23 19:04:18 | INFO     |   Selectivity pass (SI >= 2.0):  3
+2026-07-23 19:04:18 | INFO     |   Docking engine:                Vina
+2026-07-23 19:04:18 | INFO     |   Redocking RMSD:                1.937 Å
+2026-07-23 19:04:18 | INFO     |   Redocking validated:           True
+2026-07-23 19:04:18 | INFO     |   Protocol validation: RMSD 1.937 Å (Validated)
+2026-07-23 19:04:18 | INFO     |   CSV report:                    output/top_candidates.csv
+2026-07-23 19:04:18 | INFO     |   Open output/visualization.pml in PyMOL to inspect binding poses.
+2026-07-23 19:04:18 | INFO     | ============================================================
+2026-07-23 19:04:18 | INFO     | Pipeline complete. Exiting.
+2026-07-23 20:52:01 | INFO     | AutoAntibiotic Discovery Pipeline v5.1.0
+2026-07-23 20:52:01 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 20:52:01 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 20:52:01 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 20:52:01 | INFO     |   ✓  All required Python packages found.
+2026-07-23 20:52:01 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 20:52:01 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 20:52:01 | INFO     |   Run mode (from config): science
+2026-07-23 20:52:01 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 20:52:01 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 20:52:01 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-23 20:52:01 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-23 20:52:01 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 20:52:01 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 20:52:01 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-23 20:52:01 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 20:52:01 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 20:52:02 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-23 20:53:06 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-23 20:53:06 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 20:53:06 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 20:53:07 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-23 20:53:07 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 20:53:07 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 20:53:07 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 20:53:08 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-23 20:54:05 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 20:54:05 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 20:54:05 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 20:54:05 | INFO     |   ✓  All required Python packages found.
+2026-07-23 20:54:05 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 20:54:05 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 20:54:05 | INFO     |   Run mode (from config): science
+2026-07-23 20:54:05 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 20:54:05 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 20:54:05 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-23 20:54:05 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-23 20:54:05 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-23 20:54:05 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-23 20:54:05 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-23 20:54:05 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 20:54:05 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 20:54:06 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-23 20:55:10 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-23 20:55:10 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 20:55:10 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 20:55:11 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-23 20:55:11 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 20:55:11 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 20:55:11 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 20:55:11 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-23 20:56:18 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 20:56:18 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-23 20:56:18 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 20:56:18 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 20:56:18 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 20:56:18 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 20:56:18 | INFO     |     Allosteric site center: None
+2026-07-23 20:56:18 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 20:56:18 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-23 20:56:18 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-23 20:56:18 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 20:56:18 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 20:56:18 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 20:56:19 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-23 20:58:17 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-23 20:58:17 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 20:58:17 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 20:58:17 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-23 20:58:17 | INFO     | ─── Phase 1 complete ───
+2026-07-23 20:58:17 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-23 20:58:17 | INFO     |   Native ligand (resname override 'AI8'): chain A, residue AI8
+2026-07-23 20:58:17 | INFO     |   Native ligand SMILES: CCONC(C(O)N[C@H](CO)[C@@H]1NC(C(O)O)[C@@H](SC2NC(C3CCN(C)CC3)CS2)CS1)[C@@H]1NSC(N)N1
+2026-07-23 20:58:18 | INFO     |   Native ligand PDBQT written to output/workdir/native_ligand.pdbqt
+2026-07-23 20:58:18 | INFO     |   Redocking native ligand into PBP2a…
+2026-07-23 20:58:18 | INFO     |   Redocking box: 18.7 x 29.1 x 21.4 Å (auto-sized from native ligand).
+2026-07-23 20:59:58 | INFO     |   [Vina stdout, conformer 0 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.952          0          0
+   2       -6.791      3.637      9.872
+   3        -6.77      3.405      7.121
+2026-07-23 20:59:59 | INFO     |   RMSD (Kabsch, 27 atoms) = 1.937 Å
+2026-07-23 20:59:59 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.251 Å
+2026-07-23 20:59:59 | INFO     |   Redocking RMSD (conformer 0, seed 1) = 1.937 Å (core 1.251 Å)
+2026-07-23 21:21:07 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 21:21:07 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 21:21:08 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 21:21:08 | INFO     |   ✓  All required Python packages found.
+2026-07-23 21:21:08 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 21:21:08 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 21:21:08 | INFO     |   Run mode (from config): science
+2026-07-23 21:21:08 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 21:21:08 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 21:21:08 | INFO     |   Structure 1UTN already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1UTN.pdb
+2026-07-23 21:21:08 | INFO     |   Structure 1YAH already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1YAH.pdb
+2026-07-23 21:21:08 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 21:21:08 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 21:21:08 | INFO     |   Structure 4DKI already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/4DKI.pdb
+2026-07-23 21:21:08 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 21:21:08 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 21:21:08 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 21:21:08 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 21:21:08 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-23 21:21:08 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 21:21:08 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 21:21:08 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 21:21:08 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 21:21:08 | INFO     |     Allosteric site center: None
+2026-07-23 21:21:08 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 21:21:08 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 21:21:08 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 21:21:08 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 21:21:08 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 21:21:08 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 21:21:08 | INFO     |   Grid config saved: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/grid_configs/grid_active.txt
+2026-07-23 21:21:08 | INFO     | ─── Phase 1 complete ───
+2026-07-23 21:21:08 | INFO     |   Active-site box: (20.0, 20.0, 20.0); center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 21:21:08 | INFO     |   Loaded 18 known actives
+2026-07-23 21:21:08 | INFO     |   Loaded 150 known decoys
+2026-07-23 21:21:08 | INFO     |   Docking 168 compounds against PBP2a active site...
+2026-07-23 21:23:15 | INFO     |     Docked 25 / 168 (enrich_c0)
+2026-07-23 21:25:31 | INFO     |     Docked 50 / 168 (enrich_c0)
+2026-07-23 21:27:43 | INFO     |     Docked 75 / 168 (enrich_c0)
+2026-07-23 21:30:06 | INFO     |     Docked 100 / 168 (enrich_c0)
+2026-07-23 21:33:17 | INFO     |     Docked 125 / 168 (enrich_c0)
+2026-07-23 21:35:49 | INFO     |     Docked 150 / 168 (enrich_c0)
+2026-07-23 21:38:58 | INFO     |     Docked 25 / 168 (enrich_c1)
+2026-07-23 21:40:58 | INFO     |     Docked 50 / 168 (enrich_c1)
+2026-07-23 21:42:52 | INFO     |     Docked 75 / 168 (enrich_c1)
+2026-07-23 21:44:52 | INFO     |     Docked 100 / 168 (enrich_c1)
+2026-07-23 21:47:55 | INFO     |     Docked 125 / 168 (enrich_c1)
+2026-07-23 21:50:04 | INFO     |     Docked 150 / 168 (enrich_c1)
+2026-07-23 22:01:36 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 22:01:36 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 22:01:36 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 22:01:36 | INFO     |   ✓  All required Python packages found.
+2026-07-23 22:01:36 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 22:01:36 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 22:01:36 | INFO     |   Run mode (from config): science
+2026-07-23 22:01:36 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 22:01:36 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 22:01:36 | INFO     |   Structure 1UTN already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1UTN.pdb
+2026-07-23 22:01:36 | INFO     |   Structure 1YAH already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1YAH.pdb
+2026-07-23 22:01:36 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 22:01:36 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 22:01:36 | INFO     |   Structure 4DKI already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/4DKI.pdb
+2026-07-23 22:01:36 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 22:01:36 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 22:01:36 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 22:01:36 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 22:01:36 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-23 22:01:36 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 22:01:36 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 22:01:36 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 22:01:36 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 22:01:36 | INFO     |     Allosteric site center: None
+2026-07-23 22:01:36 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 22:01:36 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 22:01:36 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 22:01:36 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 22:01:36 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 22:01:36 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 22:01:36 | INFO     |   Grid config saved: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/grid_configs/grid_active.txt
+2026-07-23 22:01:36 | INFO     | ─── Phase 1 complete ───
+2026-07-23 22:01:36 | INFO     |   Active-site box: (20.0, 20.0, 20.0); center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 22:01:36 | INFO     |   Loaded 10 known actives
+2026-07-23 22:01:36 | INFO     |   Loaded 150 known decoys
+2026-07-23 22:01:36 | INFO     |   Docking 160 compounds against PBP2a active site...
+2026-07-23 22:03:59 | INFO     |     Docked 25 / 160 (enrich_c0)
+2026-07-23 22:06:14 | INFO     |     Docked 50 / 160 (enrich_c0)
+2026-07-23 22:08:31 | INFO     |     Docked 75 / 160 (enrich_c0)
+2026-07-23 22:10:42 | INFO     |     Docked 100 / 160 (enrich_c0)
+2026-07-23 22:14:05 | INFO     |     Docked 125 / 160 (enrich_c0)
+2026-07-23 22:16:39 | INFO     |     Docked 150 / 160 (enrich_c0)
+2026-07-23 22:19:21 | INFO     |     Docked 25 / 160 (enrich_c1)
+2026-07-23 22:21:30 | INFO     |     Docked 50 / 160 (enrich_c1)
+2026-07-23 22:23:36 | INFO     |     Docked 75 / 160 (enrich_c1)
+2026-07-23 22:25:27 | INFO     |     Docked 100 / 160 (enrich_c1)
+2026-07-23 22:28:13 | INFO     |     Docked 125 / 160 (enrich_c1)
+2026-07-23 22:30:46 | INFO     |     Docked 150 / 160 (enrich_c1)
+2026-07-23 22:33:12 | INFO     |     Docked 25 / 160 (enrich_c2)
+2026-07-23 22:35:14 | INFO     |     Docked 50 / 160 (enrich_c2)
+2026-07-23 22:37:14 | INFO     |     Docked 75 / 160 (enrich_c2)
+2026-07-23 22:39:29 | INFO     |     Docked 100 / 160 (enrich_c2)
+2026-07-23 22:42:34 | INFO     |     Docked 125 / 160 (enrich_c2)
+2026-07-23 22:44:39 | INFO     |     Docked 150 / 160 (enrich_c2)
+2026-07-23 22:45:00 | INFO     | ==================================================
+2026-07-23 22:45:00 | INFO     |   Enrichment validation (independent labels): AUC=0.124  EF_1%=0.00  EF_5%=0.00
+2026-07-23 22:45:00 | INFO     |   VERDICT: FAIL (AUC>=0.7 and EF_1%>=5 required)
+2026-07-23 22:45:00 | INFO     | ==================================================
+2026-07-23 22:46:03 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 22:46:03 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 22:46:03 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 22:46:03 | INFO     |   ✓  All required Python packages found.
+2026-07-23 22:46:03 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 22:46:03 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 22:46:03 | INFO     |   Run mode (from config): science
+2026-07-23 22:46:03 | INFO     |   Structure 3ZG0 already local: output/pdb_enrich/3ZG0.pdb
+2026-07-23 22:46:03 | INFO     |   Structure 1VQQ already local: output/pdb_enrich/1VQQ.pdb
+2026-07-23 22:46:03 | INFO     |   Structure 1UTN already local: output/pdb_enrich/1UTN.pdb
+2026-07-23 22:46:03 | INFO     |   Structure 1YAH already local: output/pdb_enrich/1YAH.pdb
+2026-07-23 22:46:03 | INFO     |   Structure 1VQQ already local: output/pdb_enrich/1VQQ.pdb
+2026-07-23 22:46:03 | INFO     |   Structure 3ZG0 already local: output/pdb_enrich/3ZG0.pdb
+2026-07-23 22:46:03 | INFO     |   Structure 4DKI already local: output/pdb_enrich/4DKI.pdb
+2026-07-23 22:46:03 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 22:46:03 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 22:46:03 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 22:46:03 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 22:46:03 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-23 22:46:03 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 22:46:03 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 22:46:03 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 22:46:03 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 22:46:03 | INFO     |     Allosteric site center: None
+2026-07-23 22:46:03 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 22:46:03 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 22:46:03 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 22:46:03 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 22:46:03 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 22:46:03 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 22:46:03 | INFO     |   Grid config saved: output/workdir_enrich/grid_configs/grid_active.txt
+2026-07-23 22:46:03 | INFO     | ─── Phase 1 complete ───
+2026-07-23 22:57:52 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 22:57:52 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 22:57:52 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 22:57:52 | INFO     |   ✓  All required Python packages found.
+2026-07-23 22:57:52 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 22:57:52 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 22:57:52 | INFO     |   Run mode (from config): science
+2026-07-23 22:57:52 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 22:57:52 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 22:57:52 | INFO     |   Structure 1UTN already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1UTN.pdb
+2026-07-23 22:57:52 | INFO     |   Structure 1YAH already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1YAH.pdb
+2026-07-23 22:57:52 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 22:57:52 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 22:57:52 | INFO     |   Structure 4DKI already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/4DKI.pdb
+2026-07-23 22:57:52 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 22:57:52 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 22:57:52 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_clean.pdb
+2026-07-23 22:58:57 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_clean.pdbqt
+2026-07-23 22:58:57 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 22:58:57 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 22:58:57 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_holo_clean.pdbqt
+2026-07-23 22:58:58 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 22:58:58 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 22:58:58 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 22:58:58 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdb
+2026-07-23 23:00:05 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-23 23:00:05 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-23 23:00:05 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 23:00:05 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 23:00:05 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 23:00:05 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 23:00:05 | INFO     |     Allosteric site center: None
+2026-07-23 23:00:05 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 23:00:05 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/trypsin_clean.pdb
+2026-07-23 23:00:05 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/trypsin_clean.pdbqt
+2026-07-23 23:00:05 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 23:00:05 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 23:00:05 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 23:00:06 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/CES1_clean.pdb
+2026-07-23 23:02:04 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/CES1_clean.pdbqt
+2026-07-23 23:02:04 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 23:02:04 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 23:02:04 | INFO     |   Grid config saved: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/grid_configs/grid_active.txt
+2026-07-23 23:02:04 | INFO     | ─── Phase 1 complete ───
+2026-07-23 23:02:04 | INFO     |   Active-site box: (20.0, 20.0, 20.0); center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 23:02:04 | INFO     |   Loaded 4 known actives
+2026-07-23 23:02:04 | INFO     |   Loaded 150 known decoys
+2026-07-23 23:02:04 | INFO     |   Docking 154 compounds against PBP2a active site...
+2026-07-23 23:04:42 | INFO     |     Docked 25 / 154 (enrich_c0)
+2026-07-23 23:07:00 | INFO     |     Docked 50 / 154 (enrich_c0)
+2026-07-23 23:08:59 | INFO     |     Docked 75 / 154 (enrich_c0)
+2026-07-23 23:11:57 | INFO     |     Docked 100 / 154 (enrich_c0)
+2026-07-23 23:14:51 | INFO     |     Docked 125 / 154 (enrich_c0)
+2026-07-23 23:17:06 | INFO     |     Docked 150 / 154 (enrich_c0)
+2026-07-23 23:19:27 | INFO     |     Docked 25 / 154 (enrich_c1)
+2026-07-23 23:21:32 | INFO     |     Docked 50 / 154 (enrich_c1)
+2026-07-23 23:23:29 | INFO     |     Docked 75 / 154 (enrich_c1)
+2026-07-23 23:26:03 | INFO     |     Docked 100 / 154 (enrich_c1)
+2026-07-23 23:28:31 | INFO     |     Docked 125 / 154 (enrich_c1)
+2026-07-23 23:30:29 | INFO     |     Docked 150 / 154 (enrich_c1)
+2026-07-23 23:32:54 | INFO     |     Docked 25 / 154 (enrich_c2)
+2026-07-23 23:34:55 | INFO     |     Docked 50 / 154 (enrich_c2)
+2026-07-23 23:36:49 | INFO     |     Docked 75 / 154 (enrich_c2)
+2026-07-23 23:39:22 | INFO     |     Docked 100 / 154 (enrich_c2)
+2026-07-23 23:41:59 | INFO     |     Docked 125 / 154 (enrich_c2)
+2026-07-23 23:44:09 | INFO     |     Docked 150 / 154 (enrich_c2)
+2026-07-23 23:44:11 | INFO     | ==================================================
+2026-07-23 23:44:11 | INFO     |   Enrichment validation (independent labels): AUC=0.270  EF_1%=0.00  EF_5%=0.00
+2026-07-23 23:44:11 | INFO     |   VERDICT: FAIL (AUC>=0.7 and EF_1%>=5 required)
+2026-07-23 23:44:11 | INFO     | ==================================================
+2026-07-23 23:44:27 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 23:44:27 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 23:44:27 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 23:44:27 | INFO     |   ✓  All required Python packages found.
+2026-07-23 23:44:27 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 23:44:27 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 23:44:27 | INFO     |   Run mode (from config): science
+2026-07-23 23:44:27 | INFO     |   Structure 3ZG0 already local: output/pdb_enrich/3ZG0.pdb
+2026-07-23 23:44:27 | INFO     |   Structure 1VQQ already local: output/pdb_enrich/1VQQ.pdb
+2026-07-23 23:44:27 | INFO     |   Structure 1UTN already local: output/pdb_enrich/1UTN.pdb
+2026-07-23 23:44:27 | INFO     |   Structure 1YAH already local: output/pdb_enrich/1YAH.pdb
+2026-07-23 23:44:27 | INFO     |   Structure 1VQQ already local: output/pdb_enrich/1VQQ.pdb
+2026-07-23 23:44:27 | INFO     |   Structure 3ZG0 already local: output/pdb_enrich/3ZG0.pdb
+2026-07-23 23:44:27 | INFO     |   Structure 4DKI already local: output/pdb_enrich/4DKI.pdb
+2026-07-23 23:44:27 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 23:44:27 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 23:45:10 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-23 23:45:10 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-23 23:45:10 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-23 23:45:10 | INFO     |   ✓  All required Python packages found.
+2026-07-23 23:45:10 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-23 23:45:10 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-23 23:45:10 | INFO     |   Run mode (from config): science
+2026-07-23 23:45:10 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 23:45:10 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 23:45:10 | INFO     |   Structure 1UTN already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1UTN.pdb
+2026-07-23 23:45:10 | INFO     |   Structure 1YAH already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1YAH.pdb
+2026-07-23 23:45:10 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-23 23:45:10 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-23 23:45:10 | INFO     |   Structure 4DKI already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/4DKI.pdb
+2026-07-23 23:45:10 | INFO     | Science mode: real scientific validation expected.
+2026-07-23 23:45:10 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-23 23:45:11 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_clean.pdb
+2026-07-23 23:46:15 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_clean.pdbqt
+2026-07-23 23:46:15 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-23 23:46:15 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 23:46:16 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_holo_clean.pdbqt
+2026-07-23 23:46:16 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-23 23:46:16 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 23:46:16 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-23 23:46:17 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdb
+2026-07-23 23:47:23 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-23 23:47:23 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-23 23:47:23 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-23 23:47:23 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 23:47:23 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-23 23:47:23 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-23 23:47:23 | INFO     |     Allosteric site center: None
+2026-07-23 23:47:23 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-23 23:47:23 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/trypsin_clean.pdb
+2026-07-23 23:47:24 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/trypsin_clean.pdbqt
+2026-07-23 23:47:24 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-23 23:47:24 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-23 23:47:24 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-23 23:47:24 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/CES1_clean.pdb
+2026-07-23 23:49:22 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/CES1_clean.pdbqt
+2026-07-23 23:49:22 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-23 23:49:22 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-23 23:49:22 | INFO     |   Grid config saved: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/grid_configs/grid_active.txt
+2026-07-23 23:49:22 | INFO     | ─── Phase 1 complete ───
+2026-07-23 23:49:22 | INFO     |   Active-site box: (20.0, 20.0, 20.0); center: [23.95072216 27.87146293 88.53164786]
+2026-07-23 23:49:22 | INFO     |   Loaded 4 known actives
+2026-07-23 23:49:22 | INFO     |   Loaded 150 known decoys
+2026-07-23 23:49:22 | INFO     |   Docking 154 compounds against PBP2a active site...
+2026-07-23 23:52:05 | INFO     |     Docked 25 / 154 (enrich_c0)
+2026-07-23 23:54:23 | INFO     |     Docked 50 / 154 (enrich_c0)
+2026-07-23 23:56:29 | INFO     |     Docked 75 / 154 (enrich_c0)
+2026-07-23 23:59:33 | INFO     |     Docked 100 / 154 (enrich_c0)
+2026-07-24 00:02:20 | INFO     |     Docked 125 / 154 (enrich_c0)
+2026-07-24 00:04:36 | INFO     |     Docked 150 / 154 (enrich_c0)
+2026-07-24 00:07:01 | INFO     |     Docked 25 / 154 (enrich_c1)
+2026-07-24 00:09:13 | INFO     |     Docked 50 / 154 (enrich_c1)
+2026-07-24 00:11:02 | INFO     |     Docked 75 / 154 (enrich_c1)
+2026-07-24 00:13:38 | INFO     |     Docked 100 / 154 (enrich_c1)
+2026-07-24 00:16:22 | INFO     |     Docked 125 / 154 (enrich_c1)
+2026-07-24 00:18:33 | INFO     |     Docked 150 / 154 (enrich_c1)
+2026-07-24 00:18:39 | INFO     | ==================================================
+2026-07-24 00:18:39 | INFO     |   Enrichment validation (independent labels): AUC=0.423  EF_1%=0.00  EF_5%=0.00
+2026-07-24 00:18:39 | INFO     |   VERDICT: FAIL (AUC>=0.7 and EF_1%>=5 required)
+2026-07-24 00:18:39 | INFO     | ==================================================
+2026-07-24 00:19:26 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-24 00:19:26 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-24 00:19:26 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-24 00:19:26 | INFO     |   ✓  All required Python packages found.
+2026-07-24 00:19:26 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-24 00:19:26 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-24 00:19:26 | INFO     |   Run mode (from config): science
+2026-07-24 00:19:26 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-24 00:19:26 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-24 00:19:26 | INFO     |   Structure 1UTN already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1UTN.pdb
+2026-07-24 00:19:26 | INFO     |   Structure 1YAH already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1YAH.pdb
+2026-07-24 00:19:26 | INFO     |   Structure 1VQQ already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/1VQQ.pdb
+2026-07-24 00:19:26 | INFO     |   Structure 3ZG0 already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/3ZG0.pdb
+2026-07-24 00:19:26 | INFO     |   Structure 4DKI already local: /Users/tom/Documents/apps/AutoAntibiotic/output/pdb_enrich/4DKI.pdb
+2026-07-24 00:19:26 | INFO     | Science mode: real scientific validation expected.
+2026-07-24 00:19:26 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-24 00:19:26 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_clean.pdb
+2026-07-24 00:20:31 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_clean.pdbqt
+2026-07-24 00:20:31 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-24 00:20:31 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-24 00:20:31 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_holo_clean.pdbqt
+2026-07-24 00:20:31 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-24 00:20:32 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-24 00:20:32 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_3ZG0_clean.pdbqt
+2026-07-24 00:20:32 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdb
+2026-07-24 00:21:38 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-24 00:21:38 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/PBP2a_4DKI_clean.pdbqt
+2026-07-24 00:21:38 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-24 00:21:38 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-24 00:21:38 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-24 00:21:38 | WARNING  |   ⚠  Allosteric residues ['TYR105', 'GLN199', 'GLU237'] missing: name 'cleaned_pdb' is not defined
+2026-07-24 00:21:38 | INFO     |     Allosteric site center: None
+2026-07-24 00:21:38 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-24 00:21:39 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/trypsin_clean.pdb
+2026-07-24 00:21:39 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/trypsin_clean.pdbqt
+2026-07-24 00:21:39 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-24 00:21:39 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-24 00:21:39 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-24 00:21:39 | INFO     |   Polar hydrogens added to /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/CES1_clean.pdb
+2026-07-24 00:23:37 | INFO     |   Receptor PDBQT written via obabel (-xr): /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/CES1_clean.pdbqt
+2026-07-24 00:23:37 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-24 00:23:37 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-24 00:23:37 | INFO     |   Grid config saved: /Users/tom/Documents/apps/AutoAntibiotic/output/workdir_enrich/grid_configs/grid_active.txt
+2026-07-24 00:23:37 | INFO     | ─── Phase 1 complete ───
+2026-07-24 00:23:37 | INFO     |   Active-site box: (20.0, 20.0, 20.0); center: [23.95072216 27.87146293 88.53164786]
+2026-07-24 00:23:37 | INFO     |   Loaded 4 known actives
+2026-07-24 00:23:37 | INFO     |   Loaded 150 known decoys
+2026-07-24 00:23:37 | INFO     |   Docking 154 compounds against PBP2a active site...
+2026-07-24 00:26:18 | INFO     |     Docked 25 / 154 (enrich_c0)
+2026-07-24 00:28:33 | INFO     |     Docked 50 / 154 (enrich_c0)
+2026-07-24 00:30:59 | INFO     |     Docked 75 / 154 (enrich_c0)
+2026-07-24 00:33:58 | INFO     |     Docked 100 / 154 (enrich_c0)
+2026-07-24 00:37:22 | INFO     |     Docked 125 / 154 (enrich_c0)
+2026-07-24 00:40:07 | INFO     |     Docked 150 / 154 (enrich_c0)
+2026-07-24 00:40:15 | INFO     | ==================================================
+2026-07-24 00:40:15 | INFO     |   Enrichment validation (independent labels): AUC=0.792  EF_1%=19.25  EF_5%=4.81
+2026-07-24 00:40:15 | INFO     |   VERDICT: PASS (AUC>=0.7 and EF_1%>=5 required)
+2026-07-24 00:40:15 | INFO     | ==================================================

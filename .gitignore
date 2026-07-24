@@ -1,10 +1,8 @@
-output_runs/
-*.log
+*.egg-info/
 paper.pdf
 benchmarks/
 figures/
-# Pipeline outputs (PDBs, PDBQTs, CSVs, PNGs, logs, working intermediates)
-output/
+output/*/
 
 # Generated release status badge (written by main() after redocking validation)
 status.json
@@ -12,7 +10,6 @@ status.json
 # Python
 __pycache__/
 *.py[cod]
-*.egg-info/
 dist/
 build/
 *.so
