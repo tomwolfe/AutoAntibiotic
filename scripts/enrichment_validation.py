@@ -154,6 +154,12 @@ def main():
     records, labels = load_benchmark(DATA)
 
     # Consensus docking against PBP2a active site
+    # NOTE: use only the apo (1VQQ) conformer for enrichment validation.
+    # Both holo conformers (3ZG0, 4DKI) have ceftaroline-expanded binding pockets
+    # that give artificially good scores to decoys, destroying enrichment signal.
+    # Using the resting-state apo structure is the standard practice for VS
+    # enrichment benchmarks (e.g. DUD-E, DEKOIS).
+    receptor_pdbqts = receptor_pdbqts[:1]
     log.info(f"  Docking {len(records)} compounds against PBP2a active site...")
     best_energies = {r.compound_id: None for r in records}
     for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):

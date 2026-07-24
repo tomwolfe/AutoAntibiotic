@@ -1,28 +1,5 @@
 smiles,compound_id,pIC50,ki_uM,citation
-CC(C)(C=O)c1cc(C2=NOC(=N2)c3ccc4c(c3)OCC(=O)N4)ccc1O,AAB_TAN01,6.0,1.0,Tan 2012 NCB
-CCCC(=O)Nc1ccc(-c2nc(C3=CC=C(C(=O)O)C=C3)no2)cc1,AAB_TAN02,5.7,2.0,Tan 2012 NCB
-O=C(O)c1ccc(C2=NOC(=N2)c3ccc(NC(=O)c4ccco4)cc3)cc1,AAB_TAN03,5.5,3.2,Tan 2012 NCB
-O=C(Nc1ccc(-c2nc(C3=CC=C(O)C=C3)no2)cc1)c1ccccc1F,AAB_TAN04,5.3,5.0,Tan 2012 NCB
-N#Cc1ccc(NC(=O)N2C(c3ccccc3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN01,5.0,10.0,Bouley 2015 JACS
-N#Cc1ccc(NC(=O)N2C(c3ccc(F)cc3)=NC(c3cccc(C(=O)O)c3)=Nc3ccccc32)cc1,AAB_QUIN02,4.8,15.8,Bouley 2015 JACS
-CC1(C)SC2C(NC(=O)Cc3ccc(O)cc3)C(=O)N2C1C(=O)O,AAB_ODAN01,5.0,10.0,O'Daniel 2014 JACS
-CC1(C)SC2C(NC(=O)Cc3ccc(Cl)cc3)C(=O)N2C1C(=O)O,AAB_ODAN02,4.7,20.0,O'Daniel 2014 JACS
-CC1=CC(=O)C2=C(O1)C(=C(C3=C2C(=C(C(=C3)CC=C(C)C)O)O)O)O,AAB_MANG01,4.48,33.43,Anwer 2024 CMB
-Cc1ccc(C(=O)Nc2ccc(-c3cc(nn3C)c4ccc(F)cc4)cc2)cc1,AAB_PYRZ01,4.5,31.6,Shalaby 2019 APS
-Cc1ccc(C(=O)Nc2ccc(-c3ncnc4cc(C)c(C)cc34)cc2)cc1,AAB_BENZ01,4.3,50.1,Shalaby 2019 APS
-CC1C(C(C(O1)Oc2ccc3c(c2)C(=O)C=C(O3)c4ccc(O)c(OC)c4)O)O,AAB_DIOSM01,4.0,100.0,Molecules 2020
-O=C(O)C(CN1CCCC1)C1C2CC3CC1CC(C2)C3,AAB_AA_ADA,4.3,50.0,Adamantane scaffold
- O=C(O)C(CCN1CCCC1)C12CC(CC1)(CC2),AAB_AA_SPIRO,4.0,100.0,Spiro scaffold
- N#Cc1ccc(Nc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)cc1,AA-0039,4.9,125.9,BRICS-derived oxadiazole
- N#Cc1ccc(Nc2ccc(-c3ccc(F)cc3)cc2)cc1,AA-0033,4.9,123.6,BRICS-derived fluorophenyl
- Cn1nc(NC2C(=O)N3C2SC(C)(C)C3C(=O)O)cc1Nc1ccc(C#N)cc1,AA-0103,4.9,123.5,BRICS-derived thiazolidine
- Cn1nc(-c2noc(Nc3ccc(C#N)cc3)n2)cc1Nc1ccc(C#N)cc1,AA-0126,4.8,158.5,BRICS-derived isoxazole
- AA-0110,AA-0110,4.8,158.5,BRICS-derived thiazolidine
- AA-0050,AA-0050,4.7,200.0,BRICS-derived oxadiazole
- AA-0075,AA-0075,4.6,250.0,BRICS-derived quinazoline
- AA-0120,AA-0120,4.5,316.0,BRICS-derived pyrazolopyrimidine
- AA-0088,AA-0088,4.4,398.0,BRICS-derived benzothiazole
- AA-0045,AA-0045,4.3,501.0,BRICS-derived triazolopyridine
- AA-0022,AA-0022,4.2,631.0,BRICS-derived pyrazole
- AA-0067,AA-0067,4.1,794.0,BRICS-derived imidazole
- AA-0099,AA-0099,4.0,1000.0,BRICS-derived thiazole
+N#Cc1ccc(Nc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)cc1,AA-0039,4.9,125.9,BRICS-derived oxadiazole
+N#Cc1ccc(Nc2ccc(-c3ccc(F)cc3)cc2)cc1,AA-0033,4.9,123.6,BRICS-derived fluorophenyl
+Cn1nc(NC2C(=O)N3C2SC(C)(C)C3C(=O)O)cc1Nc1ccc(C#N)cc1,AA-0103,4.9,123.5,BRICS-derived thiazolidine
+Cn1nc(-c2noc(Nc3ccc(C#N)cc3)n2)cc1Nc1ccc(C#N)cc1,AA-0126,4.8,158.5,BRICS-derived isoxazole

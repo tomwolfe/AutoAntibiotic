@@ -1,6 +1,6 @@
 output_runs/
 *.log
-paper*
+paper.pdf
 benchmarks/
 figures/
 # Pipeline outputs (PDBs, PDBQTs, CSVs, PNGs, logs, working intermediates)

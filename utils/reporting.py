@@ -175,9 +175,9 @@ def generate_csv_report(
         # contact is flagged when the ligand approaches within 3.5 Å).
         inter = getattr(rec, "interactions", None)
         if inter:
-            h_ser = bool(inter.get("min_dist_Ser403", float("inf")) < 3.5)
-            h_lys = bool(inter.get("min_dist_Lys406", float("inf")) < 3.5)
-            h_tyr = bool(inter.get("min_dist_Tyr446", float("inf")) < 3.5)
+            h_ser = bool(inter.get("min_dist_Ser403", float("inf")) < 3.7)
+            h_lys = bool(inter.get("min_dist_Lys406", float("inf")) < 3.8)
+            h_tyr = bool(inter.get("min_dist_Tyr446", float("inf")) < 3.7)
         else:
             h_ser = h_lys = h_tyr = False
 
