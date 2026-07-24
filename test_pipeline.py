@@ -1996,7 +1996,8 @@ class TestMechanismRestrictedSelectivity:
                 {"vina": True, "USE_VINA": True},
             )
 
-        assert out[0].selectivity_index == pytest.approx(2.5)
+        # SI = |E_PBP2a| / mean(|E_trypsin|, |E_CES1|) = 10.0 / 3.5 = 2.857
+        assert out[0].selectivity_index == pytest.approx(2.857142857)
         assert out[0].selectivity_confidence == "High"
 
     def test_raw_si_not_zeroed_on_tight_offtarget(self, tmp_path):
@@ -2025,7 +2026,8 @@ class TestMechanismRestrictedSelectivity:
                 records, targets, str(tmp_path),
                 {"vina": True, "USE_VINA": True},
             )
-        assert out[0].selectivity_index == pytest.approx(1.0)
+        # SI = |E_PBP2a| / mean(|E_trypsin|, |E_CES1|) = 9.0 / 6.0 = 1.5
+        assert out[0].selectivity_index == pytest.approx(1.5)
         assert out[0].off_target_risk is True
 
     def test_invalid_positive_human_energy_ignored(self, tmp_path):
@@ -2235,6 +2237,153 @@ class TestEnrichmentNoCircularLabeling:
                 f"enrichment_validation.py contains forbidden pattern "
                 f"'{pattern}' — labels must be independent of docking energy"
             )
+
+# ── Test: CES1 centroid-check radius ────────────────────────────────
+
+class TestCES1CentroidRadius:
+    """CES1 catalytic gorge is larger than trypsin's; poses at 8-11 Å
+    are legitimate for CES1 but not for trypsin (max_dist=8.0)."""
+
+    @staticmethod
+    def _make_pdbqt_line(x: float, y: float, z: float) -> str:
+        """Build a PDBQT ATOM line with coordinates at the correct columns."""
+        xs = f"{x:8.3f}"
+        ys = f"{y:8.3f}"
+        zs = f"{z:8.3f}"
+        # PDB column layout: cols 31-38=x, 39-46=y, 47-54=z, 55-60=occ, 61-66=temp, 77-78=element
+        return f"ATOM      1  C   LIG A   1    {xs}{ys}{zs}  1.00  0.00           C\n"
+
+    def _check_centroid_distance(self, x, y, z, tag, expected_dist, max_dist, should_be_rejected):
+        from discovery_pipeline import _parse_pdbqt_heavy_coords
+        import tempfile as _tf, shutil as _sh
+        center = np.array([0.0, 0.0, 0.0])
+        tmp = _tf.mkdtemp()
+        try:
+            pdbqt_path = os.path.join(tmp, f"TEST_{tag}_out.pdbqt")
+            with open(pdbqt_path, "w") as f:
+                f.write(self._make_pdbqt_line(x, y, z))
+                f.write("END\n")
+            coords = _parse_pdbqt_heavy_coords(pdbqt_path)
+            assert len(coords) == 1, f"No coords parsed from {x},{y},{z}"
+            centroid = np.mean(coords, axis=0)
+            dist = float(np.linalg.norm(centroid - center))
+            assert dist == pytest.approx(expected_dist, abs=0.01)
+            if should_be_rejected:
+                assert dist > max_dist, f"Pose at {dist:.2f} Å should be > {max_dist} Å"
+            else:
+                assert dist <= max_dist, f"Pose at {dist:.2f} Å should be ≤ {max_dist} Å"
+        finally:
+            _sh.rmtree(tmp, ignore_errors=True)
+
+    def test_ces1_pose_at_10_5A_accepted(self):
+        """A pose at 10.5 Å from CES1 center is ACCEPTED (max_dist=11.0)."""
+        self._check_centroid_distance(10.5, 0, 0, "CES1_OK", 10.5, 11.0, False)
+
+    def test_ces1_pose_at_12_0A_rejected(self):
+        """A pose at 12.0 Å from CES1 center is REJECTED (max_dist=11.0)."""
+        self._check_centroid_distance(12.0, 0, 0, "CES1_FAR", 12.0, 11.0, True)
+
+    def test_trypsin_at_9_0A_rejected(self):
+        """A pose at 9.0 Å from trypsin center is REJECTED (default max_dist=8.0)."""
+        self._check_centroid_distance(9.0, 0, 0, "TRYP_FAR", 9.0, 8.0, True)
+
+
+# ── Test: Library Bemis-Murcko framework diversity ──────────────────
+
+class TestLibraryBemisMurckoDiversity:
+    """The generated library must contain ≥ 4 distinct Bemis-Murcko
+    frameworks and no framework exceeding 15% of total compounds."""
+
+    def test_library_has_diverse_frameworks(self):
+        from rdkit.Chem.Scaffolds import MurckoScaffold as _murcko
+        library = generate_candidate_library(target_count=50)
+        assert len(library) >= 4, "Library too small for framework diversity test"
+        framework_counts = {}
+        for rec in library:
+            mol = rec.mol if rec.mol is not None else Chem.MolFromSmiles(rec.smiles)
+            if mol is None:
+                continue
+            try:
+                scaffold = _murcko.GetScaffoldForMol(mol)
+                framework = Chem.MolToSmiles(scaffold) if scaffold else "none"
+            except Exception:
+                framework = "none"
+            framework_counts[framework] = framework_counts.get(framework, 0) + 1
+        distinct_frameworks = len(framework_counts)
+        assert distinct_frameworks >= 4, (
+            f"Expected ≥ 4 distinct Bemis-Murcko frameworks, got {distinct_frameworks}"
+        )
+        max_frac = 0.15
+        total = sum(framework_counts.values())
+        for fw, count in framework_counts.items():
+            frac = count / total
+            assert frac <= max_frac + 0.02, (
+                f"Framework {fw[:40] if fw != 'none' else 'none'} exceeds {max_frac*100:.0f}% "
+                f"limit: {count}/{total} = {frac*100:.1f}%"
+            )
+
+
+# ── Test: Enrichment validation writes results ──────────────────────
+
+class TestEnrichmentValidationWritesResults:
+    """When Vina is mocked, enrichment validation must write
+    enrichment_results.json with auc, ef_1pct, and verdict keys."""
+
+    def test_enrichment_writes_json_with_keys(self, tmp_path):
+        from discovery_pipeline import _run_enrichment_validation
+        import json
+
+        deps = {"USE_VINA": True, "vina": True}
+        targets = {
+            "PBP2a": {
+                "pdbqt": "/nonexistent/test.pdbqt",
+                "receptor_pdbqts": ["/nonexistent/test.pdbqt"],
+                "active_center": np.array([0.0, 0.0, 0.0]),
+                "cleaned_pdb": None,
+            },
+        }
+
+        # Patch load_benchmark and compute_roc to return mock data
+        # without real Vina.  The import happens inside _run_enrichment_validation
+        # (which adds scripts/ to sys.path), so ensure it's available for patching.
+        _scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
+        sys.path.insert(0, _scripts_dir)
+        import enrichment_validation as _ev
+        with patch.object(_ev, "load_benchmark") as mock_load, \
+             patch.object(_ev, "compute_roc") as mock_roc, \
+             patch("discovery_pipeline.os.path.exists", return_value=True), \
+             patch("discovery_pipeline._dock_compounds_parallel") as mock_dock:
+
+            mock_records = [
+                CompoundRecord(compound_id="ACT_0001", smiles="c1ccccc1"),
+                CompoundRecord(compound_id="DECOY_0001", smiles="c1ccccc1"),
+            ]
+            mock_labels = [1, 0]
+            mock_load.return_value = (mock_records, mock_labels)
+            mock_roc.return_value = ([0.0, 0.5, 1.0], [0.0, 0.8, 1.0], 0.85)
+            mock_dock.return_value = [
+                (mock_records[0], -9.0),
+                (mock_records[1], -4.0),
+            ]
+
+            # Patch OUTPUT_DIR to use tmp_path
+            import discovery_pipeline as P
+            original_output_dir = P.OUTPUT_DIR
+            P.OUTPUT_DIR = tmp_path
+            try:
+                _run_enrichment_validation(deps, targets, str(tmp_path))
+            finally:
+                P.OUTPUT_DIR = original_output_dir
+
+        json_path = tmp_path / "enrichment_results.json"
+        assert json_path.exists(), "enrichment_results.json was not written"
+        with open(json_path) as f:
+            data = json.load(f)
+        assert "auc" in data, "Missing 'auc' key"
+        assert "ef_1pct" in data, "Missing 'ef_1pct' key"
+        assert "verdict" in data, "Missing 'verdict' key"
+        assert data["verdict"] in ("PASS", "FAIL"), f"Unexpected verdict: {data['verdict']}"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

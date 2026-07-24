@@ -1832,7 +1832,7 @@ def analyze_selectivity_and_resistance(
         site_residues=CES1_CATALYTIC_RESIDUES,
     ) if targets["CES1"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
     ces1_center = targets["CES1"].get("active_center")
-    ces1_dock_func = _offtarget_dock_with_centroid_check(ces1_center) if ces1_center is not None else None
+    ces1_dock_func = _offtarget_dock_with_centroid_check(ces1_center, max_dist=11.0) if ces1_center is not None else None
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
         ces1_center, ces1_box,
@@ -1841,6 +1841,17 @@ def analyze_selectivity_and_resistance(
     )
     for rec, energy in ces1_results:
         rec.human_ces1_energy = energy
+
+    # ── Post-fix validation guard: detect possible surface-patch artifacts ──
+    for rec in top10:
+        pb2pa_best = rec.pb2pa_allosteric_energy if rec.pb2pa_allosteric_energy is not None else (rec.pb2pa_best_energy if rec.pb2pa_best_energy is not None else rec.pb2pa_active_energy)
+        if rec.human_ces1_energy is not None and pb2pa_best is not None:
+            if rec.human_ces1_energy < pb2pa_best:
+                log.warning(
+                    f"  {rec.compound_id}: CES1 energy ({rec.human_ces1_energy:.2f}) "
+                    f"stronger than PBP2a ({pb2pa_best:.2f}) "
+                    "\u2014 possible surface-patch artifact"
+                )
 
     for rec in top10:
         raw_human = [
@@ -2240,6 +2251,24 @@ def _run_enrichment_validation(
     ) if active_center is not None else ACTIVE_BOX_SIZE
 
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+    # Auto-generate decoys if the file is missing
+    decoy_csv = os.path.join(data_dir, "known_decoys.csv")
+    if not os.path.exists(decoy_csv):
+        build_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "build_decoys.py")
+        if os.path.exists(build_script):
+            log.info("  known_decoys.csv not found — auto-generating decoys…")
+            try:
+                subprocess.run([sys.executable, build_script], check=True, timeout=300,
+                               capture_output=True, text=True)
+                log.info("  Decoy generation complete.")
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                log.warning(f"  \u26a0  Auto-generation of decoys failed: {exc} — skipping enrichment")
+                return
+        else:
+            log.warning(f"  \u26a0  build_decoys.py not found at {build_script} — skipping enrichment")
+            return
+
     records, labels = load_benchmark(data_dir)
     if not records:
         log.warning("  \u26a0  No benchmark records loaded \u2014 skipping enrichment")
@@ -2550,8 +2579,14 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 
     # ── Phase 4.2: Final ranking ──
-    top10 = sorted(top10, key=lambda r: r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf"))
-    log.info("  Final Top-10 ranked by PBP2a best energy.")
+    top10 = sorted(top10, key=lambda r: (
+        r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf"),
+        -(1 if (r.interactions and
+                r.interactions.get("min_dist_Ser403", float("inf")) < 3.5 and
+                r.interactions.get("min_dist_Lys406", float("inf")) < 3.8)
+          else 0)
+    ))
+    log.info("  Final Top-10 ranked by PBP2a best energy (catalytic-engagement tiebreak).")
 
     # ── Phase 4.5: Diversity clustering ──
     # Pick a maximally dissimilar final set (Morgan Tanimoto ≤ 0.4) to fill the

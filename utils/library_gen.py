@@ -12,8 +12,9 @@ import pandas as pd
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import BRICS, rdMolDescriptors, Descriptors, AllChem, DataStructs, QED
+from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from config.constants import RANDOM_SEED, BETA_LACTAM_SMARTS
+from config.constants import RANDOM_SEED, BETA_LACTAM_SMARTS, SIMILARITY_THRESHOLD
 
 try:
     from rdkit.Chem import RDConfig
@@ -325,7 +326,36 @@ def generate_candidate_library(
             ))
     log.info(f"  After adding known actives: {len(records)} compounds.")
 
-    # Diversity filter: Tanimoto < 0.4 within library, < 0.7 to ceftaroline
+    # Bemis-Murcko framework cap: no framework > 15% of library
+    import random as _bm_random
+    _bm_random.seed(seed)
+    framework_counts = {}
+    framework_indices = {}
+    for idx, rec in enumerate(records):
+        mol = rec.mol if rec.mol is not None else Chem.MolFromSmiles(rec.smiles)
+        if mol is None:
+            continue
+        try:
+            scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+            framework = Chem.MolToSmiles(scaffold) if scaffold else "none"
+        except Exception:
+            framework = "none"
+        framework_counts[framework] = framework_counts.get(framework, 0) + 1
+        framework_indices.setdefault(framework, []).append(idx)
+    max_frac = 0.15
+    cap = max(1, int(len(records) * max_frac))
+    dropped = 0
+    for framework, indices in framework_indices.items():
+        if len(indices) > cap:
+            _bm_random.shuffle(indices)
+            keep = indices[:cap]
+            drop = set(indices[cap:])
+            records = [r for i, r in enumerate(records) if i not in drop]
+            dropped += len(drop)
+    if dropped:
+        log.info(f"  Bemis-Murcko framework cap: removed {dropped} compounds ({max_frac*100:.0f}% limit).")
+
+    # Diversity filter: Tanimoto < SIMILARITY_THRESHOLD within library, < 0.7 to ceftaroline
     ceft_fp = None
     ceft_mol = Chem.MolFromSmiles(CEFTAROLINE_SMILES)
     if ceft_mol:
@@ -345,7 +375,7 @@ def generate_candidate_library(
             if sim_to_ceft >= 0.7:
                 continue
         is_diverse = all(
-            DataStructs.TanimotoSimilarity(fp, existing_fp) < 0.4
+            DataStructs.TanimotoSimilarity(fp, existing_fp) < SIMILARITY_THRESHOLD
             for existing_fp in diversity_fps
         )
         if is_diverse:
