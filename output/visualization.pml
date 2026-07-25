@@ -16,22 +16,22 @@ dash wid 2.0
 distance hbond_tyr_1, Ligand_1_ALL_QU05, resi 446 & name OH, cutoff=3.5
 dash wid 2.0
 
-load 'output/workdir/ALL_SU14_active_c2_out.pdbqt', Ligand_2_ALL_SU14
-color byelement, Ligand_2_ALL_SU14
-show sticks, Ligand_2_ALL_SU14
-distance hbond_ser_2, Ligand_2_ALL_SU14, resi 403 & name OG, cutoff=3.5
+load 'output/workdir/BRICS-01163_active_c2_out.pdbqt', Ligand_2_BRICS-01163
+color byelement, Ligand_2_BRICS-01163
+show sticks, Ligand_2_BRICS-01163
+distance hbond_ser_2, Ligand_2_BRICS-01163, resi 403 & name OG, cutoff=3.5
 dash wid 2.0
-distance hbond_lys_2, Ligand_2_ALL_SU14, resi 406 & name NZ, cutoff=3.8
-dash wid 2.0
-distance hbond_tyr_2, Ligand_2_ALL_SU14, resi 446 & name OH, cutoff=3.5
+distance hbond_lys_2, Ligand_2_BRICS-01163, resi 406 & name NZ, cutoff=3.8
 dash wid 2.0
 
-load 'output/workdir/ALL_SU15_active_c2_out.pdbqt', Ligand_3_ALL_SU15
-color byelement, Ligand_3_ALL_SU15
-show sticks, Ligand_3_ALL_SU15
-distance hbond_ser_3, Ligand_3_ALL_SU15, resi 403 & name OG, cutoff=3.5
+load 'output/workdir/ALL_QU04_active_c2_out.pdbqt', Ligand_3_ALL_QU04
+color byelement, Ligand_3_ALL_QU04
+show sticks, Ligand_3_ALL_QU04
+distance hbond_ser_3, Ligand_3_ALL_QU04, resi 403 & name OG, cutoff=3.5
 dash wid 2.0
-distance hbond_lys_3, Ligand_3_ALL_SU15, resi 406 & name NZ, cutoff=3.8
+distance hbond_lys_3, Ligand_3_ALL_QU04, resi 406 & name NZ, cutoff=3.8
+dash wid 2.0
+distance hbond_tyr_3, Ligand_3_ALL_QU04, resi 446 & name OH, cutoff=3.5
 dash wid 2.0
 
 

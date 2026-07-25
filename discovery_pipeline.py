@@ -1097,6 +1097,7 @@ def prepare_targets(
     apo_path = _resolve_structure(PDB_IDS["PBP2a_apo"])
     trypsin_path = _resolve_structure(PDB_IDS["trypsin"])
     ces1_path = _resolve_structure(PDB_IDS["CES1"])
+    cyp3a4_path = _resolve_structure(PDB_IDS["CYP3A4"])
 
     # ── Consensus rigid docking: build a set of PBP2a receptor PDBQTs ──
     # Each conformer in PBP2A_CONFORMER_IDS is fetched (if not local) and
@@ -2508,6 +2509,12 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     all_records, filtered, n_total, n_filtered, funnel_counts = _generate_and_filter_library(
         target_count=target_count, library=library, config=config,
     )
+
+    # When --library is used, --count caps the number of compounds sent to docking
+    # (the library file may be much larger than what's practical to dock).
+    if library is not None and len(filtered) > target_count:
+        log.info(f"  Limiting docking to first {target_count} of {len(filtered)} filtered compounds.")
+        filtered = filtered[:target_count]
 
     # ── Phase 3: Virtual screening ──
     top10 = screen_library(filtered, targets, work_dir, deps)
