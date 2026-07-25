@@ -2643,10 +2643,12 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     try:
         pb2pa = targets.get("PBP2a", {})
         receptor_pdb = pb2pa.get("cleaned_pdb")
+        fig_dir = OUTPUT_DIR / "figures"
+        fig_dir.mkdir(parents=True, exist_ok=True)
         for rec in top3:
-            out_path = OUTPUT_DIR / f"interaction_{rec.compound_id}.png"
+            out_path = fig_dir / f"interaction_{rec.compound_id}.png"
             generate_interaction_diagram(rec, receptor_pdb, str(out_path))
-        log.info("Interaction diagrams saved to output/")
+        log.info(f"Interaction diagrams saved to {fig_dir}/")
     except Exception as exc:
         log.warning(f"  Could not generate interaction diagrams: {exc}")
 
