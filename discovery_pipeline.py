@@ -1828,11 +1828,11 @@ def analyze_selectivity_and_resistance(
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
     ces1_box = _auto_box_size(
         targets["CES1"].get("cleaned_pdb"), targets["CES1"].get("active_center"),
-        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=25.0, padding=4.0,
+        SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=2.0,
         site_residues=CES1_CATALYTIC_RESIDUES,
     ) if targets["CES1"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
     ces1_center = targets["CES1"].get("active_center")
-    ces1_dock_func = _offtarget_dock_with_centroid_check(ces1_center, max_dist=22.0) if ces1_center is not None else None
+    ces1_dock_func = _offtarget_dock_with_centroid_check(ces1_center, max_dist=11.0) if ces1_center is not None else None
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
         ces1_center, ces1_box,

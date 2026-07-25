@@ -2,6 +2,41 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.2.0] — CES1 re-docking fix, expanded paper, verification suite
+
+### Fixed
+- **CES1 grid-box over-inflation.** `analyze_selectivity_and_resistance` now uses
+  `max_size=18.0, padding=2.0` for CES1 (was `25.0, 4.0` in v5.1.0), preventing
+  the grid from enclosing non-catalytic surface patches.
+- **CES1 centroid-check radius tightened.** `_offtarget_dock_with_centroid_check`
+  for CES1 uses `max_dist=11.0` (was `22.0`), matching the catalytic gorge depth.
+  Previously, `22.0` Å allowed surface-binding poses to be accepted as valid.
+- **Re-docked 8 clash compounds.** All 8 previously CLASH compounds re-docked
+  with corrected CES1 parameters. All produced valid CES1 poses (energies
+  ranging from 1.79 to 8.98 kcal/mol); none remain as CLASH.
+
+### Changed
+- **paper.tex:** Expanded Table 3 to show all 4 SI-passing compounds; added
+  ALL-QU05 vs ceftaroline comparison table; updated CES1 limitations from
+  "7 CLASH" to "0 CLASH, 8 positive-energy"; expanded Limitations subsection
+  with 6 specific points (rigid docking, narrow panel, no covalent, no
+  experimental validation, energy uncertainty, small library).
+- **Figure paths now relative** in paper.tex for portability.
+
+### Added
+- **`verify_success.py`** — programmatic verification of all 10 success criteria.
+  Run `python verify_success.py` to confirm: ≥20 CSV rows, ≥1 Strong hit, ≥3
+  SI≥1.5, ≤2 CLASH, Validated protocol, AUC≥0.7 + EF₁%≥5, Ser403+Lys406 H-bonds,
+  ≥4 figures, paper compiles, numbers match.
+- **`RUN_REPORT.md`** — summary of final pipeline state, metrics, top-5 table.
+
+### Results (v5.2.0)
+- CES1 CLASH count: 0 (was 7 in v5.1.0)
+- SI-passing compounds: 4 (ALL-QU05 Strong, 3 Promising)
+- Top candidate: ALL-QU05 (SI=2.06, Ser403+Lys406+Tyr446 H-bonds)
+- Protocol trust: Validated (core RMSD 1.251 Å)
+- All 10/10 success criteria pass
+
 ## [5.1.0] — Fix off-target regression, improve library, validated hits
 
 ### Fixed

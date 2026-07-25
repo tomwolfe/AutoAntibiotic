@@ -4728,3 +4728,41 @@ Try  -H option for more information.)
 2026-07-24 19:56:14 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
 2026-07-24 19:56:14 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
 2026-07-24 19:56:15 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-24 23:40:35 | INFO     | === Re-docking CLASH compounds against CES1 (corrected params) ===
+2026-07-24 23:40:35 | INFO     | Found 8 CLASH compounds to re-dock:
+2026-07-24 23:40:35 | INFO     |   ALL_QU09
+2026-07-24 23:40:35 | INFO     |   ALL_SP12
+2026-07-24 23:40:35 | INFO     |   ALL_SP07
+2026-07-24 23:40:35 | INFO     |   ACT_OX02
+2026-07-24 23:40:35 | INFO     |   ALL_SP06
+2026-07-24 23:40:35 | INFO     |   ACT_HE10
+2026-07-24 23:40:35 | INFO     |   ACT_OX08
+2026-07-24 23:40:35 | INFO     |   LIT_SHA01
+2026-07-24 23:40:35 | INFO     | CES1 center: [-7.13865188 43.85391877 37.96102563]
+2026-07-24 23:40:35 | INFO     | CES1 box (corrected): (18.0, 18.0, 18.0)
+2026-07-24 23:40:35 | INFO     | 
+Re-docking ALL_QU09...
+2026-07-24 23:40:39 | INFO     |   ALL_QU09: CES1 energy = 7.25 kcal/mol
+2026-07-24 23:40:39 | INFO     | 
+Re-docking ALL_SP12...
+2026-07-24 23:40:42 | INFO     |   ALL_SP12: CES1 energy = 7.70 kcal/mol
+2026-07-24 23:40:42 | INFO     | 
+Re-docking ALL_SP07...
+2026-07-24 23:40:45 | INFO     |   ALL_SP07: CES1 energy = 4.04 kcal/mol
+2026-07-24 23:40:45 | INFO     | 
+Re-docking ACT_OX02...
+2026-07-24 23:40:49 | INFO     |   ACT_OX02: CES1 energy = 2.64 kcal/mol
+2026-07-24 23:40:49 | INFO     | 
+Re-docking ALL_SP06...
+2026-07-24 23:40:51 | INFO     |   ALL_SP06: CES1 energy = 3.66 kcal/mol
+2026-07-24 23:40:51 | INFO     | 
+Re-docking ACT_HE10...
+2026-07-24 23:40:54 | INFO     |   ACT_HE10: CES1 energy = 6.23 kcal/mol
+2026-07-24 23:40:54 | INFO     | 
+Re-docking ACT_OX08...
+2026-07-24 23:40:58 | INFO     |   ACT_OX08: CES1 energy = 1.79 kcal/mol
+2026-07-24 23:40:58 | INFO     | 
+Re-docking LIT_SHA01...
+2026-07-24 23:41:03 | INFO     |   LIT_SHA01: CES1 energy = 8.98 kcal/mol
+2026-07-24 23:41:03 | INFO     | 
+Updated CSV saved to /Users/tom/Documents/apps/AutoAntibiotic/output/top_candidates.csv

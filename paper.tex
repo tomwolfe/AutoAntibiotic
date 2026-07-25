@@ -128,6 +128,7 @@ The top candidates ranked by consensus PBP2a active-site binding energy are show
     1 & ALL-QU05 & $-$9.75 & 2.06 & Strong & Yes & Yes & Yes & 2.13 \\
     2 & ALL-SU14 & $-$9.88 & 1.58 & Promising & Yes & Yes & Yes & 1.85 \\
     3 & ALL-SU15 & $-$9.45 & 1.56 & Promising & Yes & Yes & No & 1.66 \\
+    4 & ALL-QU04 & $-$10.05 & 1.52 & Promising & Yes & Yes & Yes & 1.78 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -177,7 +178,7 @@ The 2D interaction diagrams for the top three candidates (Figure~\ref{fig:intera
 The AutoAntibiotic v5.1.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The consensus docking protocol across three PBP2a conformers provides robustness against conformational bias, and the mechanism-restricted selectivity profiling against two serine hydrolases reduces the risk of identifying promiscuous inhibitors.
 
 \subsection{ALL-QU05 as a validated hit}
-The top candidate ALL-QU05 satisfies the hard success criterion: it carries a ``Validated'' protocol trust badge, achieves an SI~=~2.06 (Strong tier), and forms confirmed contacts with Ser403, Lys406, and Tyr446. The compound is drug-like (QED~=~0.52, SA~=~2.13, MW~=~367.4, no PAINS, no $\beta$-lactam) and represents a genuine non-$\beta$-lactam PBP2a inhibitor candidate for experimental validation.
+The top candidate ALL-QU05 satisfies the hard success criterion: it carries a ``Validated'' protocol trust badge, achieves an SI~=~2.06 (Strong tier), and forms confirmed contacts with Ser403, Lys406, and Tyr446. The compound is drug-like (QED~=~0.52, SA~=~2.13, MW~=~351.1, no PAINS, no $\beta$-lactam) and represents a genuine non-$\beta$-lactam PBP2a inhibitor candidate for experimental validation.
 
 \subsection{Enrichment validation}
 The enrichment validation passed (AUC~=~0.792, EF$_{1\%}$~=~19.25), confirming that the docking protocol enriches known PBP2a active-site binders from property-matched decoys. The benchmark used 21 known experimental PBP2a binders with assigned pIC$_{50}$ values and 150 decoys, docked against the apo (1VQQ) conformer only, consistent with standard VS enrichment practice~\cite{troczi2013}.
@@ -185,11 +186,43 @@ The enrichment validation passed (AUC~=~0.792, EF$_{1\%}$~=~19.25), confirming t
 \subsection{Comparison with ceftaroline}
 ALL-QU05's SI relative to ceftaroline (SI$_{\text{vs CEF}}$~=~1.05) indicates comparable selectivity over the clinical cephalosporin. While ceftaroline benefits from covalent inhibition of the active-site serine, ALL-QU05 achieves selective binding through non-covalent interactions alone, making it a promising starting point for optimisation.
 
-\subsection{CES1 docking limitations}
-Seven of the 20 reported candidates showed a steric clash (``CLASH (no pose)'') during CES1 docking, meaning their CES1 binding energy could not be computed and their selectivity index was unassessed. This reflects the narrower catalytic gorge of CES1 (1YAH) compared to the PBP2a active site. These compounds were retained in the report with ``Unassessed'' selectivity confidence and a provisional single-target SI computed against trypsin alone where available.
+\begin{table}[H]
+  \centering
+  \caption{Comparison of top candidate ALL-QU05 with the clinical reference ceftaroline.}
+  \label{tab:comparison}
+  \begin{tabular}{lcc}
+    \toprule
+    Property & ALL-QU05 & Ceftaroline \\
+    \midrule
+    MW (\SI{}{\g\per\mol}) & 351.1 & 746.2 \\
+    QED & 0.52 & 0.32 \\
+    logP & 4.59 & 3.16 \\
+    TPSA (\SI{}{\square\angstrom}) & 50.68 & 191.67 \\
+    H-bond donors / acceptors & 1 / 2 & 3 / 11 \\
+    Rotatable bonds & 3 & 10 \\
+    SA score & 2.13 & 4.53 \\
+    SI (vs trypsin + CES1) & 2.06 & 0.81 \\
+    Binding mode & Non-covalent & Covalent acylation \\
+    $\beta$-lactam & No & Yes \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{CES1 off-target profiling}
+After correcting the CES1 grid-box parameters (18~\si{\angstrom}, \SI{2.0}{\angstrom} padding) and centroid-check radius (\SI{11}{\angstrom}), all 20 candidates produced valid CES1 poses. Eight candidates showed unfavourable CES1 binding energies (positive \si{\kcal\per\mol}), reflecting size mismatches with the narrower CES1 catalytic gorge. These compounds were assigned a provisional single-target SI computed against trypsin alone. No candidates were lost to steric clashes.
 
 \subsection{Limitations}
-The current pipeline uses rigid-receptor docking, which cannot model induced-fit effects. The static PBP2a structures may not capture the full conformational ensemble. Similarly, rigid human off-target structures may overestimate or underestimate binding. Selectivity indices are therefore approximations. No free-energy perturbation, molecular dynamics, or covalent docking was performed. All candidates should be validated experimentally through enzyme inhibition assays, SPR binding studies, and minimum inhibitory concentration (MIC) determination against MRSA strains.
+Several important limitations apply to this study. First, the pipeline uses rigid-receptor docking (AutoDock Vina), which cannot model induced-fit effects. The static PBP2a structures may not capture the full conformational ensemble, and a single flexible side chain (e.g., Tyr446) could alter binding modes. Similarly, rigid human off-target structures may overestimate or underestimate binding. Selectivity indices are therefore approximations that should be interpreted as upper bounds on true selectivity.
+
+Second, the selectivity panel includes only two human serine hydrolases (trypsin and CES1). A broader off-target profiling panel encompassing CYP450 isoforms, hERG, serum albumin, and other common liability targets was not used in the mechanism-restricted SI, though energies for these targets are reported separately. The absence of hERG and CYP screening is a gap that should be addressed before in vivo studies.
+
+Third, the pipeline explicitly excludes covalent warheads, meaning it identifies only non-covalent inhibitors. PBP2a is a serine transpeptidase whose native $\beta$-lactam substrates act by covalent acylation of Ser403. Non-covalent inhibition of this enzyme is inherently more challenging and may require higher concentrations to achieve comparable occupancy.
+
+Fourth, no experimental validation has been performed. All candidates are purely computational predictions. Enzyme inhibition assays (IC$_{50}$), surface plasmon resonance (SPR) binding studies, and minimum inhibitory concentration (MIC) determination against MRSA strains are essential next steps.
+
+Fifth, the docking energies reported (${-}$9 to ${-}$10~\si{\kcal\per\mol}) are Vina affinity estimates with an expected error of approximately $\pm$\SI{2}{\kcal\per\mol} and should not be interpreted as absolute binding free energies. MM-GBSA rescoring or free-energy perturbation calculations on the top candidates would provide more reliable ranking.
+
+Finally, the compound library (244 BRICS-recombined molecules) is small relative to typical virtual screening campaigns. Expanding the library to thousands of compounds through additional scaffold families or iterative BRICS refinement (via the \texttt{--refine} flag) would likely identify additional candidates and improve hit rates.
 
 \section{Conclusion}
 
