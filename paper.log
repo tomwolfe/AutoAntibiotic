@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999998 (TeX Live 2026/Homebrew) (preloaded format=xelatex 2026.3.4)  24 JUL 2026 22:54
+This is XeTeX, Version 3.141592653-2.6-0.999998 (TeX Live 2026/Homebrew) (preloaded format=xelatex 2026.3.4)  25 JUL 2026 00:03
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -878,7 +878,7 @@ Package siunitx Warning: Unit macro \angstrom has been deprecated in this
 [1
 
 ] [2] [3] [4]
-Overfull \hbox (23.4585pt too wide) in paragraph at lines 124--133
+Overfull \hbox (23.4585pt too wide) in paragraph at lines 124--134
  [][] 
  []
 
@@ -897,26 +897,26 @@ File: output/figures/interaction_ALL_SU15.png Graphic file (type bmp)
 File: output/figures/filter_funnel.png Graphic file (type bmp)
 <output/figures/filter_funnel.png>
  [7] [8]
-Overfull \hbox (55.28099pt too wide) in paragraph at lines 199--200
+Overfull \hbox (55.28099pt too wide) in paragraph at lines 232--233
 \TU/lmr/m/n/12 screen can be reproduced by running: \TU/lmtt/m/n/12 autoantibio
 tic --library data/screen_library_final.csv
  []
 
-(./paper.bbl) [9] (./paper.aux)
+(./paper.bbl [9]) [10] (./paper.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
 Package rerunfilecheck Info: File `paper.out' has not changed.
-(rerunfilecheck)             Checksum: 911DFFDEA68347BF42B580BD92A6C517;4075.
+(rerunfilecheck)             Checksum: 6323665482A90A81E7402983F8C9EE50;4080.
  ) 
 Here is how much of TeX's memory you used:
- 25828 strings out of 468168
- 533652 string characters out of 5423555
- 909925 words of memory out of 5000000
- 54173 multiletter control sequences out of 15000+600000
+ 25829 strings out of 468168
+ 533668 string characters out of 5423555
+ 910026 words of memory out of 5000000
+ 54174 multiletter control sequences out of 15000+600000
  638539 words of font info for 97 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
- 99i,13n,118p,1371b,926s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 99i,13n,118p,1371b,936s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on paper.pdf (9 pages).
+Output written on paper.pdf (10 pages).

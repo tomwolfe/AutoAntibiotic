@@ -1,3 +1,6 @@
+paper.aux
+paper.log
+paper.out
 unsrtnat.bst
 *.egg-info/
 benchmarks/
