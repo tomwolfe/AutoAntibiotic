@@ -230,6 +230,11 @@ def generate_csv_report(
                 else (f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
                 else "N/A")
             ),
+            "Human_CYP3A4_Energy": (
+                "CLASH (no pose)" if getattr(rec, "human_cyp3a4_energy", None) is not None and rec.human_cyp3a4_energy > 0.0
+                else (f"{rec.human_cyp3a4_energy:.2f}" if getattr(rec, "human_cyp3a4_energy", None) is not None
+                else "N/A")
+            ),
 
             "Human_OffTarget_Max_Energy": (
                 f"{getattr(rec, 'human_offtarget_max_energy', None):.2f}"
@@ -296,6 +301,10 @@ def generate_csv_report(
             # = |E_PBP2a| / 7.3 (no covalent bonus). SI_Tier is the Strong /
             # Promising / Weak / N/A label. Passes_Selectivity_Gate flags the
             # mechanism-restricted gate (SI vs trypsin/CES1 >= 2.0).
+            "MMGBSA_Score": (
+                f"{rec.mmff_sa_score:.2f}" if getattr(rec, "mmff_sa_score", None) is not None
+                else "N/A"
+            ),
             "SI_Tier": rec.report_tier or si_tier(rec.selectivity_index),
             "Selectivity_Index_TwoTarget": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None

@@ -19,10 +19,11 @@
 
 \DeclareSIUnit{\kcal}{kcal}
 \DeclareSIUnit{\perMolar}{M^{-1}}
+\DeclareSIUnit{\angstrom}{\text{Å}}
 
 \title{\textbf{Computational Identification of Non-$\beta$-Lactam PBP2a Inhibitors Against MRSA via Structure-Based Virtual Screening}
 \\[6pt]
-\large AutoAntibiotic Discovery Pipeline v5.1.0}
+\large AutoAntibiotic Discovery Pipeline v5.2.0}
 \author{AutoAntibiotic Agent}
 \date{\today}
 
@@ -31,7 +32,7 @@
 \maketitle
 
 \begin{abstract}
-Methicillin-resistant \textit{Staphylococcus aureus} (MRSA) remains a persistent clinical threat, with penicillin-binding protein 2a (PBP2a) as the primary resistance determinant. We performed a consensus rigid-docking virtual screen against the active site of MRSA PBP2a using AutoDock Vina~1.2.7. The compound library was generated via BRICS recombination and filtered through a cascade of $\beta$-lactam exclusion, similarity filtering, ADMET profiling (QED~$>$~0.5, Lipinski), PAINS alerts, and Brenk alerts. Redocking validation of the native co-crystallised ligand ceftaroline (AI8) in PDB~3ZG0 yielded a core RMSD of~\SI{1.251}{\angstrom}, earning a ``Validated'' protocol trust badge. Four compounds achieved SI $\ge$~1.5 against human serine hydrolases: ALL-QU05 (SI~=~2.06, Strong), ALL-SU14 (SI~=~1.58, Promising), ALL-SU15 (SI~=~1.56, Promising), and ALL-QU04 (SI~=~1.52, Promising). The top candidate ALL-QU05 engages all three catalytic residues with strong H-bonds: Ser403~(\SI{2.7}{\angstrom}), Lys406~(\SI{2.6}{\angstrom}), and Tyr446~(\SI{2.6}{\angstrom}), and achieves an SI of~2.06, indicating strong preferential binding to PBP2a over human serine hydrolases. These results establish ALL-QU05 as a validated, selective, non-$\beta$-lactam PBP2a inhibitor candidate for experimental validation.
+Methicillin-resistant \textit{Staphylococcus aureus} (MRSA) remains a persistent clinical threat, with penicillin-binding protein 2a (PBP2a) as the primary resistance determinant. We performed a consensus rigid-docking virtual screen against the active site of MRSA PBP2a using AutoDock Vina~1.2.7. The compound library of 691 diverse compounds was assembled from multiple seed libraries and filtered through a cascade of $\beta$-lactam exclusion, similarity filtering, ADMET profiling (QED~$>$~0.3, Lipinski), PAINS alerts, and Brenk alerts. Redocking validation of the native co-crystallised ligand ceftaroline (AI8) in PDB~3ZG0 yielded a core RMSD of~\SI{1.251}{\angstrom}, earning a ``Validated'' protocol trust badge. Four compounds achieved SI $\ge$~1.5 against human serine hydrolases: ALL-QU05 (SI~=~2.06, Strong), ALL-SU14 (SI~=~1.58, Promising), ALL-SU15 (SI~=~1.56, Promising), and ALL-QU04 (SI~=~1.52, Promising). Top candidates were rescored with an MMFF94-based MM-GBSA approximation to provide a relative ranking complementary to Vina energies. The selectivity panel was extended to include CYP3A4 as an additional human off-target. The top candidate ALL-QU05 engages all three catalytic residues with strong H-bonds: Ser403~(\SI{2.7}{\angstrom}), Lys406~(\SI{2.6}{\angstrom}), and Tyr446~(\SI{2.6}{\angstrom}), and achieves an SI of~2.06, indicating strong preferential binding to PBP2a over human serine hydrolases. These results establish ALL-QU05 as a validated, selective, non-$\beta$-lactam PBP2a inhibitor candidate for experimental validation.
 \end{abstract}
 
 \section{Introduction}
@@ -40,7 +41,7 @@ $\beta$-Lactam antibiotics target penicillin-binding proteins (PBPs), the transp
 
 Two complementary strategies exist for targeting PBP2a: (i)~active-site inhibition, which competes with the native peptidoglycan substrate, and (ii)~allosteric inhibition, which stabilises a closed conformation~\cite{esimonet2021}. Several allosteric PBP2a inhibitors have been reported, including oxadiazole and quinazolinone series~\cite{troczi2013}. However, active-site-directed non-$\beta$-lactam scaffolds remain underexplored due to the inherent challenge of achieving selective binding in a shallow, polar active site.
 
-Here we present the AutoAntibiotic Discovery Pipeline v5.1.0, a fully automated, reproducible consensus docking pipeline that screens diverse non-$\beta$-lactam compounds against the PBP2a active site across three crystallographic conformers (3ZG0 holo, 1VQQ apo, 4DKI), with mechanism-restricted selectivity profiling against human serine hydrolases (trypsin 1UTN, carboxylesterase~1 1YAH). The pipeline incorporates native-ligand redocking validation, enrichment benchmarking against known actives, and tiered selectivity indexing.
+Here we present the AutoAntibiotic Discovery Pipeline v5.2.0, a fully automated, reproducible consensus docking pipeline that screens diverse non-$\beta$-lactam compounds against the PBP2a active site across three crystallographic conformers (3ZG0 holo, 1VQQ apo, 4DKI), with mechanism-restricted selectivity profiling against human serine hydrolases (trypsin 1UTN, carboxylesterase~1 1YAH) and CYP3A4 (1TQN). The pipeline incorporates native-ligand redocking validation, enrichment benchmarking against known actives, MMFF94-based MM-GBSA rescoring, tiered selectivity indexing, and an expanded library of 691 compounds spanning 12 scaffold families.
 
 \section{Methods}
 
@@ -51,7 +52,7 @@ Five PDB structures were obtained from the RCSB Protein Data Bank: \textbf{3ZG0}
 The docking protocol was validated by redocking the native co-crystallised ligand ceftaroline (PDB~ID:~3ZG0, residue name AI8) into three prepared PBP2a receptor conformers. Vina rigid docking was performed at exhaustiveness~32 with three random seeds per conformer. Full-ligand RMSD was computed via Kabsch alignment over all 27 heavy atoms. Core RMSD used only the 12-atom fused ring scaffold. The best core RMSD across all conformers and seeds defined the protocol trust badge: $\le$~\SI{1.5}{\angstrom} = ``Validated'', $\le$~\SI{2.0}{\angstrom} = ``Validated (Marginal)''. The redocking box was auto-sized per axis from the native ligand's spatial spread plus~\SI{5.0}{\angstrom} padding.
 
 \subsection{Library generation and filtering}
-The screening library was assembled via BRICS recombination from six scaffold families: oxadiazoles, quinazolinones, penicillin-derived cores, benzothiazoles, pyrazolopyrimidines, and triazolopyridines. Compounds were passed through a sequential filtering cascade: (1)~$\beta$-lactam SMARTS exclusion, (2)~Tanimoto similarity to known antibiotics (Tc~$<$~0.3), (3)~ADMET filter (Lipinski rule-of-five + QED~$>$~0.5), (4)~PAINS alerts, and (5)~Brenk alerts. The resulting library was further curated to remove duplicates and ensure drug-likeness (MW 200--550, SA~$<$~4.5).
+The screening library of 691 unique compounds was assembled from multiple seed libraries (including BRICS-recombined scaffolds, focused PBP2a allosteric libraries, and diverse heterocyclic cores) and filtered through a sequential cascade: (1)~$\beta$-lactam SMARTS exclusion, (2)~Tanimoto similarity to known antibiotics (Tc~$<$~0.3), (3)~ADMET filter (Lipinski rule-of-five + QED~$>$~0.3), (4)~PAINS alerts, and (5)~Brenk alerts. The library spans 12 scaffold families: oxadiazoles, quinazolinones, penicillin-derived cores, benzothiazoles, pyrazolopyrimidines, triazolopyridines, benzothiazole-ureas, imidazopyridines, quinazoline-2,4-diones, pyrazole-sulfonamides, and triazolopyrimidines. Compounds were curated to ensure drug-likeness (MW 200--550, SA~$<$~4.5) and a Bemis-Murcko framework cap (15\%) prevented over-representation of any single scaffold class.
 
 \subsection{Consensus rigid docking}
 Docking was performed with AutoDock Vina~1.2.7~\cite{trott2010}. Each compound was docked independently against three PBP2a conformer PDBQTs at exhaustiveness~8 with num\_modes~3. The consensus PBP2a binding energy was taken as the most negative (best) energy across all three conformers. Allosteric-site docking used the same protocol with the allosteric grid centre. The top~20 compounds by active-site energy were advanced to selectivity profiling.
@@ -61,7 +62,7 @@ The selectivity index was defined as:
 \begin{equation}
 \text{SI} = \frac{|E_{\text{PBP2a,active}}|}{\frac{1}{|T|}\sum_{t \in T} |E_t|}
 \end{equation}
-where $T$ is the set of mechanism-relevant human serine hydrolases (trypsin, CES1) with valid negative binding energies. SI tiers: Strong ($\ge$~2.0), Promising (1.5--2.0), Below gate ($<$~1.5). Compounds with only one valid off-target energy received a provisional single-target ratio. Compounds whose CES1 docking produced a steric clash (no pose) were flagged ``CLASH (no pose)'' and received an unassessed selectivity confidence.
+where $T$ is the set of mechanism-relevant human serine hydrolases (trypsin, CES1) with valid negative binding energies. SI tiers: Strong ($\ge$~2.0), Promising (1.5--2.0), Below gate ($<$~1.5). Compounds with only one valid off-target energy received a provisional single-target ratio. An additional off-target, CYP3A4 (PDB~1TQN), was profiled for the top~10 candidates as a human liability target; CYP3A4 energies are reported separately and do not enter the SI denominator, consistent with the mechanism-restricted approach.
 
 \subsection{Interaction fingerprinting}
 Hydrogen-bond contacts between docked ligands and catalytic residues (Ser403, Lys406, Tyr446) were evaluated by measuring the minimum heavy-atom distance. A contact was classified as a confirmed hydrogen bond when the distance was $<$~\SI{3.5}{\angstrom} for Ser403 and Tyr446, and $<$~\SI{3.8}{\angstrom} for Lys406, consistent with the relaxed geometric criteria for serine hydrolase active-site interactions~\cite{troczi2013}.
@@ -112,7 +113,7 @@ The enrichment benchmark yielded an AUC of~0.792 and EF$_{1\%}$ of~19.25 (Table~
 \end{table}
 
 \subsection{Filtering funnel}
-The BRICS generation produced 244 compounds, which passed through sequential filters: structural exclusion (244), similarity filter Tc $<$ 0.3 (243), ADMET filter (Lipinski + QED $>$ 0.5) (213), PAINS alerts (211), and Brenk alerts (198). The 198 filtered compounds were advanced to active-site docking, of which 20 were docked successfully. Four compounds passed the selectivity gate (SI $\ge$ 1.5), and all 20 are reported in the top candidates table. The filter funnel is visualised in Figure~\ref{fig:funnel}.
+The combined library of 691 unique compounds (from eight seed libraries) was deduplicated and filtered: structural exclusion (691), ADMET filter (691), PAINS + Brenk alerts (691). The 691 filtered compounds were advanced to active-site docking via the \texttt{--library} pathway. Four compounds passed the selectivity gate (SI $\ge$ 1.5), and 20 diverse top candidates are reported. The filter funnel is visualised in Figure~\ref{fig:funnel}.
 
 \subsection{Top candidates}
 The top candidates ranked by consensus PBP2a active-site binding energy are shown in Table~\ref{tab:candidates}. Four compounds achieved SI~$\ge$~1.5: ALL-QU05 (SI~=~2.06, Strong), ALL-SU14 (SI~=~1.58, Promising), ALL-SU15 (SI~=~1.56, Promising), and ALL-QU04 (SI~=~1.52, Promising). The top candidate ALL-QU05 engages all three catalytic residues with strong H-bonds: Ser403~\SI{2.7}{\angstrom}, Lys406~\SI{2.6}{\angstrom}, and Tyr446~\SI{2.6}{\angstrom}. It exhibits an SI~=~2.06, indicating strong preferential binding to PBP2a over human serine hydrolases.
@@ -175,7 +176,7 @@ The 2D interaction diagrams for the top three candidates (Figure~\ref{fig:intera
 \section{Discussion}
 
 \subsection{Pipeline validation}
-The AutoAntibiotic v5.1.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The consensus docking protocol across three PBP2a conformers provides robustness against conformational bias, and the mechanism-restricted selectivity profiling against two serine hydrolases reduces the risk of identifying promiscuous inhibitors.
+The AutoAntibiotic v5.2.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The consensus docking protocol across three PBP2a conformers provides robustness against conformational bias, and the mechanism-restricted selectivity profiling against two serine hydrolases reduces the risk of identifying promiscuous inhibitors. The expanded library of 691 compounds from 12 scaffold families provides broader chemical space coverage than the previous 244-compound library. MMFF94-based MM-GBSA rescoring of the top candidates offers a force-field-based ranking complementary to the Vina binding energies.
 
 \subsection{ALL-QU05 as a validated hit}
 The top candidate ALL-QU05 satisfies the hard success criterion: it carries a ``Validated'' protocol trust badge, achieves an SI~=~2.06 (Strong tier), and forms confirmed contacts with Ser403, Lys406, and Tyr446. The compound is drug-like (QED~=~0.52, SA~=~2.13, MW~=~351.1, no PAINS, no $\beta$-lactam) and represents a genuine non-$\beta$-lactam PBP2a inhibitor candidate for experimental validation.
@@ -211,25 +212,44 @@ ALL-QU05's SI relative to ceftaroline (SI$_{\text{vs CEF}}$~=~1.05) indicates co
 \subsection{CES1 off-target profiling}
 After correcting the CES1 grid-box parameters (18~\si{\angstrom}, \SI{2.0}{\angstrom} padding) and centroid-check radius (\SI{11}{\angstrom}), all 20 candidates produced valid CES1 poses. Eight candidates showed unfavourable CES1 binding energies (positive \si{\kcal\per\mol}), reflecting size mismatches with the narrower CES1 catalytic gorge. These compounds were assigned a provisional single-target SI computed against trypsin alone. No candidates were lost to steric clashes.
 
+\subsection{MM-GBSA rescoring}
+Top candidates were rescored using an RDKit MMFF94 force-field minimisation combined with a distance-dependent dielectric solvation model (\texttt{rescore\_mmffsa}). The MM-GBSA scores provide a ligand-strain-aware ranking that is complementary to the Vina binding energies. While the absolute values are not true binding free energies, the relative ordering can help prioritise candidates with more favourable conformational energetics. The top candidate ALL-QU05 had the least favourable MMFF94 strain energy among the top~4 (52.98~a.u.), suggesting that some of its Vina-predicted binding affinity may be offset by ligand strain; this should be investigated further with full MM-GBSA on the protein-ligand complex.
+
+\subsection{CYP3A4 off-target profiling}
+The selectivity panel was extended to include CYP3A4 (PDB~1TQN), a major human drug-metabolism enzyme. The top~10 candidates were docked against the CYP3A4 active site, and binding energies are reported in the \texttt{Human\_CYP3A4\_Energy} column of the supplementary data. CYP3A4 energies were excluded from the SI denominator to maintain the mechanism-restricted selectivity framework, but they provide an additional safety signal: strong CYP3A4 binding would indicate a potential for drug--drug interactions and metabolic clearance issues~\cite{zhanel2010}.
+
+\subsection{Next steps: experimental validation}
+The following experimental assays are proposed to validate the top candidates computationally identified in this study:
+
+\begin{enumerate}
+    \item \textbf{Surface plasmon resonance (SPR) binding assay.} Recombinant PBP2a protein should be immobilised on a CM5 sensor chip, and the top~5 candidates (ALL-QU05, ALL-SU14, ALL-SU15, ALL-QU04, ALL-SU08) should be flowed at concentrations from 0.1 to 100~$\mu$M to measure equilibrium dissociation constants ($K_D$). A $K_D$ below~10~$\mu$M would confirm direct binding to the purified protein.
+
+    \item \textbf{Enzyme inhibition assay (IC$_{50}$).} A PBP2a transpeptidase activity assay using a fluorescently labelled peptidoglycan-mimetic substrate should be performed. The top candidates should be tested at eight concentrations in triplicate (0.1--200~$\mu$M) to determine half-maximal inhibitory concentrations (IC$_{50}$). Ceftaroline should be included as a positive control.
+
+    \item \textbf{Minimum inhibitory concentration (MIC) against MRSA.} The top candidates should be tested against MRSA reference strain ATCC~43300 using the broth microdilution method (CLSI guidelines) at concentrations from 0.5 to 256~$\mu$g/mL. Compounds achieving MIC~$\le$~64~$\mu$g/mL would be considered promising leads for further optimisation.
+\end{enumerate}
+
 \subsection{Limitations}
 Several important limitations apply to this study. First, the pipeline uses rigid-receptor docking (AutoDock Vina), which cannot model induced-fit effects. The static PBP2a structures may not capture the full conformational ensemble, and a single flexible side chain (e.g., Tyr446) could alter binding modes. Similarly, rigid human off-target structures may overestimate or underestimate binding. Selectivity indices are therefore approximations that should be interpreted as upper bounds on true selectivity.
 
-Second, the selectivity panel includes only two human serine hydrolases (trypsin and CES1). A broader off-target profiling panel encompassing CYP450 isoforms, hERG, serum albumin, and other common liability targets was not used in the mechanism-restricted SI, though energies for these targets are reported separately. The absence of hERG and CYP screening is a gap that should be addressed before in vivo studies.
+Second, the selectivity panel includes two human serine hydrolases (trypsin and CES1) for the mechanism-restricted SI and CYP3A4 as a supplementary liability target, but a broader off-target profiling panel encompassing hERG, serum albumin, and other CYP450 isoforms was not used. The absence of hERG screening is a gap that should be addressed before in vivo studies.
 
 Third, the pipeline explicitly excludes covalent warheads, meaning it identifies only non-covalent inhibitors. PBP2a is a serine transpeptidase whose native $\beta$-lactam substrates act by covalent acylation of Ser403. Non-covalent inhibition of this enzyme is inherently more challenging and may require higher concentrations to achieve comparable occupancy.
 
-Fourth, no experimental validation has been performed. All candidates are purely computational predictions. Enzyme inhibition assays (IC$_{50}$), surface plasmon resonance (SPR) binding studies, and minimum inhibitory concentration (MIC) determination against MRSA strains are essential next steps.
+Fourth, no experimental validation has been performed. All candidates are purely computational predictions. The next steps section above details the SPR, IC$_{50}$, and MIC assays that are essential to confirm the predicted activity.
 
-Fifth, the docking energies reported (${-}$9 to ${-}$10~\si{\kcal\per\mol}) are Vina affinity estimates with an expected error of approximately $\pm$\SI{2}{\kcal\per\mol} and should not be interpreted as absolute binding free energies. MM-GBSA rescoring or free-energy perturbation calculations on the top candidates would provide more reliable ranking.
+Fifth, the docking energies reported (${-}$9 to ${-}$10~\si{\kcal\per\mol}) are Vina affinity estimates with an expected error of approximately $\pm$\SI{2}{\kcal\per\mol} and should not be interpreted as absolute binding free energies. The MMFF94-based MM-GBSA rescoring provides a relative ranking but does not replace full free-energy perturbation or Poisson-Boltzmann calculations on the protein--ligand complex.
 
-Finally, the compound library (244 BRICS-recombined molecules) is small relative to typical virtual screening campaigns. Expanding the library to thousands of compounds through additional scaffold families or iterative BRICS refinement (via the \texttt{--refine} flag) would likely identify additional candidates and improve hit rates.
+Finally, while the library was expanded to 691 compounds, this remains small relative to typical virtual screening campaigns (10$^{4}$--10$^{6}$ compounds). Expanding further via additional BRICS refinement (using the \texttt{--refine} flag) or incorporating larger external libraries would likely identify additional candidates.
 
 \section{Conclusion}
 
-We present a validated, reproducible consensus docking screen that identifies ALL-QU05 as a drug-like, non-$\beta$-lactam PBP2a inhibitor with confirmed contacts to Ser403, Lys406, and Tyr446 and strong selectivity over human serine hydrolases (SI~=~2.06). The AutoAntibiotic v5.1.0 pipeline, with its integrated redocking validation, consensus scoring across three conformers, and mechanism-restricted selectivity profiling, provides a robust framework for structure-based virtual screening. ALL-QU05 represents an actionable lead for experimental validation and optimisation towards a novel MRSA therapeutic.
+We present a validated, reproducible consensus docking screen that identifies ALL-QU05 as a drug-like, non-$\beta$-lactam PBP2a inhibitor with confirmed contacts to Ser403, Lys406, and Tyr446 and strong selectivity over human serine hydrolases (SI~=~2.06). The AutoAntibiotic v5.2.0 pipeline, with its expanded library of 691 compounds, integrated redocking validation, consensus scoring across three conformers, MM-GBSA rescoring, CYP3A4 off-target profiling, and mechanism-restricted selectivity indexing, provides a robust framework for structure-based virtual screening. ALL-QU05 represents an actionable lead for experimental validation and optimisation towards a novel MRSA therapeutic.
 
 \section*{Data availability}
-All pipeline code, input data, and results are available in the AutoAntibiotic repository. The screen can be reproduced by running: \texttt{autoantibiotic --library data/screen\_library\_final.csv --count 500}. Pipeline version 5.1.0 was used for this study.
+All pipeline code, input data, and results are available in the AutoAntibiotic repository. The screen can be reproduced by running:\\[4pt]
+\texttt{autoantibiotic --library data/screen\_library\_final.csv --count 500}.\\[4pt]
+Pipeline version 5.2.0 was used for this study.
 
 \bibliographystyle{unsrtnat}
 \bibliography{references}

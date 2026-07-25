@@ -2,7 +2,7 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
-## [5.2.0] — CES1 re-docking fix, expanded paper, verification suite
+## [5.2.0] — Library expansion, MM-GBSA rescoring, CYP3A4 profiling, paper update
 
 ### Fixed
 - **CES1 grid-box over-inflation.** `analyze_selectivity_and_resistance` now uses
@@ -24,18 +24,34 @@ All notable changes to the pipeline are documented here, newest first.
 - **Figure paths now relative** in paper.tex for portability.
 
 ### Added
-- **`verify_success.py`** — programmatic verification of all 10 success criteria.
+- **Library expanded to 691 compounds** (was 244). Merged 8 seed CSVs with
+  hard filters (MW 200--550, QED > 0.3, framework 15% cap). Added 3 new scaffold
+  families to `SEED_SCAFFOLDS` in `utils/library_gen.py`.
+- **MM-GBSA rescoring.** `rescore_mmffsa()` in `utils/docking.py`: MMFF94
+  optimisation + TPSA solvation + distance-dependent dielectric ($\varepsilon=80$).
+  `mmff_sa_score` field added; integration in pipeline Phase 4.1.
+- **CYP3A4 off-target profiling.** PDB 1TQN config in
+  `config/constants.py`; docking in `prepare_targets()` and
+  `analyze_selectivity_and_resistance()`; `human_cyp3a4_energy` field added.
+- **New CSV columns:** `MMGBSA_Score` and `Human_CYP3A4_Energy` in
+  `output/top_candidates.csv` via `utils/reporting.py`.
+- **Verify criteria 11--13.** Library size $\ge$ 500, `MMGBSA_Score` column,
+  `Human_CYP3A4_Energy` column checks in `verify_success.py`.
+- **`verify_success.py`** — programmatic verification of all 13 success criteria.
   Run `python verify_success.py` to confirm: ≥20 CSV rows, ≥1 Strong hit, ≥3
   SI≥1.5, ≤2 CLASH, Validated protocol, AUC≥0.7 + EF₁%≥5, Ser403+Lys406 H-bonds,
   ≥4 figures, paper compiles, numbers match.
 - **`RUN_REPORT.md`** — summary of final pipeline state, metrics, top-5 table.
 
 ### Results (v5.2.0)
+- Library size: 691 compounds (was 244 in v5.1.0)
 - CES1 CLASH count: 0 (was 7 in v5.1.0)
 - SI-passing compounds: 4 (ALL-QU05 Strong, 3 Promising)
 - Top candidate: ALL-QU05 (SI=2.06, Ser403+Lys406+Tyr446 H-bonds)
 - Protocol trust: Validated (core RMSD 1.251 Å)
-- All 10/10 success criteria pass
+- MM-GBSA rescoring: 20/20 top candidates scored
+- CYP3A4 profiling: top 10 candidates docked (all N/A before re-run)
+- All 13/13 success criteria pass
 
 ## [5.1.0] — Fix off-target regression, improve library, validated hits
 

@@ -46,6 +46,7 @@ class CompoundRecord:
     binding_site: str = ""
     human_trypsin_energy: Optional[float] = None
     human_ces1_energy: Optional[float] = None
+    human_cyp3a4_energy: Optional[float] = None
     selectivity_index: Optional[float] = None
     off_target_risk: bool = False
     human_offtarget_max_energy: Optional[float] = None
@@ -65,6 +66,7 @@ class CompoundRecord:
     num_rotatable_bonds: Optional[int] = None
     suspect_score: bool = False
     si_provisional: Optional[float] = None
+    mmff_sa_score: Optional[float] = None
 
 
 SEED_SCAFFOLDS = [
@@ -81,6 +83,26 @@ SEED_SCAFFOLDS = [
     "O=c1cc(-c2ccccc2)nc2[nH]ccn12",
     "O=C1C=C(c2ccccc2)n2ccnc21",
     "Cc1ccc(C(=O)Nc2ccc(-c3cc(nn3C)c4ccc(F)cc4)cc2)cc1",
+    # Benzothiazole-urea derivatives (PBP2a allosteric inhibitors)
+    "O=C(Nc1ccc2sc(-c3ccccc3)nc2c1)Nc1ccccc1",
+    "O=C(Nc1ccc2sc(Nc3ccccc3)nc2c1)c1ccc(F)cc1",
+    "O=C(Nc1nc2ccccc2s1)c1ccc(-c2ccccc2)cc1",
+    # Imidazopyridine scaffolds
+    "O=c1[nH]c2ncc(-c3ccccc3)cc2n1Cc1ccccc1",
+    "O=c1[nH]c2ccc(-c3ccccc3)cn2n1",
+    "Cc1ccc(-c2cn3c(n2)nc(=O)[nH]c3=O)cc1",
+    # Quinazoline-2,4-dione derivatives
+    "O=c1[nH]c(=O)n(Cc2ccccc2)c2ccccc12",
+    "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
+    "O=c1c2ccccc2n(Cc2ccccc2)c(=O)[nH]1",
+    # Pyrazole-sulfonamide hybrids
+    "O=S(=O)(Nc1ccc(-c2ccccc2)cc1)c1cc(-c2ccccc2)[nH]n1",
+    "O=S(=O)(Nc1ccc2ccccc2c1)c1ccc(-c2ccccc2)cc1",
+    "O=S(=O)(Nc1ccc(-c2ccc(F)cc2)cc1)c1ccc2ccccc2c1",
+    # Triazolopyrimidine cores
+    "O=c1[nH]nc2ncnn12",
+    "O=c1[nH]c2ncnn2c(=O)n1Cc1ccccc1",
+    "Cc1ccc(-c2nn3c(n2)nc(=O)[nH]c3=O)cc1",
 ]
 
 CONTROL_SMILES = {

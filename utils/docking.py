@@ -288,6 +288,112 @@ def _dock_compounds_parallel(
     return results
 
 
+def rescore_mmffsa(
+    record: "CompoundRecord",
+    receptor_pdb: Optional[str] = None,
+) -> Optional[float]:
+    """
+    Compute an approximate MM-GBSA-like rescoring score using RDKit's MMFF94
+    force field and a simple GB/SA solvation model.
+
+    The score is computed as:
+        ΔG ≈ E_MMFF94 + γ · TPSA + E_elec,solv
+
+    where:
+      - E_MMFF94 is the MMFF94 force-field energy of the ligand in its
+        optimized conformation (kcal/mol).
+      - γ · TPSA is the non-polar solvation term (γ = 0.01 kcal/mol/Å²,
+        using TPSA as a proxy for SASA).
+      - E_elec,solv is a crude distance-dependent dielectric solvation
+        energy estimated from Gasteiger charges and the solvent (ε=80).
+
+    A more negative score suggests stronger binding. The absolute value
+    should not be interpreted as a true binding free energy; it is a
+    relative ranking score for comparing candidates.
+
+    This function does NOT require external dependencies beyond RDKit.
+    When the MMFF94 force field cannot be assigned, None is returned.
+
+    Args:
+        record: Compound record with a valid SMILES.
+        receptor_pdb: Path to receptor PDB (unused in this simple
+            ligand-only approximation, but kept for API compatibility).
+
+    Returns:
+        Approximate MM-GBSA score (kcal/mol) or None on failure.
+    """
+    mol = record.mol if record.mol is not None else Chem.MolFromSmiles(record.smiles)
+    if mol is None:
+        return None
+
+    from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors
+
+    try:
+        mol = Chem.AddHs(mol)
+        params = AllChem.ETKDGv3()
+        params.randomSeed = 42
+        status = AllChem.EmbedMolecule(mol, params)
+        if status != 0:
+            return None
+
+        try:
+            mmff_props = AllChem.MMFFGetMoleculeProperties(mol, "MMFF94")
+            if mmff_props is None:
+                mmff_props = AllChem.MMFFGetMoleculeProperties(mol, "MMFF94s")
+            if mmff_props is None:
+                return None
+        except Exception:
+            return None
+
+        ff = AllChem.MMFFGetMoleculeForceField(mol, mmff_props)
+        if ff is None:
+            return None
+        converged = ff.Minimize(maxIts=500)
+        if converged > 1:
+            return None
+
+        e_mmff = ff.CalcEnergy()
+
+        # Non-polar solvation: TPSA * 0.01 kcal/mol/Å²
+        tpsa = rdMolDescriptors.CalcTPSA(mol)
+        e_np = 0.01 * tpsa
+
+        # Compute Gasteiger charges for heavy atoms only
+        AllChem.ComputeGasteigerCharges(mol)
+        n_heavy = mol.GetNumHeavyAtoms()
+        charges = []
+        for i in range(mol.GetNumAtoms()):
+            if mol.GetAtomWithIdx(i).GetAtomicNum() == 1:
+                continue
+            try:
+                q = float(mol.GetAtomWithIdx(i).GetDoubleProp("_GasteigerCharge"))
+                charges.append(q)
+            except (ValueError, KeyError):
+                charges.append(0.0)
+
+        # Distance-dependent dielectric solvation energy
+        e_solv = 0.0
+        conf = mol.GetConformer()
+        for i in range(n_heavy):
+            for j in range(i + 1, n_heavy):
+                qi = charges[i] if i < len(charges) else 0.0
+                qj = charges[j] if j < len(charges) else 0.0
+                if abs(qi) < 1e-6 or abs(qj) < 1e-6:
+                    continue
+                pos_i = conf.GetAtomPosition(i)
+                pos_j = conf.GetAtomPosition(j)
+                r = pos_i.Distance(pos_j)
+                if r < 0.1:
+                    continue
+                e_solv += 332.0 * qi * qj / (80.0 * r)
+
+        score = e_mmff + e_np - e_solv
+        return float(score)
+
+    except Exception:
+        return None
+
+
 def _dock_worker(
     payload: Tuple[str, str],
     dock_func: Callable,

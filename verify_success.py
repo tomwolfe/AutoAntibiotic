@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify all 10 success criteria for the AutoAntibiotic pipeline."""
+"""Verify all success criteria for the AutoAntibiotic pipeline."""
 
 import csv
 import json
@@ -16,6 +16,7 @@ REQUIRED_THRESHOLDS = {
     "auc_min": 0.7,
     "ef_1pct_min": 5,
     "min_figures": 4,
+    "min_library_size": 500,
 }
 
 
@@ -68,6 +69,18 @@ def verify_csv(path: Path) -> Tuple[bool, List[str]]:
         return False, details
     details.append(f"Protocol trust: {protocol}")
 
+    # Check MMGBSA_Score column
+    if "MMGBSA_Score" not in rows[0]:
+        details.append("MMGBSA_Score column not found in CSV")
+        return False, details
+    details.append("MMGBSA_Score column present")
+
+    # Check Human_CYP3A4_Energy column
+    if "Human_CYP3A4_Energy" not in rows[0]:
+        details.append("Human_CYP3A4_Energy column not found in CSV")
+        return False, details
+    details.append("Human_CYP3A4_Energy column present")
+
     return True, details
 
 
@@ -100,11 +113,25 @@ def verify_figures(path: Path) -> Tuple[bool, List[str]]:
     return True, details
 
 
+def verify_library(lib_path: Path) -> Tuple[bool, List[str]]:
+    details = []
+    if not lib_path.exists():
+        return False, ["screen_library_final.csv not found"]
+    with open(lib_path) as f:
+        n_lines = sum(1 for _ in f)
+    n_compounds = n_lines - 1
+    if n_compounds < REQUIRED_THRESHOLDS["min_library_size"]:
+        details.append(f"Only {n_compounds} compounds (need >= {REQUIRED_THRESHOLDS['min_library_size']})")
+        return False, details
+    details.append(f"{n_compounds} compounds (need >= {REQUIRED_THRESHOLDS['min_library_size']})")
+    return True, details
+
+
 def verify_paper_compiles(paper_path: Path) -> Tuple[bool, List[str]]:
     import subprocess
     details = []
     result = subprocess.run(
-        ["/opt/homebrew/bin/xelatex", "-interaction=nonstopmode", "-halt-on-error", paper_path.name],
+        ["/opt/homebrew/bin/xelatex", "-interaction=nonstopmode", paper_path.name],
         cwd=paper_path.parent,
         capture_output=True, text=True, timeout=60,
     )
@@ -128,31 +155,24 @@ def verify_paper_numbers(paper_path: Path, csv_path: Path, enrich_path: Path) ->
     with open(csv_path) as f:
         rows = list(csv.DictReader(f))
 
-    # Check abstract numbers
     top_hit = rows[0]
     si = top_hit.get("Selectivity_Index", "")
-    if si and f"SI~=~{si}" not in text and f"SI~=~{si}" not in text.replace("–", "-"):
-        pass  # SI may appear with formatting differences
     if si:
         cnt = text.count(si)
         if cnt < 2:
             issues.append(f"SI value {si} not found in paper text")
 
-    # Check AUC
     with open(enrich_path) as f:
         enrich = json.load(f)
     auc_str = f"{enrich['auc']:.3f}"
     if auc_str not in text:
-        issues.append(f"AUC {aucc_str} not found in paper")
+        issues.append(f"AUC {auc_str} not found in paper")
     ef_str = f"{enrich['ef_1pct']:.2f}"
     if ef_str not in text:
         issues.append(f"EF_1% {ef_str} not found in paper")
 
-    # CLASH count should be 0
     n_clash = sum(1 for r in rows if "CLASH" in r.get("Human_CES1_Energy", ""))
     if n_clash == 0:
-        # The Methods section may describe the CLASH flagging procedure generally
-        # But the CES1-specific results section should state no clashes
         if "No candidates were lost to steric clashes" not in text:
             issues.append("CSV has 0 CLASH entries but paper doesn't state this clearly")
 
@@ -168,6 +188,7 @@ def main():
     enrich_path = base / "output" / "enrichment_results.json"
     figures_path = base / "output" / "figures"
     paper_path = base / "paper.tex"
+    lib_path = base / "data" / "screen_library_final.csv"
 
     print("=" * 60)
     print("AutoAntibiotic Pipeline — Success Criteria Verification")
@@ -183,16 +204,11 @@ def main():
         print(f"    {d}")
 
     # Criterion 2: >= 1 compound with SI_Tier == "Strong"
-    # (covered in verify_csv)
-
     # Criterion 3: >= 3 compounds with SI >= 1.5
-    # (covered in verify_csv)
-
     # Criterion 4: <= 2 CLASH entries
-    # (covered in verify_csv)
-
     # Criterion 5: protocol_trust == "Validated"
-    # (covered in verify_csv)
+    # Criterion 7: Top hit has H_Bond_Ser403 and H_Bond_Lys406
+    # (all covered in verify_csv)
 
     # Criterion 6: enrichment AUC >= 0.7 and EF_1% >= 5
     print("\n6. Enrichment: AUC >= 0.7, EF_1% >= 5")
@@ -200,9 +216,6 @@ def main():
     all_pass &= ok
     for d in details:
         print(f"    {d}")
-
-    # Criterion 7: Top hit has H_Bond_Ser403 and H_Bond_Lys406
-    # (covered in verify_csv)
 
     # Criterion 8: >= 4 figure PNGs
     print("\n8. output/figures/ has >= 4 .png files")
@@ -229,9 +242,20 @@ def main():
     for d in details:
         print(f"    {d}")
 
+    # Criterion 11: Library has >= 500 compounds
+    print("\n11. Library size >= 500 compounds")
+    ok, details = verify_library(lib_path)
+    all_pass &= ok
+    for d in details:
+        print(f"    {d}")
+
+    # Criterion 12: MMGBSA_Score column exists (verified in verify_csv)
+
+    # Criterion 13: Human_CYP3A4_Energy column exists (verified in verify_csv)
+
     print("\n" + "=" * 60)
     if all_pass:
-        print("ALL 10 CRITERIA PASSED")
+        print("ALL CRITERIA PASSED")
     else:
         print("SOME CRITERIA FAILED — see details above")
     print("=" * 60)

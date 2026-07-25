@@ -100,6 +100,7 @@ from config.constants import (
     CONSERVED_RESIDUES,
     TRYPSIN_CATALYTIC_RESIDUES,
     CES1_CATALYTIC_RESIDUES,
+    CYP3A4_CATALYTIC_RESIDUES,
     FP_RADIUS,
     FP_NBITS,
     PBP2A_CONFORMER_IDS,
@@ -1129,6 +1130,7 @@ def prepare_targets(
             ("apo", apo_path),
             ("trypsin", trypsin_path),
             ("CES1", ces1_path),
+            ("CYP3A4", cyp3a4_path),
         ):
             if "tests/data" in os.path.abspath(path):
                 msg = (
@@ -1244,6 +1246,24 @@ def prepare_targets(
         ces1_center = None
     log.info(f"    CES1 active site center: {ces1_center}")
     result["CES1"] = {"pdbqt": ces1_pdbqt, "active_center": ces1_center, "cleaned_pdb": ces1_clean_pdb}
+
+    # ── Clean CYP3A4 ──
+    log.info("  Cleaning CYP3A4 (1TQN)…")
+    cyp3a4_path = _resolve_structure(PDB_IDS["CYP3A4"])
+    cyp3a4_clean_pdb = os.path.join(work_dir, "CYP3A4_clean.pdb")
+    cyp3a4_pdbqt = clean_pdb_structure(
+        cyp3a4_path,
+        cyp3a4_clean_pdb,
+    )
+    log.info("  Computing CYP3A4 active site centroid (heme Fe, Thr309, Ala370)…")
+    try:
+        cyp3a4_center = compute_residue_centroid(cyp3a4_clean_pdb, CYP3A4_CATALYTIC_RESIDUES, use_ca=False)
+    except (ValueError, Exception) as exc:
+        log.warning(f"  ⚠  CYP3A4 catalytic residues {CYP3A4_CATALYTIC_RESIDUES} missing: {exc}")
+        log.warning("  Residue missing – grid center set to None; supply real PDB.")
+        cyp3a4_center = None
+    log.info(f"    CYP3A4 active site center: {cyp3a4_center}")
+    result["CYP3A4"] = {"pdbqt": cyp3a4_pdbqt, "active_center": cyp3a4_center, "cleaned_pdb": cyp3a4_clean_pdb}
 
     # ── Write grid configuration files ──
     grid_dir = os.path.join(work_dir, "grid_configs")
@@ -1841,6 +1861,28 @@ def analyze_selectivity_and_resistance(
     )
     for rec, energy in ces1_results:
         rec.human_ces1_energy = energy
+
+    # ── Dock vs CYP3A4 (human off-target liability panel) ──
+    cyp3a4_center = targets.get("CYP3A4", {}).get("active_center")
+    cyp3a4_pdbqt = targets.get("CYP3A4", {}).get("pdbqt")
+    if cyp3a4_center is not None and cyp3a4_pdbqt is not None:
+        log.info("  Docking top 10 vs Human CYP3A4 (1TQN)…")
+        cyp3a4_box = _auto_box_size(
+            targets["CYP3A4"].get("cleaned_pdb"), cyp3a4_center,
+            SELECTIVITY_BOX_SIZE, min_size=15.0, max_size=18.0, padding=2.0,
+            site_residues=CYP3A4_CATALYTIC_RESIDUES,
+        )
+        cyp3a4_dock_func = _offtarget_dock_with_centroid_check(cyp3a4_center, max_dist=12.0) if cyp3a4_center is not None else None
+        cyp3a4_results = _dock_compounds_parallel(
+            top10, cyp3a4_pdbqt,
+            cyp3a4_center, cyp3a4_box,
+            work_dir, "cyp3a4", n_jobs=min(4, len(top10)),
+            dock_func=cyp3a4_dock_func,
+        )
+        for rec, energy in cyp3a4_results:
+            rec.human_cyp3a4_energy = energy
+    else:
+        log.warning("  CYP3A4 target not available — skipping CYP3A4 docking.")
 
     # ── Post-fix validation guard: detect possible surface-patch artifacts ──
     for rec in top10:
@@ -2577,6 +2619,18 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
 
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
+
+    # ── Phase 4.1: MM-GBSA rescoring for top candidates ──
+    try:
+        from utils.docking import rescore_mmffsa
+        pb2pa_pdb = targets.get("PBP2a", {}).get("cleaned_pdb")
+        for rec in top10:
+            mmffsa = rescore_mmffsa(rec, receptor_pdb=pb2pa_pdb)
+            rec.mmff_sa_score = mmffsa
+        scored = sum(1 for r in top10 if r.mmff_sa_score is not None)
+        log.info(f"  MM-GBSA rescoring: {scored}/{len(top10)} candidates scored.")
+    except Exception as exc:
+        log.warning(f"  ⚠  MM-GBSA rescoring failed: {exc}")
 
     # ── Phase 4.2: Final ranking ──
     top10 = sorted(top10, key=lambda r: (
