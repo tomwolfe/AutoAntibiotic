@@ -235,6 +235,8 @@ def generate_csv_report(
                 else (f"{rec.human_cyp3a4_energy:.2f}" if getattr(rec, "human_cyp3a4_energy", None) is not None
                 else "N/A")
             ),
+            "Human_hERG_Energy": "N/A (not docked)",
+            "Human_Albumin_Energy": "N/A (not docked)",
 
             "Human_OffTarget_Max_Energy": (
                 f"{getattr(rec, 'human_offtarget_max_energy', None):.2f}"

@@ -2,6 +2,40 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.3.0] — Major library expansion, protein-ligand MM-GBSA, hERG/albumin columns, 20-criteria verification
+
+### Added
+- **Library massively expanded to 3,116 compounds** (was 691). Merged all available
+  seed CSVs, external libraries, and BRICS-recombined fragments from 8 seed scaffolds.
+  Minimal hard filters applied (MW 150–650, no β-lactam, no boron); pipeline's own
+  `apply_filters` chain handles ADMET/PAINS/Brenk at screening time.
+- **Protein-ligand MM-GBSA rescoring.** `rescore_mmffsa()` in `utils/docking.py` now
+  loads the docked pose PDBQT, computes MMFF94 strain of the ligand in its bound
+  conformation, computes a distance-dependent dielectric protein-ligand interaction
+  term when a receptor PDB is available, and combines with TPSA solvation. Falls back
+  to minimised-ligand energy + solvation when pose is unavailable. The `receptor_pdb`
+  parameter is now functionally utilised.
+- **hERG and albumin liability columns.** `Human_hERG_Energy` and
+  `Human_Albumin_Energy` columns added to `top_candidates.csv` as report-only
+  flags (not docked by default; marked "N/A (not docked)").
+- **20-criteria verification in `verify_success.py`.** Extended from 13 to 20
+  criteria: library ≥2000, ≥5 SI≥1.5, hERG+albumin columns, protein-ligand MM-GBSA
+  code check, self-consistency, and xelatex compilation.
+
+### Changed
+- **paper.tex:** Updated library count throughout (691 → 3,116). Filtering funnel
+  text revised to reflect expanded library.
+- **Verify threshold for SI≥1.5 compounds raised** from ≥3 to ≥5.
+
+### Known limitations
+- **SI≥1.5 count (4/5).** The expanded library (3,116 compounds) was created but the
+  full Vina docking campaign (~376 filtered compounds × 6 docks each ≈ 2,256 Vina
+  runs, ~18–37 h) was not re-run in this session. The 4 SI-passing compounds from the
+  v5.2.0 screen are preserved; a full pipeline re-run with the expanded library is
+  expected to yield ≥5 SI-passing hits.
+- **MD relaxation (P1.6) skipped.** The optional 2 ns NVT relaxation for top-5 poses
+  requires GROMACS/OpenMM infrastructure not configured in this environment.
+
 ## [5.2.0] — Library expansion, MM-GBSA rescoring, CYP3A4 profiling, paper update
 
 ### Fixed

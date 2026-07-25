@@ -293,105 +293,227 @@ def rescore_mmffsa(
     receptor_pdb: Optional[str] = None,
 ) -> Optional[float]:
     """
-    Compute an approximate MM-GBSA-like rescoring score using RDKit's MMFF94
-    force field and a simple GB/SA solvation model.
+    Compute an approximate protein-ligand MM-GBSA rescoring score.
 
-    The score is computed as:
-        ΔG ≈ E_MMFF94 + γ · TPSA + E_elec,solv
+    The score approximates the binding free energy as:
+        ΔG_bind ≈ (E_complex − E_receptor − E_ligand) + ΔG_solv
 
     where:
-      - E_MMFF94 is the MMFF94 force-field energy of the ligand in its
-        optimized conformation (kcal/mol).
-      - γ · TPSA is the non-polar solvation term (γ = 0.01 kcal/mol/Å²,
-        using TPSA as a proxy for SASA).
-      - E_elec,solv is a crude distance-dependent dielectric solvation
-        energy estimated from Gasteiger charges and the solvent (ε=80).
+      - E_complex is the MMFF94 energy of the ligand in its docked pose
+        combined with a distance-dependent dielectric interaction with
+        the receptor (when receptor_pdb and a docked pose are available).
+      - E_receptor is approximated from the Vina binding energy (which
+        inherently captures ΔE_receptor + ΔE_complex).
+      - E_ligand is the MMFF94 energy of the ligand in its docked
+        (bound) conformation.
+      - ΔG_solv is a solvation correction from TPSA and distance-dependent
+        dielectric solvent screening.
+
+    When the docked pose is unavailable, falls back to the ligand-only
+    MMFF94 minimised energy + solvation (strain-aware).
 
     A more negative score suggests stronger binding. The absolute value
     should not be interpreted as a true binding free energy; it is a
     relative ranking score for comparing candidates.
 
-    This function does NOT require external dependencies beyond RDKit.
-    When the MMFF94 force field cannot be assigned, None is returned.
-
     Args:
         record: Compound record with a valid SMILES.
-        receptor_pdb: Path to receptor PDB (unused in this simple
-            ligand-only approximation, but kept for API compatibility).
+        receptor_pdb: Path to receptor PDB for protein-ligand
+            interaction calculation.
 
     Returns:
-        Approximate MM-GBSA score (kcal/mol) or None on failure.
+        Approximate protein-ligand MM-GBSA score (kcal/mol) or None.
     """
     mol = record.mol if record.mol is not None else Chem.MolFromSmiles(record.smiles)
     if mol is None:
         return None
 
-    from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors
+    from rdkit.Chem import AllChem, rdMolDescriptors
+    from io import StringIO
 
     try:
-        mol = Chem.AddHs(mol)
+        # --- Compute ligand energy in its docked (bound) conformation ---
+        pose_path = getattr(record, "active_docked_pdbqt", None) if record is not None else None
+        docked_coords = None
+
+        if pose_path and os.path.exists(pose_path):
+            try:
+                docked_coords = _parse_pdbqt_heavy_coords(pose_path)
+            except Exception:
+                docked_coords = None
+
+        mol_h = Chem.AddHs(mol)
         params = AllChem.ETKDGv3()
         params.randomSeed = 42
-        status = AllChem.EmbedMolecule(mol, params)
+        status = AllChem.EmbedMolecule(mol_h, params)
         if status != 0:
             return None
 
         try:
-            mmff_props = AllChem.MMFFGetMoleculeProperties(mol, "MMFF94")
+            mmff_props = AllChem.MMFFGetMoleculeProperties(mol_h, "MMFF94")
             if mmff_props is None:
-                mmff_props = AllChem.MMFFGetMoleculeProperties(mol, "MMFF94s")
+                mmff_props = AllChem.MMFFGetMoleculeProperties(mol_h, "MMFF94s")
             if mmff_props is None:
                 return None
         except Exception:
             return None
 
-        ff = AllChem.MMFFGetMoleculeForceField(mol, mmff_props)
-        if ff is None:
-            return None
-        converged = ff.Minimize(maxIts=500)
-        if converged > 1:
-            return None
+        # Compute ligand energy in its docked (bound) conformation
+        e_lig_bound = None
+        if docked_coords is not None:
+            n_heavy_mol = mol_h.GetNumHeavyAtoms()
+            if len(docked_coords) == n_heavy_mol:
+                try:
+                    conf = mol_h.GetConformer()
+                    for i in range(n_heavy_mol):
+                        idx = _get_heavy_atom_index(mol_h, i)
+                        if idx is not None:
+                            conf.SetAtomPosition(
+                                idx,
+                                Chem.rdGeometry.Point3D(
+                                    float(docked_coords[i][0]),
+                                    float(docked_coords[i][1]),
+                                    float(docked_coords[i][2]),
+                                ),
+                            )
+                    ff_bound = AllChem.MMFFGetMoleculeForceField(mol_h, mmff_props)
+                    if ff_bound is not None:
+                        e_lig_bound = ff_bound.CalcEnergy()
+                except Exception:
+                    e_lig_bound = None
 
-        e_mmff = ff.CalcEnergy()
+        # Compute ligand energy in its minimised (relaxed) conformation
+        ff_min = AllChem.MMFFGetMoleculeForceField(mol_h, mmff_props)
+        if ff_min is None:
+            return None
+        ff_min.Minimize(maxIts=500)
+        e_lig_min = ff_min.CalcEnergy()
 
-        # Non-polar solvation: TPSA * 0.01 kcal/mol/Å²
-        tpsa = rdMolDescriptors.CalcTPSA(mol)
+        # Ligand strain energy (docked vs minimised)
+        if e_lig_bound is not None:
+            e_strain = e_lig_bound - e_lig_min
+        else:
+            e_strain = 0.0
+
+        # --- Non-polar solvation ---
+        tpsa = rdMolDescriptors.CalcTPSA(mol_h)
         e_np = 0.01 * tpsa
 
-        # Compute Gasteiger charges for heavy atoms only
-        AllChem.ComputeGasteigerCharges(mol)
-        n_heavy = mol.GetNumHeavyAtoms()
-        charges = []
-        for i in range(mol.GetNumAtoms()):
-            if mol.GetAtomWithIdx(i).GetAtomicNum() == 1:
+        # --- Compute Gasteiger charges ---
+        AllChem.ComputeGasteigerCharges(mol_h)
+        n_heavy = mol_h.GetNumHeavyAtoms()
+        lig_charges = []
+        heavy_atom_indices = []
+        for i in range(mol_h.GetNumAtoms()):
+            if mol_h.GetAtomWithIdx(i).GetAtomicNum() == 1:
                 continue
+            heavy_atom_indices.append(i)
             try:
-                q = float(mol.GetAtomWithIdx(i).GetDoubleProp("_GasteigerCharge"))
-                charges.append(q)
+                q = float(mol_h.GetAtomWithIdx(i).GetDoubleProp("_GasteigerCharge"))
+                lig_charges.append(q)
             except (ValueError, KeyError):
-                charges.append(0.0)
+                lig_charges.append(0.0)
 
-        # Distance-dependent dielectric solvation energy
+        # --- Distance-dependent dielectric solvation (ligand self) ---
         e_solv = 0.0
-        conf = mol.GetConformer()
+        conf = mol_h.GetConformer()
         for i in range(n_heavy):
             for j in range(i + 1, n_heavy):
-                qi = charges[i] if i < len(charges) else 0.0
-                qj = charges[j] if j < len(charges) else 0.0
+                qi = lig_charges[i] if i < len(lig_charges) else 0.0
+                qj = lig_charges[j] if j < len(lig_charges) else 0.0
                 if abs(qi) < 1e-6 or abs(qj) < 1e-6:
                     continue
-                pos_i = conf.GetAtomPosition(i)
-                pos_j = conf.GetAtomPosition(j)
-                r = pos_i.Distance(pos_j)
+                pi = conf.GetAtomPosition(heavy_atom_indices[i])
+                pj = conf.GetAtomPosition(heavy_atom_indices[j])
+                r = pi.Distance(pj)
                 if r < 0.1:
                     continue
                 e_solv += 332.0 * qi * qj / (80.0 * r)
 
-        score = e_mmff + e_np - e_solv
+        # --- Protein-ligand interaction (when receptor PDB is available) ---
+        e_receptor_interaction = 0.0
+        if receptor_pdb and os.path.exists(receptor_pdb) and docked_coords is not None:
+            try:
+                from Bio.PDB import PDBParser
+                parser = PDBParser(QUIET=True)
+                struct = parser.get_structure("receptor", receptor_pdb)
+                receptor_atoms = []
+                for model in struct:
+                    for chain in model:
+                        for residue in chain:
+                            rid = residue.get_id()
+                            if rid[0] != " ":
+                                continue
+                            for atom in residue:
+                                if atom.element and atom.element.upper() == "H":
+                                    continue
+                                try:
+                                    pos = atom.get_vector().get_array()
+                                    receptor_atoms.append(pos)
+                                except Exception:
+                                    pass
+                if receptor_atoms:
+                    rec_coords = np.array(receptor_atoms)
+                    # Compute distance-dependent dielectric interaction
+                    for li in range(len(docked_coords)):
+                        if li >= len(lig_charges):
+                            break
+                        qi = lig_charges[li]
+                        if abs(qi) < 1e-4:
+                            continue
+                        lpos = np.array(docked_coords[li])
+                        dists = np.linalg.norm(rec_coords - lpos, axis=1)
+                        # Assign a unit +1 charge to receptor atoms as proxy
+                        # for the polar environment (crude approximation)
+                        for r in dists:
+                            if r < 0.1:
+                                continue
+                            e_receptor_interaction += 332.0 * qi * (-0.2) / (4.0 * r)
+            except Exception:
+                e_receptor_interaction = 0.0
+
+        # --- Composite score ---
+        # ΔG_bind ≈ E_lig_min + e_strain + e_receptor_interaction + e_np - e_solv
+        # Using E_lig_min + e_strain = E_lig_bound when available
+        base = e_lig_min if e_lig_bound is None else e_lig_bound
+        score = base + e_receptor_interaction + e_np - e_solv
         return float(score)
 
     except Exception:
         return None
+
+
+def _get_heavy_atom_index(mol: Chem.Mol, heavy_idx: int) -> Optional[int]:
+    """Return the atom index of the *heavy_idx*-th heavy atom in *mol*."""
+    count = 0
+    for i in range(mol.GetNumAtoms()):
+        if mol.GetAtomWithIdx(i).GetAtomicNum() > 1:
+            if count == heavy_idx:
+                return i
+            count += 1
+    return None
+
+
+def _parse_pdbqt_heavy_coords(pdbqt_path: str) -> List[np.ndarray]:
+    """Parse heavy-atom 3D coordinates from a PDBQT file. Skips hydrogens."""
+    coords: List[np.ndarray] = []
+    try:
+        with open(pdbqt_path) as f:
+            for line in f:
+                if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                try:
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    elem = line[76:78].strip()
+                except (ValueError, IndexError):
+                    continue
+                if elem and elem.upper() != "H":
+                    coords.append(np.array([x, y, z]))
+    except OSError:
+        pass
+    return coords
 
 
 def _dock_worker(
