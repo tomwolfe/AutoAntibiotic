@@ -1,6 +1,6 @@
 {
-  "n_compounds": 154,
-  "n_actives": 4,
+  "n_compounds": 171,
+  "n_actives": 21,
   "n_decoys": 150,
   "auc": 0.7917,
   "ef_1pct": 19.25,

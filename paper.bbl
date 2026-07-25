@@ -1,0 +1,52 @@
+\begin{thebibliography}{5}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Fisher et~al.(2005)Fisher, Meroueh, and Mobashery]{fisher2005}
+John~F. Fisher, Samir~O. Meroueh, and Shahriar Mobashery.
+\newblock Bacterial resistance to beta-lactam antibiotics: compelling
+  opportunism, compelling opportunity.
+\newblock \emph{Chemical Reviews}, 105:\penalty0 395--424, 2005.
+\newblock \doi{10.1021/cr040648a}.
+
+\bibitem[Zhanel et~al.(2010)Zhanel, Lawrence, Adam, Schweizer, Noreddin,
+  Moisiuk, Lagac\'e-Wiens, Walkty, Nichol, and Karlowsky]{zhanel2010}
+George~G. Zhanel, Calvin~K. Lawrence, Heather Adam, Frank Schweizer, Ayman
+  Noreddin, Shirley Moisiuk, Philippe R.~S. Lagac\'e-Wiens, Andrew Walkty,
+  Kathryn~A. Nichol, and James~A. Karlowsky.
+\newblock Ceftaroline: a novel cephalosporin with activity against
+  methicillin-resistant \textit{Staphylococcus aureus}.
+\newblock \emph{Drugs}, 70:\penalty0 859--884, 2010.
+\newblock \doi{10.2165/11536740-000000000-00000}.
+
+\bibitem[E.~Simonet and Biot(2021)]{esimonet2021}
+Pierre E.~Simonet and Christophe Biot.
+\newblock Structure and dynamics of the allosteric sites of pbp2a from
+  \textit{S. aureus}: a possible communication with the catalytic site.
+\newblock \emph{Computational and Structural Biotechnology Journal},
+  19:\penalty0 461--470, 2021.
+\newblock \doi{10.1016/j.csbj.2020.12.017}.
+
+\bibitem[Troczi et~al.(2013)Troczi, Kocs, Nyiri, R\'ethey, Orb\'an, T\'oth,
+  T\'oth, Schellhorn, Schneider, Ferenczy, and Keser\H{u}]{troczi2013}
+\'Eva Troczi, D\'ora Kocs, Krisztina Nyiri, Zita R\'ethey, Erika Orb\'an,
+  \'Akos T\'oth, Gy\"orgy T\'oth, Heike Schellhorn, G\'abor Schneider,
+  Gy\"orgy~Mikl\'os Ferenczy, and Gy\"orgy~M. Keser\H{u}.
+\newblock Identification of pbp2a inhibitors by structure-based and
+  ligand-based virtual screening.
+\newblock \emph{Journal of Chemical Information and Modeling}, 53:\penalty0
+  1303--1315, 2013.
+\newblock \doi{10.1021/ci400105b}.
+
+\bibitem[Trott and Olson(2010)]{trott2010}
+Oleg Trott and Arthur~J. Olson.
+\newblock {AutoDock Vina}: improving the speed and accuracy of docking with a
+  new scoring function, efficient optimization, and multithreading.
+\newblock \emph{Journal of Computational Chemistry}, 31:\penalty0 455--461,
+  2010.
+\newblock \doi{10.1002/jcc.21334}.
+
+\end{thebibliography}
