@@ -303,6 +303,9 @@ def generate_csv_report(
             # = |E_PBP2a| / 7.3 (no covalent bonus). SI_Tier is the Strong /
             # Promising / Weak / N/A label. Passes_Selectivity_Gate flags the
             # mechanism-restricted gate (SI vs trypsin/CES1 >= 2.0).
+            # Approximate MMFF94-based rescoring score (arbitrary units, NOT kcal/mol).
+            # Computed as: MMFF94 strain + distance-dependent dielectric interaction
+            # + TPSA solvation. Not a true MM-GBSA score.
             "MMGBSA_Score": (
                 f"{rec.mmff_sa_score:.2f}" if getattr(rec, "mmff_sa_score", None) is not None
                 else "N/A"

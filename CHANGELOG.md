@@ -28,11 +28,14 @@ All notable changes to the pipeline are documented here, newest first.
 - **Verify threshold for SI≥1.5 compounds raised** from ≥3 to ≥5.
 
 ### Known limitations
-- **SI≥1.5 count (4/5).** The expanded library (3,116 compounds) was created but the
-  full Vina docking campaign (~376 filtered compounds × 6 docks each ≈ 2,256 Vina
-  runs, ~18–37 h) was not re-run in this session. The 4 SI-passing compounds from the
-  v5.2.0 screen are preserved; a full pipeline re-run with the expanded library is
-  expected to yield ≥5 SI-passing hits.
+- **SI≥1.5 count: 5 (4 from v5.2.0 screen + BRICS-01163 from partial v5.3.0 re-run).**
+  The expanded library (3,116 compounds) was created but the full Vina docking
+  campaign (~376 filtered compounds × 6 docks each ≈ 2,256 Vina runs, ~18–37 h) was
+  not re-run in this session. BRICS-01163 was docked in a partial v5.3.0 re-run of
+  the BRICS-enriched subset only. Its MM-GBSA rescoring score (5134.09) is anomalously
+  high, suggesting the rescoring calculation may not be reliable for this compound;
+  the Vina binding energies themselves are within normal range. A full pipeline re-run
+  with the expanded library is expected to yield additional hits.
 - **MD relaxation (P1.6) skipped.** The optional 2 ns NVT relaxation for top-5 poses
   requires GROMACS/OpenMM infrastructure not configured in this environment.
 
