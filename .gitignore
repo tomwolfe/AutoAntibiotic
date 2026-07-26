@@ -6,8 +6,8 @@ paper.out
 unsrtnat.bst
 *.egg-info/
 benchmarks/
-figures/
 output/*/
+!output/figures/
 
 # Generated release status badge (written by main() after redocking validation)
 status.json
