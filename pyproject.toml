@@ -33,7 +33,7 @@ docking = [
 ]
 
 [project.scripts]
-autoantibiotic = "discovery_pipeline:main"
+autoantibiotic = "discovery_pipeline:cli"
 
 # NOTE: `autodock-vina` is an external system dependency and is NOT a pip
 # package. Install it separately, e.g.:

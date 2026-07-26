@@ -1,13 +1,12 @@
 {
-  "generated": 3116,
-  "after_structural": 3116,
-  "after_similarity": 3107,
-  "after_admet": 696,
-  "after_pains": 694,
-  "after_brenk": 392,
-  "after_filtering": 392,
-  "pharmacophore_filtered": 375,
-  "docked_active": 20,
-  "si_passing": 5,
-  "reported": 20
+  "generated": 19,
+  "after_structural": 19,
+  "after_similarity": 18,
+  "after_admet": 17,
+  "after_pains": 16,
+  "after_brenk": 12,
+  "after_filtering": 12,
+  "docked_active": 12,
+  "si_passing": 1,
+  "reported": 12
 }

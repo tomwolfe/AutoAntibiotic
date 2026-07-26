@@ -1011,10 +1011,17 @@ def clean_pdb_structure(
         # Uses the `-xr` flag to produce a rigid-receptor PDBQT.
         # Without `-xr`, obabel creates a flexible ligand-style PDBQT
         # (branch records) that Vina rejects for a rigid receptor.
+        # NOTE: RDKit's Chem.MolToPDBFile generates CONECT records that
+        # cause obabel to hang indefinitely. Strip them before conversion.
         pdbqt_path = out_path.replace(".pdb", ".pdbqt")
+        _pdb_no_conect = out_path.replace(".pdb", "_noconect.pdb")
         try:
+            with open(out_path) as fh_in:
+                lines = [l for l in fh_in if not l.startswith("CONECT")]
+            with open(_pdb_no_conect, "w") as fh_out:
+                fh_out.writelines(lines)
             subprocess.run(
-                ["obabel", out_path, "-O", pdbqt_path, "-xr"],
+                ["obabel", _pdb_no_conect, "-O", pdbqt_path, "-xr"],
                 capture_output=True, timeout=300,
             )
             if os.path.exists(pdbqt_path) and os.path.getsize(pdbqt_path) > 0:
@@ -2758,7 +2765,11 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     log.info("Pipeline complete. Exiting.")
 
 
-if __name__ == "__main__":
+def cli():
+    """CLI entry point for the ``autoantibiotic`` command.
+    
+    Parses command-line arguments and runs the pipeline.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(description="AutoAntibiotic Discovery Pipeline")
@@ -2819,3 +2830,7 @@ if __name__ == "__main__":
     log.info(f"AutoAntibiotic Discovery Pipeline v{__version__}")
     main(target_count=args.count, force=args.force, library=args.library,
          smiles=args.smiles, refine=args.refine)
+
+
+if __name__ == "__main__":
+    cli()
