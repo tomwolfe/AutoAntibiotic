@@ -3,6 +3,7 @@
 
 import csv
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -79,14 +80,16 @@ def main():
     ok = len(pngs) >= 4
     c(8, ">= 4 figures in output/figures/", ok, f"{len(pngs)} PNGs")
 
-    result = subprocess.run(
-        ["/opt/homebrew/bin/xelatex", "-interaction=nonstopmode", paper_path.name],
-        cwd=paper_path.parent, capture_output=True, text=True, timeout=60,
-    )
+    xelatex = shutil.which("xelatex") or shutil.which("pdflatex")
+    if xelatex:
+        result = subprocess.run(
+            [xelatex, "-interaction=nonstopmode", paper_path.name],
+            cwd=paper_path.parent, capture_output=True, text=True, timeout=60,
+        )
     pdf = paper_path.with_suffix(".pdf")
     pdf_ok = pdf.exists() and pdf.stat().st_size > 0
-    ok = result.returncode == 0 and pdf_ok
-    c(9, "paper.tex compiles", ok, f"PDF={pdf.stat().st_size}B" if ok else f"err={result.returncode}")
+    ok = xelatex is not None and result.returncode == 0 and pdf_ok
+    c(9, "paper.tex compiles", ok, f"PDF={pdf.stat().st_size}B" if ok else f"xelatex not found")
 
     paper_text = paper_path.read_text()
     issues = []
@@ -143,8 +146,6 @@ def main():
     else:
         n_fail = len(criteria_results) - n_pass
         print(f"{n_pass}/{len(criteria_results)} CRITERIA PASSED ({n_fail} FAILED)")
-        print("Note: Criteria 3/15 (>=5 SI>=1.5) require a full Vina pipeline")
-        print("re-run with expanded library (~18-37h compute). Library file is ready.")
     print("=" * 60)
     return 0 if all_pass else 1
 

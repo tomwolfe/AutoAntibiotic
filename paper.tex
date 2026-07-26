@@ -23,7 +23,7 @@
 
 \title{\textbf{Computational Identification of Non-$\beta$-Lactam PBP2a Inhibitors Against MRSA via Structure-Based Virtual Screening}
 \\[6pt]
-\large AutoAntibiotic Discovery Pipeline v5.2.0}
+\large AutoAntibiotic Discovery Pipeline v5.3.0}
 \author{AutoAntibiotic Agent}
 \date{\today}
 
@@ -41,7 +41,7 @@ $\beta$-Lactam antibiotics target penicillin-binding proteins (PBPs), the transp
 
 Two complementary strategies exist for targeting PBP2a: (i)~active-site inhibition, which competes with the native peptidoglycan substrate, and (ii)~allosteric inhibition, which stabilises a closed conformation~\cite{esimonet2021}. Several allosteric PBP2a inhibitors have been reported, including oxadiazole and quinazolinone series~\cite{troczi2013}. However, active-site-directed non-$\beta$-lactam scaffolds remain underexplored due to the inherent challenge of achieving selective binding in a shallow, polar active site.
 
-Here we present the AutoAntibiotic Discovery Pipeline v5.2.0, a fully automated, reproducible consensus docking pipeline that screens diverse non-$\beta$-lactam compounds against the PBP2a active site across three crystallographic conformers (3ZG0 holo, 1VQQ apo, 4DKI), with mechanism-restricted selectivity profiling against human serine hydrolases (trypsin 1UTN, carboxylesterase~1 1YAH) and CYP3A4 (1TQN). The pipeline incorporates native-ligand redocking validation, enrichment benchmarking against known actives, MMFF94-based MM-GBSA rescoring, tiered selectivity indexing, and an expanded library of 3,116 compounds spanning 12 scaffold families.
+Here we present the AutoAntibiotic Discovery Pipeline v5.3.0, a fully automated, reproducible consensus docking pipeline that screens diverse non-$\beta$-lactam compounds against the PBP2a active site across three crystallographic conformers (3ZG0 holo, 1VQQ apo, 4DKI), with mechanism-restricted selectivity profiling against human serine hydrolases (trypsin 1UTN, carboxylesterase~1 1YAH) and CYP3A4 (1TQN). The pipeline incorporates native-ligand redocking validation, enrichment benchmarking against known actives, MMFF94-based MM-GBSA rescoring, tiered selectivity indexing, and an expanded library of 3,116 compounds spanning 12 scaffold families.
 
 \section{Methods}
 
@@ -139,7 +139,7 @@ The top candidates ranked by consensus PBP2a active-site binding energy are show
 The top candidate ALL-QU05 (\texttt{O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1}) is a biaryl oxadiazole derivative that engages all three catalytic residues in the PBP2a active site. The oxadiazole nitrogen forms a hydrogen-bond contact with Ser403~(\SI{2.7}{\angstrom}), the aniline NH accepts a hydrogen bond from Lys406~(\SI{2.6}{\angstrom}), and the aromatic system forms a stabilising contact with Tyr446~(\SI{2.6}{\angstrom}). The compound passes Lipinski rules, has QED~=~0.52, SA~=~2.13, and TPSA~=~\SI{50.68}{\square\angstrom}.
 
 \subsection{Energy distribution and selectivity analysis}
-The distribution of PBP2a active-site docking energies (Figure~\ref{fig:energy}) shows a range from $-$10.05 to $-$9.01~\si{\kcal\per\mol}. The selectivity analysis (Figure~\ref{fig:si}) identifies five compounds above the Promising threshold (SI~$\ge$~1.5). ALL-QU05 is the only compound in the Strong tier (SI~$\ge$~2.0), driven by its favourable PBP2a affinity (\SI{-9.75}{\kcal\per\mol}) and weak binding to CES1 (\SI{-0.20}{\kcal\per\mol}).
+The distribution of PBP2a active-site docking energies (Figure~\ref{fig:energy}) shows a range from $-$10.23 to $-$9.01~\si{\kcal\per\mol}. The selectivity analysis (Figure~\ref{fig:si}) identifies five compounds above the Promising threshold (SI~$\ge$~1.5). ALL-QU05 is the only compound in the Strong tier (SI~$\ge$~2.0), driven by its favourable PBP2a affinity (\SI{-9.75}{\kcal\per\mol}) and weak binding to CES1 (\SI{-0.20}{\kcal\per\mol}).
 
 \begin{figure}[H]
   \centering
@@ -177,7 +177,7 @@ The 2D interaction diagrams for the top three candidates (Figure~\ref{fig:intera
 \section{Discussion}
 
 \subsection{Pipeline validation}
-The AutoAntibiotic v5.2.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The consensus docking protocol across three PBP2a conformers provides robustness against conformational bias, and the mechanism-restricted selectivity profiling against two serine hydrolases reduces the risk of identifying promiscuous inhibitors. The expanded library of 3,116 compounds from 12 scaffold families provides broader chemical space coverage than the original 392-compound filtered set. MMFF94-based MM-GBSA rescoring of the top candidates offers a force-field-based ranking complementary to the Vina binding energies.
+The AutoAntibiotic v5.3.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The consensus docking protocol across three PBP2a conformers provides robustness against conformational bias, and the mechanism-restricted selectivity profiling against two serine hydrolases reduces the risk of identifying promiscuous inhibitors. The expanded library of 3,116 compounds from 12 scaffold families provides broader chemical space coverage than the original 392-compound filtered set. MMFF94-based MM-GBSA rescoring of the top candidates offers a force-field-based ranking complementary to the Vina binding energies.
 
 \subsection{ALL-QU05 as a validated hit}
 The top candidate ALL-QU05 satisfies the hard success criterion: it carries a ``Validated'' protocol trust badge, achieves an SI~=~2.06 (Strong tier), and forms confirmed contacts with Ser403, Lys406, and Tyr446. The compound is drug-like (QED~=~0.52, SA~=~2.13, MW~=~351.1, no PAINS, no $\beta$-lactam) and represents a genuine non-$\beta$-lactam PBP2a inhibitor candidate for experimental validation.
@@ -211,7 +211,7 @@ ALL-QU05's SI relative to ceftaroline (SI$_{\text{vs CEF}}$~=~1.05) indicates co
 \end{table}
 
 \subsection{CES1 off-target profiling}
-After correcting the CES1 grid-box parameters (18~\si{\angstrom}, \SI{2.0}{\angstrom} padding) and centroid-check radius (\SI{11}{\angstrom}), all 20 candidates produced valid CES1 poses. Eight candidates showed unfavourable CES1 binding energies (positive \si{\kcal\per\mol}), reflecting size mismatches with the narrower CES1 catalytic gorge. These compounds were assigned a provisional single-target SI computed against trypsin alone. No candidates were lost to steric clashes.
+After correcting the CES1 grid-box parameters (18~\si{\angstrom}, \SI{2.0}{\angstrom} padding) and centroid-check radius (\SI{11}{\angstrom}), all 20 candidates produced valid CES1 poses. Seven candidates showed unfavourable CES1 binding energies (positive \si{\kcal\per\mol}), reflecting size mismatches with the narrower CES1 catalytic gorge. These compounds were assigned a provisional single-target SI computed against trypsin alone. No candidates were lost to steric clashes.
 
 \subsection{MM-GBSA rescoring}
 Top candidates were rescored using an RDKit MMFF94 force-field minimisation combined with a distance-dependent dielectric solvation model (\texttt{rescore\_mmffsa}). The MM-GBSA scores provide a ligand-strain-aware ranking that is complementary to the Vina binding energies. While the absolute values are not true binding free energies, the relative ordering can help prioritise candidates with more favourable conformational energetics. The top candidate ALL-QU05 had the least favourable MMFF94 strain energy among the top~5 (52.98~a.u.), suggesting that some of its Vina-predicted binding affinity may be offset by ligand strain; this should be investigated further with full MM-GBSA on the protein-ligand complex.
@@ -245,12 +245,12 @@ Finally, while the library was expanded to 3,116 compounds, this remains small r
 
 \section{Conclusion}
 
-We present a validated, reproducible consensus docking screen that identifies ALL-QU05 as a drug-like, non-$\beta$-lactam PBP2a inhibitor with confirmed contacts to Ser403, Lys406, and Tyr446 and strong selectivity over human serine hydrolases (SI~=~2.06). The AutoAntibiotic v5.2.0 pipeline, with its expanded library of 3,116 compounds, integrated redocking validation, consensus scoring across three conformers, MM-GBSA rescoring, CYP3A4 off-target profiling, and mechanism-restricted selectivity indexing, provides a robust framework for structure-based virtual screening. ALL-QU05 represents an actionable lead for experimental validation and optimisation towards a novel MRSA therapeutic.
+We present a validated, reproducible consensus docking screen that identifies ALL-QU05 as a drug-like, non-$\beta$-lactam PBP2a inhibitor with confirmed contacts to Ser403, Lys406, and Tyr446 and strong selectivity over human serine hydrolases (SI~=~2.06). The AutoAntibiotic v5.3.0 pipeline, with its expanded library of 3,116 compounds, integrated redocking validation, consensus scoring across three conformers, MM-GBSA rescoring, CYP3A4 off-target profiling, and mechanism-restricted selectivity indexing, provides a robust framework for structure-based virtual screening. ALL-QU05 represents an actionable lead for experimental validation and optimisation towards a novel MRSA therapeutic.
 
 \section*{Data availability}
 All pipeline code, input data, and results are available in the AutoAntibiotic repository. The screen can be reproduced by running:\\[4pt]
 \texttt{autoantibiotic --library data/screen\_library\_final.csv --count 3000}.\\[4pt]
-Pipeline version 5.2.0 was used for this study.
+Pipeline version 5.3.0 was used for this study.
 
 \bibliographystyle{unsrtnat}
 \bibliography{references}
