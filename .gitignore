@@ -36,7 +36,7 @@ RUN_REPORT.md
 library.csv
 
 # Generated decoys
-data/known_decoys.csv
+#data/known_decoys.csv
 
 # IDE / editor
 .vscode/
