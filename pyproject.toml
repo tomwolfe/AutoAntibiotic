@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["discovery_pipeline*", "utils*", "config*"]
+include = ["config", "utils", "tests"]
 
 [project]
 name = "autoantibiotic-discovery-pipeline"
@@ -12,7 +12,7 @@ description = "AutoAntibiotic Discovery Pipeline — MRSA PBP2a inhibitor screen
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "rdkit-pypi",
+    "rdkit",
     "biopython",
     "pandas",
     "numpy<2",
@@ -39,6 +39,9 @@ autoantibiotic = "discovery_pipeline:main"
 # package. Install it separately, e.g.:
 #   conda install -c conda-forge vina
 #   # or build from https://github.com/ccsb-scripps/AutoDock-Vina
-# It must be on PATH for the docking (Phase 3) and redocking (Phase 0)
+# It must be on PATH for the docking (Phase 0) and redocking (Phase 0)
 # steps to run. When Vina is absent, the pipeline falls back to the RDKit
 # Shape/Pharmacophore scoring path.
+
+[tool.setuptools]
+py-modules = ["discovery_pipeline"]
