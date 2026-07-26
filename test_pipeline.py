@@ -640,6 +640,10 @@ class TestRealPDBSmoke:
             src = TEST_REAL_PDB_DIR / f"{pdb_id}.pdb"
             if src.exists():
                 shutil.copy(str(src), str(real_pdb_dir / f"{pdb_id}.pdb"))
+        # CYP3A4 uses 1TQN - copy an existing PDB as a stand-in
+        cyp3a4_src = TEST_REAL_PDB_DIR / "1VQQ.pdb"
+        if cyp3a4_src.exists():
+            shutil.copy(str(cyp3a4_src), str(real_pdb_dir / "1TQN.pdb"))
 
         def mock_fetch_structure(pdb_id, out_dir):
             return str(real_pdb_dir / f"{pdb_id}.pdb")
@@ -2348,11 +2352,16 @@ class TestEnrichmentValidationWritesResults:
         # (which adds scripts/ to sys.path), so ensure it's available for patching.
         _scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
         sys.path.insert(0, _scripts_dir)
-        import enrichment_validation as _ev
+        # Mock matplotlib before importing enrichment_validation
+        mock_matplotlib = MagicMock()
+        mock_pyplot = MagicMock()
+        with patch.dict("sys.modules", {"matplotlib": mock_matplotlib, "matplotlib.pyplot": mock_pyplot}):
+            import enrichment_validation as _ev
         with patch.object(_ev, "load_benchmark") as mock_load, \
              patch.object(_ev, "compute_roc") as mock_roc, \
              patch("discovery_pipeline.os.path.exists", return_value=True), \
-             patch("discovery_pipeline._dock_compounds_parallel") as mock_dock:
+             patch("discovery_pipeline._dock_compounds_parallel") as mock_dock, \
+             patch.dict("sys.modules", {"matplotlib": mock_matplotlib, "matplotlib.pyplot": mock_pyplot}):
 
             mock_records = [
                 CompoundRecord(compound_id="ACT_0001", smiles="c1ccccc1"),
