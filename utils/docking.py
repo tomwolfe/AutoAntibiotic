@@ -293,28 +293,24 @@ def rescore_mmffsa(
     receptor_pdb: Optional[str] = None,
 ) -> Optional[float]:
     """
-    Compute an approximate protein-ligand MM-GBSA rescoring score.
+    Compute a relative MMFF94 strain-aware rescoring score.
 
-    The score approximates the binding free energy as:
-        ΔG_bind ≈ (E_complex − E_receptor − E_ligand) + ΔG_solv
+    The score combines three physically motivated terms:
+        score = e_strain + e_receptor_interaction + e_np
 
     where:
-      - E_complex is the MMFF94 energy of the ligand in its docked pose
-        combined with a distance-dependent dielectric interaction with
-        the receptor (when receptor_pdb and a docked pose are available).
-      - E_receptor is approximated from the Vina binding energy (which
-        inherently captures ΔE_receptor + ΔE_complex).
-      - E_ligand is the MMFF94 energy of the ligand in its docked
-        (bound) conformation.
-      - ΔG_solv is a solvation correction from TPSA and distance-dependent
-        dielectric solvent screening.
+      - e_strain is the ligand strain energy (MMFF94 energy of the
+        docked pose minus MMFF94 energy of the relaxed conformation).
+      - e_receptor_interaction is an electrostatic proxy computed via
+        distance-dependent dielectric interaction between Gasteiger
+        ligand charges and a uniform -0.2 receptor atom charge proxy.
+      - e_np is a non-polar solvation term estimated from TPSA.
 
-    When the docked pose is unavailable, falls back to the ligand-only
-    MMFF94 minimised energy + solvation (strain-aware).
+    When the docked pose is unavailable, returns None.
 
-    A more negative score suggests stronger binding. The absolute value
-    should not be interpreted as a true binding free energy; it is a
-    relative ranking score for comparing candidates.
+    A more negative score suggests a more favourable binding pose.
+    The absolute value should not be interpreted as a true binding
+    free energy; it is a relative ranking score for comparing candidates.
 
     Args:
         record: Compound record with a valid SMILES.
@@ -473,10 +469,12 @@ def rescore_mmffsa(
                 e_receptor_interaction = 0.0
 
         # --- Composite score ---
-        # ΔG_bind ≈ E_lig_min + e_strain + e_receptor_interaction + e_np - e_solv
-        # Using E_lig_min + e_strain = E_lig_bound when available
-        base = e_lig_min if e_lig_bound is None else e_lig_bound
-        score = base + e_receptor_interaction + e_np - e_solv
+        # ΔG ≈ e_strain + e_receptor_interaction + e_np
+        # Returns a relative ranking score (strain penalty + interaction + solvation).
+        # Lower (more negative) suggests a more favourable binding pose.
+        if e_lig_bound is None:
+            return None
+        score = e_strain + e_receptor_interaction + e_np
         return float(score)
 
     except Exception:
