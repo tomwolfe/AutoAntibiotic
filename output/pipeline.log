@@ -4766,3 +4766,206 @@ Re-docking LIT_SHA01...
 2026-07-24 23:41:03 | INFO     |   LIT_SHA01: CES1 energy = 8.98 kcal/mol
 2026-07-24 23:41:03 | INFO     | 
 Updated CSV saved to /Users/tom/Documents/apps/AutoAntibiotic/output/top_candidates.csv
+2026-07-26 11:27:06 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 11:27:06 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 11:27:07 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 11:27:07 | INFO     |   ✓  All required Python packages found.
+2026-07-26 11:27:07 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-26 11:27:07 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-26 11:27:07 | INFO     |   Run mode (from config): science
+2026-07-26 11:27:07 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 11:27:07 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 11:27:07 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-26 11:27:07 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-26 11:27:07 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 11:27:07 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 11:27:07 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 11:27:07 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-26 11:27:07 | INFO     | Science mode: real scientific validation expected.
+2026-07-26 11:27:07 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-26 11:27:07 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-26 11:27:55 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 11:27:55 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 11:27:55 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 11:27:55 | INFO     |   ✓  All required Python packages found.
+2026-07-26 11:27:55 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-26 11:27:55 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-26 11:27:55 | INFO     |   Run mode (from config): science
+2026-07-26 11:27:55 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 11:27:55 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 11:27:55 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-26 11:27:55 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-26 11:27:55 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 11:27:55 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 11:27:55 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 11:27:55 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-26 11:27:55 | INFO     | Science mode: real scientific validation expected.
+2026-07-26 11:27:55 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-26 11:27:55 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-26 12:03:38 | INFO     | AutoAntibiotic Discovery Pipeline v5.2.0
+2026-07-26 12:03:38 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 12:03:38 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 12:03:38 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 12:03:38 | INFO     |   ✓  All required Python packages found.
+2026-07-26 12:03:38 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-26 12:03:38 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-26 12:03:38 | INFO     |   Run mode (from config): ci
+2026-07-26 12:03:38 | INFO     |   Using local structure for 3ZG0: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/3ZG0.pdb
+2026-07-26 12:03:38 | INFO     |   Using local structure for 1VQQ: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1VQQ.pdb
+2026-07-26 12:03:38 | INFO     |   Using local structure for 1UTN: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1UTN.pdb
+2026-07-26 12:03:38 | INFO     |   Using local structure for 1YAH: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1YAH.pdb
+2026-07-26 12:03:38 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 12:03:38 | INFO     |   Using local structure for 1VQQ: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1VQQ.pdb
+2026-07-26 12:03:38 | INFO     |   Using local structure for 3ZG0: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/3ZG0.pdb
+2026-07-26 12:03:38 | INFO     |   Using local structure for 4DKI: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/4DKI.pdb
+2026-07-26 12:03:38 | INFO     | CI mode: using mock PDBs - not for scientific use.
+2026-07-26 12:03:38 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-26 12:03:38 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:03:38 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-26 12:03:38 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-26 12:03:38 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:03:38 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-26 12:03:38 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:03:39 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 12:03:39 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 12:03:39 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:03:39 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 12:03:39 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 12:03:39 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-26 12:03:39 | INFO     |     Active site center: [49.75925926 49.39814815 49.39814815]
+2026-07-26 12:03:39 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-26 12:03:39 | INFO     |     Allosteric site center: [19.48148148 19.21296296 19.21296296]
+2026-07-26 12:03:39 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-26 12:03:39 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:03:39 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-26 12:03:39 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-26 12:03:39 | INFO     |     Trypsin active site center: [21.5 20.8 20.6]
+2026-07-26 12:03:39 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-26 12:03:39 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:03:39 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-26 12:03:39 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-26 12:03:39 | INFO     |     CES1 active site center: [21.5 20.8 20.6]
+2026-07-26 12:03:39 | INFO     |   Cleaning CYP3A4 (1TQN)…
+2026-07-26 12:03:39 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 12:03:39 | INFO     |   Polar hydrogens added to output/workdir/CYP3A4_clean.pdb
+2026-07-26 12:03:44 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CYP3A4_clean.pdbqt
+2026-07-26 12:03:44 | INFO     |   Computing CYP3A4 active site centroid (heme Fe, Thr309, Ala370)…
+2026-07-26 12:03:44 | INFO     |     CYP3A4 active site center: [-20.83707145 -22.85971421 -15.8193571 ]
+2026-07-26 12:03:44 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-26 12:03:44 | INFO     | ─── Phase 1 complete ───
+2026-07-26 12:03:44 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-26 12:03:44 | INFO     | Skipping redocking: CI/mock mode
+2026-07-26 12:03:44 | ERROR    |   ✗  Redocking validation did NOT reach the 'Validated' (≤ 1.5 Å) bar; docking results should be interpreted with caution. Proceeding and reporting the measured RMSD honestly in the CSV (protocol_trust).
+2026-07-26 12:03:44 | WARNING  |   ⚠  Redocking validation is diagnostic only — the screen continues and the protocol_trust badge reflects the true measured RMSD.
+2026-07-26 12:03:44 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-26 12:03:44 | INFO     |   ✓  Enrichment validation: AUC=0.792, EF_1%=19.25
+2026-07-26 12:03:44 | INFO     | ─── Phase 0.5 complete ───
+2026-07-26 12:03:44 | INFO     | ─── Phase 2: Library Generation ───
+2026-07-26 12:03:44 | INFO     |   Fragment pool: 111 unique fragments.
+2026-07-26 12:06:27 | INFO     | AutoAntibiotic Discovery Pipeline v5.2.0
+2026-07-26 12:06:27 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 12:06:27 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 12:06:27 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 12:06:27 | INFO     |   ✓  All required Python packages found.
+2026-07-26 12:06:27 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-26 12:06:27 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-26 12:06:27 | INFO     |   Run mode (from config): ci
+2026-07-26 12:06:27 | INFO     |   Using local structure for 3ZG0: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/3ZG0.pdb
+2026-07-26 12:06:27 | INFO     |   Using local structure for 1VQQ: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1VQQ.pdb
+2026-07-26 12:06:27 | INFO     |   Using local structure for 1UTN: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1UTN.pdb
+2026-07-26 12:06:27 | INFO     |   Using local structure for 1YAH: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1YAH.pdb
+2026-07-26 12:06:27 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 12:06:27 | INFO     |   Using local structure for 1VQQ: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/1VQQ.pdb
+2026-07-26 12:06:27 | INFO     |   Using local structure for 3ZG0: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/3ZG0.pdb
+2026-07-26 12:06:27 | INFO     |   Using local structure for 4DKI: /Users/tom/Documents/apps/AutoAntibiotic/tests/data/4DKI.pdb
+2026-07-26 12:06:27 | INFO     | CI mode: using mock PDBs - not for scientific use.
+2026-07-26 12:06:27 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-26 12:06:27 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:06:27 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-26 12:06:27 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-26 12:06:27 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:06:27 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-26 12:06:27 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:06:27 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 12:06:27 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 12:06:27 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:06:28 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 12:06:28 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 12:06:28 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-26 12:06:28 | INFO     |     Active site center: [49.75925926 49.39814815 49.39814815]
+2026-07-26 12:06:28 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-26 12:06:28 | INFO     |     Allosteric site center: [19.48148148 19.21296296 19.21296296]
+2026-07-26 12:06:28 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-26 12:06:28 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:06:28 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-26 12:06:28 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-26 12:06:28 | INFO     |     Trypsin active site center: [21.5 20.8 20.6]
+2026-07-26 12:06:28 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-26 12:06:28 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 12:06:28 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-26 12:06:28 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-26 12:06:28 | INFO     |     CES1 active site center: [21.5 20.8 20.6]
+2026-07-26 12:06:28 | INFO     |   Cleaning CYP3A4 (1TQN)…
+2026-07-26 12:06:28 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 12:06:28 | INFO     |   Polar hydrogens added to output/workdir/CYP3A4_clean.pdb
+2026-07-26 12:06:32 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CYP3A4_clean.pdbqt
+2026-07-26 12:06:32 | INFO     |   Computing CYP3A4 active site centroid (heme Fe, Thr309, Ala370)…
+2026-07-26 12:06:32 | INFO     |     CYP3A4 active site center: [-20.83707145 -22.85971421 -15.8193571 ]
+2026-07-26 12:06:32 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-26 12:06:32 | INFO     | ─── Phase 1 complete ───
+2026-07-26 12:06:32 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-26 12:06:32 | INFO     | Skipping redocking: CI/mock mode
+2026-07-26 12:06:32 | ERROR    |   ✗  Redocking validation did NOT reach the 'Validated' (≤ 1.5 Å) bar; docking results should be interpreted with caution. Proceeding and reporting the measured RMSD honestly in the CSV (protocol_trust).
+2026-07-26 12:06:32 | WARNING  |   ⚠  Redocking validation is diagnostic only — the screen continues and the protocol_trust badge reflects the true measured RMSD.
+2026-07-26 12:06:32 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-26 12:06:32 | INFO     |   ✓  Enrichment validation: AUC=0.792, EF_1%=19.25
+2026-07-26 12:06:32 | INFO     | ─── Phase 0.5 complete ───
+2026-07-26 12:06:32 | INFO     | ─── Phase 2: Library Generation ───
+2026-07-26 12:06:32 | INFO     |   Fragment pool: 111 unique fragments.
+2026-07-26 12:06:33 | INFO     |   Pass 1: 5 unique so far.
+2026-07-26 12:06:33 | INFO     |   BRICS generated: 5 compounds.
+2026-07-26 12:06:33 | INFO     |   After adding seeds: 5 compounds.
+2026-07-26 12:06:33 | INFO     |   After adding known actives: 5 compounds.
+2026-07-26 12:06:33 | INFO     |   Enforcing diversity filters...
+2026-07-26 12:06:33 | INFO     |   After diversity filters: 4 candidates.
+2026-07-26 12:06:33 | INFO     |   Library generation complete: 9 compounds.
+2026-07-26 12:06:33 | INFO     | ─── Phase 2: Filtering ───
+2026-07-26 12:06:33 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-26 12:06:33 | INFO     |   Similarity filter (Tc < 0.3): 1 removed.
+2026-07-26 12:06:33 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 1 removed.
+2026-07-26 12:06:33 | INFO     |   PAINS filter: 0 removed.
+2026-07-26 12:06:33 | INFO     |   Brenk alerts: 2 removed.
+2026-07-26 12:06:33 | INFO     |   Passed filters: 5 compounds.
+2026-07-26 12:06:33 | INFO     |   Only 5 compounds passed filters (< 100). Relaxing similarity threshold to 0.5.
+2026-07-26 12:06:33 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-26 12:06:33 | INFO     |   Similarity filter (Tc < 0.5): 1 removed.
+2026-07-26 12:06:33 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 1 removed.
+2026-07-26 12:06:33 | INFO     |   PAINS filter: 0 removed.
+2026-07-26 12:06:33 | INFO     |   Brenk alerts: 2 removed.
+2026-07-26 12:06:33 | INFO     |   Passed filters: 5 compounds.
+2026-07-26 12:06:33 | INFO     | ─── Phase 2 complete ───
+2026-07-26 12:06:33 | INFO     | ─── Phase 3: Virtual Screening ───
+2026-07-26 12:06:33 | INFO     |   Docking all 5 compounds against PBP2a active site (3 conformers)…
+2026-07-26 12:07:03 | INFO     |   Active-site docking complete: 5/5 scored.
+2026-07-26 12:07:03 | INFO     |   Pharmacophore filter removed AA-0003: no Ser403 (15.25 Å) and no Lys406 (4.51 Å) contact
+2026-07-26 12:07:03 | INFO     |   Pharmacophore pre-filter removed 1 surface-binder compounds.
+2026-07-26 12:07:03 | INFO     |   Docking all 5 compounds against PBP2a allosteric site (3 conformers)…
+2026-07-26 12:07:32 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 12:07:32 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 12:07:32 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:27:20
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 12:07:32 | INFO     |   ✓  All required Python packages found.
