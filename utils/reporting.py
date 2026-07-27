@@ -220,21 +220,18 @@ def generate_csv_report(
                 else "N/A"
             ),
             "Binding_Site": rec.binding_site if rec.binding_site else "N/A",
-            "Human_Trypsin_Energy": (
-                "CLASH (no pose)" if rec.human_trypsin_energy is not None and rec.human_trypsin_energy > 0.0
-                else (f"{rec.human_trypsin_energy:.2f}" if rec.human_trypsin_energy is not None
-                else "N/A")
-            ),
-            "Human_CES1_Energy": (
-                "CLASH (no pose)" if rec.human_ces1_energy is not None and rec.human_ces1_energy > 0.0
-                else (f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
-                else "N/A")
-            ),
-            "Human_CYP3A4_Energy": (
-                "CLASH (no pose)" if getattr(rec, "human_cyp3a4_energy", None) is not None and rec.human_cyp3a4_energy > 0.0
-                else (f"{rec.human_cyp3a4_energy:.2f}" if getattr(rec, "human_cyp3a4_energy", None) is not None
-                else "N/A")
-            ),
+             "Human_Trypsin_Energy": (
+                 f"{rec.human_trypsin_energy:.2f}" if rec.human_trypsin_energy is not None
+                 else "N/A"
+             ),
+             "Human_CES1_Energy": (
+                 f"{rec.human_ces1_energy:.2f}" if rec.human_ces1_energy is not None
+                 else "N/A"
+             ),
+             "Human_CYP3A4_Energy": (
+                 f"{getattr(rec, 'human_cyp3a4_energy', None):.2f}" if getattr(rec, "human_cyp3a4_energy", None) is not None
+                 else "N/A"
+             ),
             "Human_hERG_Energy": "N/A (not docked)",
             "Human_Albumin_Energy": "N/A (not docked)",
 

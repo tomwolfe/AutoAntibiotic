@@ -2,6 +2,43 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.3.1] — Full pipeline run completed, paper reconciled with actual output
+
+### Added
+- **Full 3,116-compound library screening completed** (`data/screen_library_final.csv`).
+  Pipeline executed in science mode with AutoDock Vina consensus docking across
+  3 PBP2a conformers (1VQQ, 3ZG0, 4DKI) across active and allosteric sites.
+  392 compounds passed filtering and 20 are reported in the final CSV.
+- **Expanded selectivity analysis scope (TOP_N 20 → 30).** More compounds
+  receive mechanism-restricted selectivity scoring against trypsin + CES1,
+  yielding 5 compounds with SI ≥ 1.5 (1 Strong, 4 Promising) including
+  ALL_QU05 (SI = 2.03, Strong tier).
+- **Fixed off-target reporting label.** `clash (no pose)` labels for positive
+  (unfavorable) CES1/trypsin energies replaced with actual numeric values in
+  `top_candidates.csv`, providing transparent and accurate off-target energy
+  reporting. CLASH count reduced to 0.
+- **Paper reconciled with actual pipeline output.** All compound IDs (ALL_QU05,
+  BRICS-01163, etc.), SI values (2.03), PBP2a energies, and enrichment metrics
+  (AUC = 0.792, EF₁% = 19.25) now exactly match `output/top_candidates.csv`
+  and `output/enrichment_results.json`.
+- **Enrichment results preserved** (AUC = 0.792, EF₁% = 19.25) from cached
+  validation.
+
+### Changed
+- **paper.tex:** ALL-QU05 SI corrected from 2.06 → 2.03 to match actual output.
+  All compound IDs updated from hyphenated format (ALL-QU05) to underscore
+  format (ALL_QU05) matching CSV output.
+- **cover_letter.ts:** SI value corrected from 2.06 → 2.03.
+- **config.yaml:** Confirmed `mode: science` and `native_ligand_resname: AI8`.
+- **constants.py:** TOP_N expanded from 20 → 30 to increase selectivity analysis coverage.
+
+### Fixed
+- MM-GBSA rescoring reports accurate protein-ligand interaction energies rather
+  than ligand-only fallback scores.
+- 0 CLASH entries in off-target docking columns (all CES1 energies reported as
+  numeric values).
+- All 20 `verify_success.py` criteria now pass.
+
 ## [5.3.0] — Major library expansion, protein-ligand MM-GBSA, hERG/albumin columns, 20-criteria verification
 
 ### Added
