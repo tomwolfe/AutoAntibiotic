@@ -367,12 +367,28 @@ def _redocking_box_size(
 
 
 def _parse_pdbqt_heavy_coords(pdbqt_path: str) -> List[np.ndarray]:
-    """Parse heavy-atom 3D coordinates from a PDBQT file. Skips hydrogens."""
+    """Parse heavy-atom 3D coordinates from a PDBQT file. Skips hydrogens.
+    
+    Only reads the first MODEL (if multiple models are present), so the
+    returned coordinates correspond to a single docking pose."""
     coords: List[np.ndarray] = []
     try:
         with open(pdbqt_path) as f:
+            in_first_model = True
             for line in f:
+                if line.startswith("MODEL"):
+                    if "MODEL 1" in line or "MODEL 0" in line:
+                        in_first_model = True
+                    elif any(f"MODEL {i}" in line for i in range(2, 10)):
+                        in_first_model = False
+                    continue
+                if line.startswith("ENDMDL"):
+                    if in_first_model:
+                        break
+                    continue
                 if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                if not in_first_model:
                     continue
                 try:
                     x = float(line[30:38].strip())
@@ -1894,7 +1910,7 @@ def analyze_selectivity_and_resistance(
 
     # ── Post-fix validation guard: detect possible surface-patch artifacts ──
     for rec in top10:
-        pb2pa_best = rec.pb2pa_allosteric_energy if rec.pb2pa_allosteric_energy is not None else (rec.pb2pa_best_energy if rec.pb2pa_best_energy is not None else rec.pb2pa_active_energy)
+        pb2pa_best = rec.pb2pa_best_energy if rec.pb2pa_best_energy is not None else (rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None else rec.pb2pa_allosteric_energy)
         if rec.human_ces1_energy is not None and pb2pa_best is not None:
             if rec.human_ces1_energy < pb2pa_best:
                 log.warning(
@@ -1910,16 +1926,16 @@ def analyze_selectivity_and_resistance(
         ]
         sel_panel = {s.lower() for s in SELECTIVITY_PANEL_TARGETS}
         energies_human = [
-            e for _l, e in raw_human if e is not None and e <= 0.0
+            e for _l, e in raw_human if e is not None and e <= -0.01
         ]
         n_human_targets = len(energies_human)
 
         panel_valid = [
             e for label, e in raw_human
-            if label in sel_panel and e is not None and e <= 0.0
+            if label in sel_panel and e is not None and e <= -0.01
         ]
 
-        pb2pa_best = rec.pb2pa_allosteric_energy if rec.pb2pa_allosteric_energy is not None else (rec.pb2pa_best_energy if rec.pb2pa_best_energy is not None else rec.pb2pa_active_energy)
+        pb2pa_best = rec.pb2pa_best_energy if rec.pb2pa_best_energy is not None else (rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None else rec.pb2pa_allosteric_energy)
 
         # ── Supplementary transparency metric: SI_vs_Ceftaroline ──
         rec.si_vs_ceftaroline = (
@@ -1931,12 +1947,8 @@ def analyze_selectivity_and_resistance(
         if len(panel_valid) < 2:
             rec.selectivity_index = None
             rec.selectivity_confidence = CompoundRecord.CONF_NONE
-            rec.report_tier = "N/A (single-target)"
-            rec.si_provisional = (
-                compute_selectivity_index(pb2pa_best, min(panel_valid))
-                if pb2pa_best is not None and panel_valid
-                else None
-            )
+            rec.report_tier = "Below gate"
+            rec.si_provisional = None
             continue
 
         rec.selectivity_confidence = CompoundRecord.CONF_HIGH
@@ -2233,6 +2245,8 @@ def _generate_and_filter_library(
     all_records = generate_candidate_library(
         target_count=target_count, input_csv=library,
     )
+    for rec in all_records:
+        rec.compound_id = rec.compound_id.replace("-", "_")
     n_total = len(all_records)
     if config is None:
         config = load_config()
@@ -2685,9 +2699,22 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         rec.report_tier = "Below gate"
         report_list.append(rec)
     top10 = report_list
+
+    # deduplicate: keep best (most negative) pb2pa_best_energy per compound_id
+    seen: Dict[str, CompoundRecord] = {}
+    for rec in top10:
+        cid = rec.compound_id
+        if cid in seen:
+            cur_best = seen[cid].pb2pa_best_energy
+            new_best = rec.pb2pa_best_energy
+            if new_best is not None and (cur_best is None or new_best < cur_best):
+                seen[cid] = rec
+        else:
+            seen[cid] = rec
+    top10 = list(seen.values())
     log.info(
         f"  Final report: {len(passing)} candidate(s) at SI >= "
-        f"{SI_PROMISING_THRESHOLD}, filled to {len(top10)} total."
+        f"{SI_PROMISING_THRESHOLD}, deduplicated to {len(top10)} total."
     )
 
     # ── Phase 5: Reporting & Artifacts ──

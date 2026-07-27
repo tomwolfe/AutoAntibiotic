@@ -80,6 +80,8 @@ def _run_vina_docking(
                 parts = stripped.split()
                 try:
                     energy = float(parts[1])
+                    if energy > 0:
+                        return None
                     return energy
                 except (ValueError, IndexError):
                     continue
@@ -386,7 +388,7 @@ def rescore_mmffsa(
         e_lig_min = ff_min.CalcEnergy()
 
         # Ligand strain energy (docked vs minimised)
-        if e_lig_bound is not None:
+        if e_lig_bound is not None and abs(e_lig_bound) < 1e6:
             e_strain = e_lig_bound - e_lig_min
         else:
             e_strain = 0.0
@@ -422,7 +424,7 @@ def rescore_mmffsa(
                 pi = conf.GetAtomPosition(heavy_atom_indices[i])
                 pj = conf.GetAtomPosition(heavy_atom_indices[j])
                 r = pi.Distance(pj)
-                if r < 0.1:
+                if r < 0.5:
                     continue
                 e_solv += 332.0 * qi * qj / (80.0 * r)
 
@@ -451,6 +453,8 @@ def rescore_mmffsa(
                 if receptor_atoms:
                     rec_coords = np.array(receptor_atoms)
                     # Compute distance-dependent dielectric interaction
+                    # Use vectorized calculation with strict distance clipping
+                    # to prevent numerical blow-up from near-zero distances.
                     for li in range(len(docked_coords)):
                         if li >= len(lig_charges):
                             break
@@ -459,12 +463,12 @@ def rescore_mmffsa(
                             continue
                         lpos = np.array(docked_coords[li])
                         dists = np.linalg.norm(rec_coords - lpos, axis=1)
-                        # Assign a unit +1 charge to receptor atoms as proxy
-                        # for the polar environment (crude approximation)
-                        for r in dists:
-                            if r < 0.1:
-                                continue
-                            e_receptor_interaction += 332.0 * qi * (-0.2) / (4.0 * r)
+                        valid_mask = (dists >= 0.5) & (dists <= 10.0)
+                        valid_dists = dists[valid_mask]
+                        if len(valid_dists) > 0:
+                            e_receptor_interaction += float(
+                                np.sum(332.0 * qi * (-0.2) / (4.0 * valid_dists))
+                            )
             except Exception:
                 e_receptor_interaction = 0.0
 
@@ -475,6 +479,9 @@ def rescore_mmffsa(
         if e_lig_bound is None:
             return None
         score = e_strain + e_receptor_interaction + e_np
+        # Sanity bound: discard any pathological score beyond ±1e6 a.u.
+        if abs(score) > 1e6:
+            return None
         return float(score)
 
     except Exception:
@@ -493,12 +500,28 @@ def _get_heavy_atom_index(mol: Chem.Mol, heavy_idx: int) -> Optional[int]:
 
 
 def _parse_pdbqt_heavy_coords(pdbqt_path: str) -> List[np.ndarray]:
-    """Parse heavy-atom 3D coordinates from a PDBQT file. Skips hydrogens."""
+    """Parse heavy-atom 3D coordinates from a PDBQT file. Skips hydrogens.
+    
+    Only reads the first MODEL (if multiple models are present), so the
+    returned coordinates correspond to a single docking pose."""
     coords: List[np.ndarray] = []
     try:
         with open(pdbqt_path) as f:
+            in_first_model = True
             for line in f:
+                if line.startswith("MODEL"):
+                    if "MODEL 1" in line or "MODEL 0" in line:
+                        in_first_model = True
+                    elif any(f"MODEL {i}" in line for i in range(2, 10)):
+                        in_first_model = False
+                    continue
+                if line.startswith("ENDMDL"):
+                    if in_first_model:
+                        break
+                    continue
                 if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                if not in_first_model:
                     continue
                 try:
                     x = float(line[30:38].strip())

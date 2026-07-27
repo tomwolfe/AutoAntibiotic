@@ -109,12 +109,28 @@ def _pose_heavy_atom_coords(pdbqt_path: str) -> List[np.ndarray]:
     Hydrogen lines are skipped so the returned list indexes the same heavy
     atoms as a SMILES-derived :class:`Chem.Mol` (PDBQT preparation appends
     hydrogens after the heavy atoms, preserving heavy-atom order).
+
+    Only reads the first MODEL (if multiple models are present), so the
+    returned coordinates correspond to a single docking pose.
     """
     coords: List[np.ndarray] = []
     try:
         with open(pdbqt_path) as f:
+            in_first_model = True
             for line in f:
+                if line.startswith("MODEL"):
+                    if "MODEL 1" in line or "MODEL 0" in line:
+                        in_first_model = True
+                    elif any(f"MODEL {i}" in line for i in range(2, 10)):
+                        in_first_model = False
+                    continue
+                if line.startswith("ENDMDL"):
+                    if in_first_model:
+                        break
+                    continue
                 if not line.startswith(("ATOM", "HETATM")):
+                    continue
+                if not in_first_model:
                     continue
                 try:
                     x = float(line[30:38].strip())
@@ -169,6 +185,20 @@ def generate_csv_report(
     is_mock = (mode == "ci")
 
     rows = []
+
+    # Deduplicate by compound_id, keep best (most negative) pb2pa_best_energy
+    seen_recs: Dict[str, CompoundRecord] = {}
+    for rec in top10:
+        cid = rec.compound_id
+        if cid in seen_recs:
+            cur_best = seen_recs[cid].pb2pa_best_energy
+            new_best = rec.pb2pa_best_energy
+            if new_best is not None and (cur_best is None or new_best < cur_best):
+                seen_recs[cid] = rec
+        else:
+            seen_recs[cid] = rec
+    top10 = list(seen_recs.values())
+
     for rec in top10:
         # Per-residue H-bond flags derived from the interaction fingerprint
         # captured during Phase 4 (min distance to the conserved residue; a
