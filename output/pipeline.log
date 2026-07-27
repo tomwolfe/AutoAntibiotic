@@ -5943,3 +5943,987 @@ mode |   affinity | dist from best mode
 2026-07-26 17:29:29 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.187 Å
 2026-07-26 17:29:29 | INFO     |   Redocking RMSD (conformer 1, seed 3) = 2.119 Å (core 1.187 Å)
 2026-07-26 17:29:29 | INFO     |   Multi-start RMSDs (conformer 1) = 2.071, 2.146, 2.119 Å; best = 2.071 Å
+2026-07-26 18:43:34 | INFO     | AutoAntibiotic Discovery Pipeline v5.3.0
+2026-07-26 18:43:34 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 18:43:34 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 18:43:34 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:38:51
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 18:43:34 | INFO     |   ✓  All required Python packages found.
+2026-07-26 18:43:34 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-26 18:43:34 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-26 18:43:34 | INFO     |   Run mode (from config): science
+2026-07-26 18:43:34 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 18:43:34 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 18:43:34 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-26 18:43:34 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-26 18:43:34 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 18:43:34 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 18:43:34 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 18:43:34 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-26 18:43:34 | INFO     | Science mode: real scientific validation expected.
+2026-07-26 18:43:34 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-26 18:43:34 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-26 18:43:35 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-26 18:43:35 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-26 18:43:36 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 18:43:36 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-26 18:43:36 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 18:43:36 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 18:43:36 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 18:43:37 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-26 18:43:38 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 18:43:38 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 18:43:38 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-26 18:43:38 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-26 18:43:38 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-26 18:43:39 | INFO     |     Allosteric site center: [24.97548178 30.9366667  28.8698331 ]
+2026-07-26 18:43:39 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-26 18:43:39 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-26 18:43:39 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-26 18:43:39 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-26 18:43:39 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-26 18:43:39 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-26 18:43:39 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-26 18:43:41 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-26 18:43:41 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-26 18:43:42 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-26 18:43:42 | INFO     |   Cleaning CYP3A4 (1TQN)…
+2026-07-26 18:43:42 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 18:43:42 | INFO     |   Polar hydrogens added to output/workdir/CYP3A4_clean.pdb
+2026-07-26 18:43:42 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CYP3A4_clean.pdbqt
+2026-07-26 18:43:42 | INFO     |   Computing CYP3A4 active site centroid (heme Fe, Thr309, Ala370)…
+2026-07-26 18:43:42 | INFO     |     CYP3A4 active site center: [-20.83707145 -22.85971421 -15.8193571 ]
+2026-07-26 18:43:42 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-26 18:43:42 | INFO     | ─── Phase 1 complete ───
+2026-07-26 18:43:42 | INFO     |   Reusing cached redocking validation from previous run.
+2026-07-26 18:43:42 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-26 18:43:42 | INFO     |   ✓  Enrichment validation: AUC=0.792, EF_1%=19.25
+2026-07-26 18:43:42 | INFO     | ─── Phase 0.5 complete ───
+2026-07-26 18:43:42 | INFO     | ─── Phase 2: Library Generation ───
+2026-07-26 18:43:42 | INFO     |   Loading external compound library from CSV: data/screen_library_final.csv
+2026-07-26 18:43:42 | INFO     |   Loaded 3116 compounds from external CSV.
+2026-07-26 18:43:43 | INFO     | ─── Phase 2: Filtering ───
+2026-07-26 18:43:47 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-26 18:43:47 | INFO     |   Similarity filter (Tc < 0.3): 9 removed.
+2026-07-26 18:43:47 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 2411 removed.
+2026-07-26 18:43:47 | INFO     |   PAINS filter: 2 removed.
+2026-07-26 18:43:47 | INFO     |   Brenk alerts: 302 removed.
+2026-07-26 18:43:47 | INFO     |   Passed filters: 392 compounds.
+2026-07-26 18:43:47 | INFO     | ─── Phase 2 complete ───
+2026-07-26 18:43:47 | INFO     | ─── Phase 3: Virtual Screening ───
+2026-07-26 18:43:47 | INFO     |   Docking all 392 compounds against PBP2a active site (3 conformers)…
+2026-07-26 18:44:47 | INFO     |     Docked 25 / 392 (active_c0)
+2026-07-26 18:45:32 | INFO     |     Docked 50 / 392 (active_c0)
+2026-07-26 18:46:26 | INFO     |     Docked 75 / 392 (active_c0)
+2026-07-26 18:47:28 | INFO     |     Docked 100 / 392 (active_c0)
+2026-07-26 18:48:14 | INFO     |     Docked 125 / 392 (active_c0)
+2026-07-26 18:49:15 | INFO     |     Docked 150 / 392 (active_c0)
+2026-07-26 18:50:35 | INFO     |     Docked 175 / 392 (active_c0)
+2026-07-26 18:51:54 | INFO     |     Docked 200 / 392 (active_c0)
+2026-07-26 18:52:31 | INFO     |     Docked 225 / 392 (active_c0)
+2026-07-26 18:53:41 | INFO     |     Docked 250 / 392 (active_c0)
+2026-07-26 18:54:43 | INFO     |     Docked 275 / 392 (active_c0)
+2026-07-26 18:55:49 | INFO     | AutoAntibiotic Discovery Pipeline v5.3.0
+2026-07-26 18:55:49 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 18:55:49 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 18:55:49 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:38:51
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 18:55:49 | INFO     |   ✓  All required Python packages found.
+2026-07-26 18:55:49 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-26 18:55:49 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-26 18:55:49 | INFO     |   Run mode (from config): science
+2026-07-26 18:55:49 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 18:55:49 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 18:55:49 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-26 18:55:49 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-26 18:55:49 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 18:55:49 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 18:55:49 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 18:55:49 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-26 18:55:49 | INFO     | Science mode: real scientific validation expected.
+2026-07-26 18:55:49 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-26 18:55:49 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-26 18:55:50 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-26 18:55:50 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-26 18:55:50 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 18:55:51 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-26 18:55:51 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 18:55:51 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 18:55:51 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 18:55:52 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-26 18:55:53 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 18:55:53 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 18:55:53 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-26 18:55:53 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-26 18:55:53 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-26 18:55:53 | INFO     |     Allosteric site center: [24.97548178 30.9366667  28.8698331 ]
+2026-07-26 18:55:53 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-26 18:55:54 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-26 18:55:54 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-26 18:55:54 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-26 18:55:54 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-26 18:55:54 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-26 18:55:54 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-26 18:55:56 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-26 18:55:56 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-26 18:55:56 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-26 18:55:56 | INFO     |   Cleaning CYP3A4 (1TQN)…
+2026-07-26 18:55:56 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 18:55:57 | INFO     |   Polar hydrogens added to output/workdir/CYP3A4_clean.pdb
+2026-07-26 18:55:57 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CYP3A4_clean.pdbqt
+2026-07-26 18:55:57 | INFO     |   Computing CYP3A4 active site centroid (heme Fe, Thr309, Ala370)…
+2026-07-26 18:55:57 | INFO     |     CYP3A4 active site center: [-20.83707145 -22.85971421 -15.8193571 ]
+2026-07-26 18:55:57 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-26 18:55:57 | INFO     | ─── Phase 1 complete ───
+2026-07-26 18:55:57 | INFO     |   Reusing cached redocking validation from previous run.
+2026-07-26 18:55:57 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-26 18:55:57 | INFO     |   ✓  Enrichment validation: AUC=0.792, EF_1%=19.25
+2026-07-26 18:55:57 | INFO     | ─── Phase 0.5 complete ───
+2026-07-26 18:55:57 | INFO     | ─── Phase 2: Library Generation ───
+2026-07-26 18:55:57 | INFO     |   Loading external compound library from CSV: data/screen_library_final.csv
+2026-07-26 18:55:57 | INFO     |   Loaded 3116 compounds from external CSV.
+2026-07-26 18:55:58 | INFO     | ─── Phase 2: Filtering ───
+2026-07-26 18:56:02 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-26 18:56:02 | INFO     |   Similarity filter (Tc < 0.3): 9 removed.
+2026-07-26 18:56:02 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 2411 removed.
+2026-07-26 18:56:02 | INFO     |   PAINS filter: 2 removed.
+2026-07-26 18:56:02 | INFO     |   Brenk alerts: 302 removed.
+2026-07-26 18:56:02 | INFO     |   Passed filters: 392 compounds.
+2026-07-26 18:56:02 | INFO     | ─── Phase 2 complete ───
+2026-07-26 18:56:02 | INFO     | ─── Phase 3: Virtual Screening ───
+2026-07-26 18:56:02 | INFO     |   Docking all 392 compounds against PBP2a active site (3 conformers)…
+2026-07-26 18:57:01 | INFO     |     Docked 25 / 392 (active_c0)
+2026-07-26 18:57:44 | INFO     |     Docked 50 / 392 (active_c0)
+2026-07-26 18:58:40 | INFO     |     Docked 75 / 392 (active_c0)
+2026-07-26 18:59:39 | INFO     |     Docked 100 / 392 (active_c0)
+2026-07-26 19:00:29 | INFO     |     Docked 125 / 392 (active_c0)
+2026-07-26 19:01:31 | INFO     |     Docked 150 / 392 (active_c0)
+2026-07-26 19:02:50 | INFO     |     Docked 175 / 392 (active_c0)
+2026-07-26 19:04:09 | INFO     |     Docked 200 / 392 (active_c0)
+2026-07-26 19:04:44 | INFO     |     Docked 225 / 392 (active_c0)
+2026-07-26 19:05:54 | INFO     |     Docked 250 / 392 (active_c0)
+2026-07-26 19:06:58 | INFO     |     Docked 275 / 392 (active_c0)
+2026-07-26 19:08:13 | INFO     |     Docked 300 / 392 (active_c0)
+2026-07-26 19:09:39 | INFO     |     Docked 325 / 392 (active_c0)
+2026-07-26 19:11:09 | INFO     |     Docked 350 / 392 (active_c0)
+2026-07-26 19:12:19 | INFO     |     Docked 375 / 392 (active_c0)
+2026-07-26 19:13:33 | INFO     |     Docked 25 / 392 (active_c1)
+2026-07-26 19:14:10 | INFO     |     Docked 50 / 392 (active_c1)
+2026-07-26 19:14:52 | INFO     |     Docked 75 / 392 (active_c1)
+2026-07-26 19:15:44 | INFO     |     Docked 100 / 392 (active_c1)
+2026-07-26 19:16:24 | INFO     |     Docked 125 / 392 (active_c1)
+2026-07-26 19:17:16 | INFO     |     Docked 150 / 392 (active_c1)
+2026-07-26 19:18:22 | INFO     |     Docked 175 / 392 (active_c1)
+2026-07-26 19:19:14 | INFO     |     Docked 200 / 392 (active_c1)
+2026-07-26 19:19:42 | INFO     |     Docked 225 / 392 (active_c1)
+2026-07-26 19:20:39 | INFO     |     Docked 250 / 392 (active_c1)
+2026-07-26 19:21:35 | INFO     |     Docked 275 / 392 (active_c1)
+2026-07-26 19:22:26 | INFO     |     Docked 300 / 392 (active_c1)
+2026-07-26 19:23:35 | INFO     |     Docked 325 / 392 (active_c1)
+2026-07-26 19:24:48 | INFO     |     Docked 350 / 392 (active_c1)
+2026-07-26 19:25:39 | INFO     |     Docked 375 / 392 (active_c1)
+2026-07-26 19:26:56 | INFO     |     Docked 25 / 392 (active_c2)
+2026-07-26 19:27:33 | INFO     |     Docked 50 / 392 (active_c2)
+2026-07-26 19:28:19 | INFO     |     Docked 75 / 392 (active_c2)
+2026-07-26 19:29:06 | INFO     |     Docked 100 / 392 (active_c2)
+2026-07-26 19:29:45 | INFO     |     Docked 125 / 392 (active_c2)
+2026-07-26 19:30:35 | INFO     |     Docked 150 / 392 (active_c2)
+2026-07-26 19:31:42 | INFO     |     Docked 175 / 392 (active_c2)
+2026-07-26 19:32:35 | INFO     |     Docked 200 / 392 (active_c2)
+2026-07-26 19:33:03 | INFO     |     Docked 225 / 392 (active_c2)
+2026-07-26 19:34:03 | INFO     |     Docked 250 / 392 (active_c2)
+2026-07-26 19:34:47 | INFO     |     Docked 275 / 392 (active_c2)
+2026-07-26 19:35:37 | INFO     |     Docked 300 / 392 (active_c2)
+2026-07-26 19:37:00 | INFO     |     Docked 325 / 392 (active_c2)
+2026-07-26 19:38:08 | INFO     |     Docked 350 / 392 (active_c2)
+2026-07-26 19:39:00 | INFO     |     Docked 375 / 392 (active_c2)
+2026-07-26 19:39:26 | INFO     |   Active-site docking complete: 392/392 scored.
+2026-07-26 19:40:49 | INFO     |   Pharmacophore filter removed BRICS-01158: no Ser403 (4.48 Å) and no Lys406 (4.58 Å) contact
+2026-07-26 19:40:55 | INFO     |   Pharmacophore pre-filter removed 1 surface-binder compounds.
+2026-07-26 19:40:55 | INFO     |   Docking all 392 compounds against PBP2a allosteric site (3 conformers)…
+2026-07-26 19:41:49 | INFO     |     Docked 25 / 392 (allosteric_c0)
+2026-07-26 19:42:30 | INFO     |     Docked 50 / 392 (allosteric_c0)
+2026-07-26 19:43:18 | INFO     |     Docked 75 / 392 (allosteric_c0)
+2026-07-26 19:44:13 | INFO     |     Docked 100 / 392 (allosteric_c0)
+2026-07-26 19:44:57 | INFO     |     Docked 125 / 392 (allosteric_c0)
+2026-07-26 19:45:55 | INFO     |     Docked 150 / 392 (allosteric_c0)
+2026-07-26 19:47:12 | INFO     |     Docked 175 / 392 (allosteric_c0)
+2026-07-26 19:48:20 | INFO     |     Docked 200 / 392 (allosteric_c0)
+2026-07-26 19:48:55 | INFO     |     Docked 225 / 392 (allosteric_c0)
+2026-07-26 19:49:55 | INFO     |     Docked 250 / 392 (allosteric_c0)
+2026-07-26 19:50:57 | INFO     |     Docked 275 / 392 (allosteric_c0)
+2026-07-26 19:51:56 | INFO     |     Docked 300 / 392 (allosteric_c0)
+2026-07-26 19:53:22 | INFO     |     Docked 325 / 392 (allosteric_c0)
+2026-07-26 19:54:36 | INFO     |     Docked 350 / 392 (allosteric_c0)
+2026-07-26 19:55:36 | INFO     |     Docked 375 / 392 (allosteric_c0)
+2026-07-26 19:57:00 | INFO     |     Docked 25 / 392 (allosteric_c1)
+2026-07-26 19:57:40 | INFO     |     Docked 50 / 392 (allosteric_c1)
+2026-07-26 19:58:30 | INFO     |     Docked 75 / 392 (allosteric_c1)
+2026-07-26 19:59:27 | INFO     |     Docked 100 / 392 (allosteric_c1)
+2026-07-26 20:00:08 | INFO     |     Docked 125 / 392 (allosteric_c1)
+2026-07-26 20:01:06 | INFO     |     Docked 150 / 392 (allosteric_c1)
+2026-07-26 20:02:25 | INFO     |     Docked 175 / 392 (allosteric_c1)
+2026-07-26 20:03:29 | INFO     |     Docked 200 / 392 (allosteric_c1)
+2026-07-26 20:04:05 | INFO     |     Docked 225 / 392 (allosteric_c1)
+2026-07-26 20:05:05 | INFO     |     Docked 250 / 392 (allosteric_c1)
+2026-07-26 20:06:08 | INFO     |     Docked 275 / 392 (allosteric_c1)
+2026-07-26 20:07:08 | INFO     |     Docked 300 / 392 (allosteric_c1)
+2026-07-26 20:08:36 | INFO     |     Docked 325 / 392 (allosteric_c1)
+2026-07-26 20:09:53 | INFO     |     Docked 350 / 392 (allosteric_c1)
+2026-07-26 20:10:53 | INFO     |     Docked 375 / 392 (allosteric_c1)
+2026-07-26 20:12:18 | INFO     |     Docked 25 / 392 (allosteric_c2)
+2026-07-26 20:12:58 | INFO     |     Docked 50 / 392 (allosteric_c2)
+2026-07-26 20:13:48 | INFO     |     Docked 75 / 392 (allosteric_c2)
+2026-07-26 20:14:45 | INFO     |     Docked 100 / 392 (allosteric_c2)
+2026-07-26 20:15:31 | INFO     |     Docked 125 / 392 (allosteric_c2)
+2026-07-26 20:16:31 | INFO     |     Docked 150 / 392 (allosteric_c2)
+2026-07-26 20:17:46 | INFO     |     Docked 175 / 392 (allosteric_c2)
+2026-07-26 20:18:57 | INFO     |     Docked 200 / 392 (allosteric_c2)
+2026-07-26 20:19:33 | INFO     |     Docked 225 / 392 (allosteric_c2)
+2026-07-26 20:20:34 | INFO     |     Docked 250 / 392 (allosteric_c2)
+2026-07-26 20:21:39 | INFO     |     Docked 275 / 392 (allosteric_c2)
+2026-07-26 20:22:46 | INFO     |     Docked 300 / 392 (allosteric_c2)
+2026-07-26 20:24:13 | INFO     |     Docked 325 / 392 (allosteric_c2)
+2026-07-26 20:25:29 | INFO     |     Docked 350 / 392 (allosteric_c2)
+2026-07-26 20:26:31 | INFO     |     Docked 375 / 392 (allosteric_c2)
+2026-07-26 20:27:03 | INFO     |   Allosteric-site docking complete: 392/392 scored.
+2026-07-26 20:27:03 | INFO     |   Top 20 candidates by best energy.
+2026-07-26 20:27:03 | INFO     |     1. BRICS-0006: -10.66 kcal/mol (active: -10.66)
+2026-07-26 20:27:03 | INFO     |     2. BRICS-0022: -10.50 kcal/mol (active: -10.50)
+2026-07-26 20:27:03 | INFO     |     3. BRICS-01163: -10.25 kcal/mol (active: -10.25)
+2026-07-26 20:27:03 | INFO     |     4. BRICS-0340: -10.12 kcal/mol (active: -10.12)
+2026-07-26 20:27:03 | INFO     |     5. ALL_QU04: -10.07 kcal/mol (active: -10.07)
+2026-07-26 20:27:03 | INFO     |     6. ALL_QU04: -10.07 kcal/mol (active: -10.07)
+2026-07-26 20:27:03 | INFO     |     7. BRICS-01154: -10.06 kcal/mol (active: -10.06)
+2026-07-26 20:27:03 | INFO     |     8. ALL_QU09: -9.97 kcal/mol (active: -9.97)
+2026-07-26 20:27:03 | INFO     |     9. ALL_QU09: -9.97 kcal/mol (active: -9.97)
+2026-07-26 20:27:03 | INFO     |     10. BRICS-0004: -9.97 kcal/mol (active: -9.97)
+2026-07-26 20:27:03 | INFO     | ─── Phase 3 complete ───
+2026-07-26 20:27:03 | INFO     | ─── Phase 4: Selectivity & Resistance Analysis ───
+2026-07-26 20:27:03 | INFO     |   Docking top 10 vs Human Trypsin (1UTN)…
+2026-07-26 20:28:18 | INFO     |   Docking top 10 vs Human Carboxylesterase 1 (1YAH)…
+2026-07-26 20:29:39 | INFO     |   Docking top 10 vs Human CYP3A4 (1TQN)…
+2026-07-26 20:30:50 | WARNING  |   BRICS-01154: CES1 energy (-8.74) stronger than PBP2a (-7.78) — possible surface-patch artifact
+2026-07-26 20:30:50 | WARNING  |   BRICS-0022: Low mechanism-restricted selectivity (SI = 1.46 < 1.5). Flagged for off-target risk.
+2026-07-26 20:30:50 | INFO     |   BRICS-01163: mechanism-restricted SI = 1.91 (pass).
+2026-07-26 20:30:50 | INFO     |   BRICS-0340: mechanism-restricted SI = 1.54 (pass).
+2026-07-26 20:30:50 | INFO     |   ALL_QU04: mechanism-restricted SI = 1.58 (pass).
+2026-07-26 20:30:50 | WARNING  |   BRICS-01154: Low mechanism-restricted selectivity (SI = 0.97 < 1.5). Flagged for off-target risk.
+2026-07-26 20:30:50 | WARNING  |   ALL_SU08: Low mechanism-restricted selectivity (SI = 1.38 < 1.5). Flagged for off-target risk.
+2026-07-26 20:30:50 | WARNING  |   ALL_SU14: Low mechanism-restricted selectivity (SI = 1.45 < 1.5). Flagged for off-target risk.
+2026-07-26 20:30:50 | INFO     |   ALL_QU05: mechanism-restricted SI = 2.02 (pass).
+2026-07-26 20:30:55 | INFO     | ─── Phase 4 complete ───
+2026-07-26 20:30:58 | INFO     |   MM-GBSA rescoring: 1/20 candidates scored.
+2026-07-26 20:30:58 | INFO     |   Final Top-10 ranked by PBP2a best energy (catalytic-engagement tiebreak).
+2026-07-26 20:30:58 | INFO     |   Diversified final set: 7 diverse + 13 filler = 20 candidate(s).
+2026-07-26 20:30:58 | INFO     |   Final report: 4 candidate(s) at SI >= 1.5, filled to 20 total.
+2026-07-26 20:30:58 | INFO     | ─── Phase 5: Reporting ───
+2026-07-26 20:30:58 | INFO     |   CSV report saved: output/top_candidates.csv
+2026-07-26 20:30:58 | INFO     |   JSON candidates saved: output/top_candidates.json
+2026-07-26 20:30:58 | INFO     |   Image saved: output/top1_ALL_QU05.png
+2026-07-26 20:30:58 | INFO     |   Image saved: output/top2_BRICS-01163.png
+2026-07-26 20:30:58 | INFO     |   Image saved: output/top3_ALL_QU04.png
+2026-07-26 20:30:58 | INFO     |   Interaction diagram saved: output/figures/interaction_ALL_QU05.png
+2026-07-26 20:30:58 | INFO     |   Interaction diagram saved: output/figures/interaction_BRICS-01163.png
+2026-07-26 20:30:58 | INFO     |   Interaction diagram saved: output/figures/interaction_ALL_QU04.png
+2026-07-26 20:30:58 | INFO     | Interaction diagrams saved to output/figures/
+2026-07-26 20:30:58 | INFO     |   PyMOL script saved: output/visualization.pml (3 ligand pose(s) loaded).
+2026-07-26 20:30:58 | INFO     |   Filter funnel saved: output/filter_funnel.json
+2026-07-26 20:30:59 | INFO     |   ROC curve saved: output/figures/roc_curve.png
+2026-07-26 20:30:59 | INFO     |   Energy distribution saved: output/figures/energy_distribution.png
+2026-07-26 20:30:59 | INFO     |   SI scatter plot saved: output/figures/si_scatter.png
+2026-07-26 20:30:59 | INFO     |   Filter funnel saved: output/figures/filter_funnel.png
+2026-07-26 20:30:59 | INFO     |   Binding diagram saved: output/figures/top3_binding_1_ALL_QU05.png
+2026-07-26 20:30:59 | INFO     |   Binding diagram saved: output/figures/top3_binding_2_BRICS-01163.png
+2026-07-26 20:30:59 | INFO     |   Binding diagram saved: output/figures/top3_binding_3_ALL_QU04.png
+2026-07-26 20:30:59 | INFO     |   All figures saved to output/figures
+2026-07-26 20:30:59 | INFO     | ============================================================
+2026-07-26 20:30:59 | INFO     |   PIPELINE SUMMARY
+2026-07-26 20:30:59 | INFO     | ============================================================
+2026-07-26 20:30:59 | INFO     |   Total compounds generated:     3116
+2026-07-26 20:30:59 | INFO     |   After filtering:               392
+2026-07-26 20:30:59 | INFO     |   Top candidates reported:       20
+2026-07-26 20:30:59 | INFO     |   Successfully docked:           20
+2026-07-26 20:30:59 | INFO     |   Selectivity pass (SI >= 2.0):  4
+2026-07-26 20:30:59 | INFO     |   Docking engine:                Vina
+2026-07-26 20:30:59 | INFO     |   Redocking RMSD:                1.937 Å
+2026-07-26 20:30:59 | INFO     |   Redocking validated:           True
+2026-07-26 20:30:59 | INFO     |   Protocol validation: RMSD 1.937 Å (Validated)
+2026-07-26 20:30:59 | INFO     |   CSV report:                    output/top_candidates.csv
+2026-07-26 20:30:59 | INFO     |   Open output/visualization.pml in PyMOL to inspect binding poses.
+2026-07-26 20:30:59 | INFO     | ============================================================
+2026-07-26 20:30:59 | INFO     | Pipeline complete. Exiting.
+2026-07-26 20:35:41 | INFO     | AutoAntibiotic Discovery Pipeline v5.3.0
+2026-07-26 20:35:41 | INFO     | ─── Phase 0: Dependency Check ───
+2026-07-26 20:35:41 | INFO     |   ✓  AutoDock Vina binary found on PATH (version: AutoDock Vina v1.2.7)
+2026-07-26 20:35:41 | INFO     |   ✓  OpenBabel binary found on PATH (version: Open Babel 3.1.0 -- Feb 17 2026 -- 07:38:51
+Usage:
+obabel [-i<input-type>] <infilename> [-o<output-type>] -O<outfilename> [Options]
+Try  -H option for more information.)
+2026-07-26 20:35:41 | INFO     |   ✓  All required Python packages found.
+2026-07-26 20:35:41 | INFO     | ─── Phase 1: Target Preparation & Centroid Calculation ───
+2026-07-26 20:35:41 | INFO     |   NOTE: bundled tests/data/*.pdb files are minimal mock structures for offline CI runs — they are NOT real crystallographic models. Any redocking RMSD computed against them is non-physical and must not be interpreted as a protocol-quality metric.
+2026-07-26 20:35:41 | INFO     |   Run mode (from config): science
+2026-07-26 20:35:41 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 20:35:41 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 20:35:41 | INFO     |   Structure 1UTN already local: output/pdb/1UTN.pdb
+2026-07-26 20:35:41 | INFO     |   Structure 1YAH already local: output/pdb/1YAH.pdb
+2026-07-26 20:35:41 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 20:35:41 | INFO     |   Structure 1VQQ already local: output/pdb/1VQQ.pdb
+2026-07-26 20:35:41 | INFO     |   Structure 3ZG0 already local: output/pdb/3ZG0.pdb
+2026-07-26 20:35:41 | INFO     |   Structure 4DKI already local: output/pdb/4DKI.pdb
+2026-07-26 20:35:41 | INFO     | Science mode: real scientific validation expected.
+2026-07-26 20:35:41 | INFO     |   Cleaning PBP2a (apo)…
+2026-07-26 20:35:41 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_clean.pdb
+2026-07-26 20:35:43 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_clean.pdbqt
+2026-07-26 20:35:43 | INFO     |   Cleaning PBP2a (holo, protein-only)…
+2026-07-26 20:35:43 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 20:35:43 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_holo_clean.pdbqt
+2026-07-26 20:35:43 | WARNING  |   Could not read PDB via RDKit. Skipping hydrogen addition.
+2026-07-26 20:35:44 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 20:35:44 | INFO     |   Added PBP2a conformer 3ZG0 receptor PDBQT: output/workdir/PBP2a_3ZG0_clean.pdbqt
+2026-07-26 20:35:44 | INFO     |   Polar hydrogens added to output/workdir/PBP2a_4DKI_clean.pdb
+2026-07-26 20:35:46 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 20:35:46 | INFO     |   Added PBP2a conformer 4DKI receptor PDBQT: output/workdir/PBP2a_4DKI_clean.pdbqt
+2026-07-26 20:35:46 | INFO     |   Computing active site centroid (conserved residues SER403, LYS406, TYR446) using side-chain atoms…
+2026-07-26 20:35:46 | INFO     |     Active site center: [23.95072216 27.87146293 88.53164786]
+2026-07-26 20:35:46 | INFO     |   Computing allosteric site centroid (TYR105, GLN199, GLU237) using side-chain atoms…
+2026-07-26 20:35:46 | INFO     |     Allosteric site center: [24.97548178 30.9366667  28.8698331 ]
+2026-07-26 20:35:46 | INFO     |   Cleaning Human Trypsin (1UTN)…
+2026-07-26 20:35:46 | INFO     |   Polar hydrogens added to output/workdir/trypsin_clean.pdb
+2026-07-26 20:35:46 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/trypsin_clean.pdbqt
+2026-07-26 20:35:46 | INFO     |   Computing trypsin active site centroid (His57, Asp102, Ser195) using side-chain atoms…
+2026-07-26 20:35:46 | INFO     |     Trypsin active site center: [22.54101663 14.86204433 22.53591386]
+2026-07-26 20:35:46 | INFO     |   Cleaning Human Carboxylesterase 1 (1YAH)…
+2026-07-26 20:35:47 | INFO     |   Polar hydrogens added to output/workdir/CES1_clean.pdb
+2026-07-26 20:35:49 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CES1_clean.pdbqt
+2026-07-26 20:35:49 | INFO     |   Computing CES1 active site centroid (Ser221, His468, Glu354) using side-chain atoms…
+2026-07-26 20:35:49 | INFO     |     CES1 active site center: [-7.13865188 43.85391877 37.96102563]
+2026-07-26 20:35:49 | INFO     |   Cleaning CYP3A4 (1TQN)…
+2026-07-26 20:35:49 | INFO     |   Structure 1TQN already local: output/pdb/1TQN.pdb
+2026-07-26 20:35:49 | INFO     |   Polar hydrogens added to output/workdir/CYP3A4_clean.pdb
+2026-07-26 20:35:49 | INFO     |   Receptor PDBQT written via obabel (-xr): output/workdir/CYP3A4_clean.pdbqt
+2026-07-26 20:35:49 | INFO     |   Computing CYP3A4 active site centroid (heme Fe, Thr309, Ala370)…
+2026-07-26 20:35:49 | INFO     |     CYP3A4 active site center: [-20.83707145 -22.85971421 -15.8193571 ]
+2026-07-26 20:35:49 | INFO     |   Grid config saved: output/workdir/grid_configs/grid_active.txt
+2026-07-26 20:35:49 | INFO     | ─── Phase 1 complete ───
+2026-07-26 20:35:49 | INFO     | ─── Phase 0: Redocking Validation ───
+2026-07-26 20:35:49 | INFO     |   Native ligand (resname override 'AI8'): chain A, residue AI8
+2026-07-26 20:35:49 | INFO     |   Native ligand SMILES: CCONC(C(O)N[C@H](CO)[C@@H]1NC(C(O)O)[C@@H](SC2NC(C3CCN(C)CC3)CS2)CS1)[C@@H]1NSC(N)N1
+2026-07-26 20:35:50 | INFO     |   Native ligand PDBQT written to output/workdir/native_ligand.pdbqt
+2026-07-26 20:35:50 | INFO     |   Redocking native ligand into PBP2a…
+2026-07-26 20:35:50 | INFO     |   Redocking box: 18.7 x 29.1 x 21.4 Å (auto-sized from native ligand).
+2026-07-26 20:37:22 | INFO     |   [Vina stdout, conformer 0 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.952          0          0
+   2       -6.791      3.637      9.872
+   3        -6.77      3.405      7.121
+2026-07-26 20:37:22 | INFO     |   RMSD (Kabsch, 27 atoms) = 1.937 Å
+2026-07-26 20:37:23 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.251 Å
+2026-07-26 20:37:23 | INFO     |   Redocking RMSD (conformer 0, seed 1) = 1.937 Å (core 1.251 Å)
+2026-07-26 20:38:48 | INFO     |   [Vina stdout, conformer 0 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.857          0          0
+   2       -6.817      3.164      6.962
+   3       -6.515      12.27      15.95
+2026-07-26 20:38:48 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.091 Å
+2026-07-26 20:38:48 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.235 Å
+2026-07-26 20:38:48 | INFO     |   Redocking RMSD (conformer 0, seed 2) = 2.091 Å (core 1.235 Å)
+2026-07-26 20:40:16 | INFO     |   [Vina stdout, conformer 0 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.917          0          0
+   2       -6.581      1.606      2.145
+   3       -6.443      11.11      15.51
+2026-07-26 20:40:16 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.069 Å
+2026-07-26 20:40:16 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.223 Å
+2026-07-26 20:40:16 | INFO     |   Redocking RMSD (conformer 0, seed 3) = 2.069 Å (core 1.223 Å)
+2026-07-26 20:40:16 | INFO     |   Multi-start RMSDs (conformer 0) = 1.937, 2.091, 2.069 Å; best = 1.937 Å
+2026-07-26 20:41:43 | INFO     |   [Vina stdout, conformer 1 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.699          0          0
+   2       -6.482      1.962      2.954
+   3       -6.448       3.17       12.5
+2026-07-26 20:41:43 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.071 Å
+2026-07-26 20:41:43 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.114 Å
+2026-07-26 20:41:43 | INFO     |   Redocking RMSD (conformer 1, seed 1) = 2.071 Å (core 1.114 Å)
+2026-07-26 20:43:04 | INFO     |   [Vina stdout, conformer 1 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -6.832          0          0
+   2         -6.6      3.476      12.54
+   3       -6.597      3.647      7.467
+2026-07-26 20:43:05 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.146 Å
+2026-07-26 20:43:05 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.215 Å
+2026-07-26 20:43:05 | INFO     |   Redocking RMSD (conformer 1, seed 2) = 2.146 Å (core 1.215 Å)
+2026-07-26 20:44:30 | INFO     |   [Vina stdout, conformer 1 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_3ZG0_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1        -6.83          0          0
+   2       -6.593      3.473      12.56
+   3       -6.506      4.095      9.202
+2026-07-26 20:44:30 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.119 Å
+2026-07-26 20:44:30 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.187 Å
+2026-07-26 20:44:30 | INFO     |   Redocking RMSD (conformer 1, seed 3) = 2.119 Å (core 1.187 Å)
+2026-07-26 20:44:30 | INFO     |   Multi-start RMSDs (conformer 1) = 2.071, 2.146, 2.119 Å; best = 2.071 Å
+2026-07-26 20:45:52 | INFO     |   [Vina stdout, conformer 2 seed 1] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 1) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.884          0          0
+   2       -7.843      2.742      4.296
+   3       -7.709      2.962      6.506
+2026-07-26 20:45:52 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.795 Å
+2026-07-26 20:45:52 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.154 Å
+2026-07-26 20:45:52 | INFO     |   Redocking RMSD (conformer 2, seed 1) = 2.795 Å (core 1.154 Å)
+2026-07-26 20:47:17 | INFO     |   [Vina stdout, conformer 2 seed 2] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 2) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.832          0          0
+   2       -7.691       3.28      9.288
+   3       -7.665      2.342      3.761
+2026-07-26 20:47:17 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.838 Å
+2026-07-26 20:47:17 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.158 Å
+2026-07-26 20:47:17 | INFO     |   Redocking RMSD (conformer 2, seed 2) = 2.838 Å (core 1.158 Å)
+2026-07-26 20:48:46 | INFO     |   [Vina stdout, conformer 2 seed 3] AutoDock Vina v1.2.7
+#################################################################
+# If you used AutoDock Vina in your work, please cite:          #
+#                                                               #
+# J. Eberhardt, D. Santos-Martins, A. F. Tillack, and S. Forli  #
+# AutoDock Vina 1.2.0: New Docking Methods, Expanded Force      #
+# Field, and Python Bindings, J. Chem. Inf. Model. (2021)       #
+# DOI 10.1021/acs.jcim.1c00203                                  #
+#                                                               #
+# O. Trott, A. J. Olson,                                        #
+# AutoDock Vina: improving the speed and accuracy of docking    #
+# with a new scoring function, efficient optimization and       #
+# multithreading, J. Comp. Chem. (2010)                         #
+# DOI 10.1002/jcc.21334                                         #
+#                                                               #
+# Please see https://github.com/ccsb-scripps/AutoDock-Vina for  #
+# more information.                                             #
+#################################################################
+
+Scoring function : vina
+Rigid receptor: output/workdir/PBP2a_4DKI_clean.pdbqt
+Ligand: output/workdir/native_ligand.pdbqt
+Grid center: X 27.902 Y 29.847 Z 88.317
+Grid size  : X 18.7 Y 29.1 Z 21.4
+Grid space : 0.375
+Exhaustiveness: 32
+CPU: 0
+Verbosity: 1
+
+Computing Vina grid ... done.
+Performing docking (random seed: 3) ... 
+0%   10   20   30   40   50   60   70   80   90   100%
+|----|----|----|----|----|----|----|----|----|----|
+***************************************************
+
+mode |   affinity | dist from best mode
+     | (kcal/mol) | rmsd l.b.| rmsd u.b.
+-----+------------+----------+----------
+   1       -7.692          0          0
+   2       -7.616      2.931      6.421
+   3       -7.436       3.21      6.719
+2026-07-26 20:48:47 | INFO     |   RMSD (Kabsch, 27 atoms) = 2.843 Å
+2026-07-26 20:48:47 | INFO     |   Core RMSD (ring scaffold, 12 atoms) = 1.157 Å
+2026-07-26 20:48:47 | INFO     |   Redocking RMSD (conformer 2, seed 3) = 2.843 Å (core 1.157 Å)
+2026-07-26 20:48:47 | INFO     |   Multi-start RMSDs (conformer 2) = 2.795, 2.838, 2.843 Å; best = 2.795 Å
+2026-07-26 20:48:47 | INFO     |   Best (consensus) Redocking RMSD = 1.937 Å (full-ligand); core (active-site scaffold) = 1.251 Å
+2026-07-26 20:48:47 | INFO     |   ✓  Redocking validated (core RMSD = 1.251 Å ≤ 2.0 Å).
+2026-07-26 20:48:47 | INFO     |   Validation results written: output/workdir/validation_results.json
+2026-07-26 20:48:47 | INFO     |   Release status written: /Users/tom/Documents/apps/AutoAntibiotic/status.json
+2026-07-26 20:48:47 | INFO     | --- Phase 0.5: Enrichment Validation ---
+2026-07-26 20:48:47 | INFO     |   Loaded 21 known actives
+2026-07-26 20:48:47 | INFO     |   Loaded 150 known decoys
+2026-07-26 20:50:57 | INFO     |     Docked 25 / 171 (enrich_c0)
+2026-07-26 20:53:27 | INFO     |     Docked 50 / 171 (enrich_c0)
+2026-07-26 20:55:16 | INFO     |     Docked 75 / 171 (enrich_c0)
+2026-07-26 20:57:05 | INFO     |     Docked 100 / 171 (enrich_c0)
+2026-07-26 20:59:06 | INFO     |     Docked 125 / 171 (enrich_c0)
+2026-07-26 21:01:06 | INFO     |     Docked 150 / 171 (enrich_c0)
+2026-07-26 21:03:37 | INFO     |     Docked 25 / 171 (enrich_c1)
+2026-07-26 21:05:36 | INFO     |     Docked 50 / 171 (enrich_c1)
+2026-07-26 21:06:53 | INFO     |     Docked 75 / 171 (enrich_c1)
+2026-07-26 21:08:35 | INFO     |     Docked 100 / 171 (enrich_c1)
+2026-07-26 21:10:14 | INFO     |     Docked 125 / 171 (enrich_c1)
+2026-07-26 21:11:58 | INFO     |     Docked 150 / 171 (enrich_c1)
+2026-07-26 21:14:31 | INFO     |     Docked 25 / 171 (enrich_c2)
+2026-07-26 21:16:22 | INFO     |     Docked 50 / 171 (enrich_c2)
+2026-07-26 21:18:03 | INFO     |     Docked 75 / 171 (enrich_c2)
+2026-07-26 21:19:28 | INFO     |     Docked 100 / 171 (enrich_c2)
+2026-07-26 21:21:17 | INFO     |     Docked 125 / 171 (enrich_c2)
+2026-07-26 21:22:53 | INFO     |     Docked 150 / 171 (enrich_c2)
+2026-07-26 21:23:49 | INFO     |   Enrichment results written: output/enrichment_results.json
+2026-07-26 21:23:49 | INFO     | --- Phase 0.5 complete ---
+2026-07-26 21:23:49 | WARNING  |   ⚠  Enrichment validation: AUC=0.097 (need ≥0.7), EF_1%=0.00 (need ≥5). Protocol may need tuning.
+2026-07-26 21:23:49 | INFO     | ─── Phase 0.5 complete ───
+2026-07-26 21:23:49 | INFO     | ─── Phase 2: Library Generation ───
+2026-07-26 21:23:49 | INFO     |   Loading external compound library from CSV: data/screen_library_final.csv
+2026-07-26 21:23:49 | INFO     |   Loaded 3116 compounds from external CSV.
+2026-07-26 21:23:50 | INFO     | ─── Phase 2: Filtering ───
+2026-07-26 21:23:54 | INFO     |   Structural exclusion (β-lactam): 0 removed.
+2026-07-26 21:23:54 | INFO     |   Similarity filter (Tc < 0.3): 9 removed.
+2026-07-26 21:23:54 | INFO     |   ADMET filter (Lipinski + QED > 0.5): 2411 removed.
+2026-07-26 21:23:54 | INFO     |   PAINS filter: 2 removed.
+2026-07-26 21:23:54 | INFO     |   Brenk alerts: 302 removed.
+2026-07-26 21:23:54 | INFO     |   Passed filters: 392 compounds.
+2026-07-26 21:23:54 | INFO     | ─── Phase 2 complete ───
+2026-07-26 21:23:54 | INFO     | ─── Phase 3: Virtual Screening ───
+2026-07-26 21:23:54 | INFO     |   Docking all 392 compounds against PBP2a active site (3 conformers)…
+2026-07-26 21:24:54 | INFO     |     Docked 25 / 392 (active_c0)
+2026-07-26 21:25:36 | INFO     |     Docked 50 / 392 (active_c0)
+2026-07-26 21:26:33 | INFO     |     Docked 75 / 392 (active_c0)
+2026-07-26 21:27:34 | INFO     |     Docked 100 / 392 (active_c0)
+2026-07-26 21:28:15 | INFO     |     Docked 125 / 392 (active_c0)
+2026-07-26 21:29:21 | INFO     |     Docked 150 / 392 (active_c0)
+2026-07-26 21:30:37 | INFO     |     Docked 175 / 392 (active_c0)
+2026-07-26 21:31:56 | INFO     |     Docked 200 / 392 (active_c0)
+2026-07-26 21:32:29 | INFO     |     Docked 225 / 392 (active_c0)
+2026-07-26 21:33:43 | INFO     |     Docked 250 / 392 (active_c0)
+2026-07-26 21:34:43 | INFO     |     Docked 275 / 392 (active_c0)
+2026-07-26 21:35:58 | INFO     |     Docked 300 / 392 (active_c0)
+2026-07-26 21:37:30 | INFO     |     Docked 325 / 392 (active_c0)
+2026-07-26 21:38:53 | INFO     |     Docked 350 / 392 (active_c0)
+2026-07-26 21:40:03 | INFO     |     Docked 375 / 392 (active_c0)
+2026-07-26 21:41:17 | INFO     |     Docked 25 / 392 (active_c1)
+2026-07-26 21:41:54 | INFO     |     Docked 50 / 392 (active_c1)
+2026-07-26 21:42:36 | INFO     |     Docked 75 / 392 (active_c1)
+2026-07-26 21:43:26 | INFO     |     Docked 100 / 392 (active_c1)
+2026-07-26 21:44:06 | INFO     |     Docked 125 / 392 (active_c1)
+2026-07-26 21:44:58 | INFO     |     Docked 150 / 392 (active_c1)
+2026-07-26 21:46:03 | INFO     |     Docked 175 / 392 (active_c1)
+2026-07-26 21:46:58 | INFO     |     Docked 200 / 392 (active_c1)
+2026-07-26 21:47:25 | INFO     |     Docked 225 / 392 (active_c1)
+2026-07-26 21:48:20 | INFO     |     Docked 250 / 392 (active_c1)
+2026-07-26 21:49:14 | INFO     |     Docked 275 / 392 (active_c1)
+2026-07-26 21:50:04 | INFO     |     Docked 300 / 392 (active_c1)
+2026-07-26 21:51:17 | INFO     |     Docked 325 / 392 (active_c1)
+2026-07-26 21:52:31 | INFO     |     Docked 350 / 392 (active_c1)
+2026-07-26 21:53:24 | INFO     |     Docked 375 / 392 (active_c1)
+2026-07-26 21:54:37 | INFO     |     Docked 25 / 392 (active_c2)
+2026-07-26 21:55:13 | INFO     |     Docked 50 / 392 (active_c2)
+2026-07-26 21:56:01 | INFO     |     Docked 75 / 392 (active_c2)
+2026-07-26 21:56:43 | INFO     |     Docked 100 / 392 (active_c2)
+2026-07-26 21:57:25 | INFO     |     Docked 125 / 392 (active_c2)
+2026-07-26 21:58:15 | INFO     |     Docked 150 / 392 (active_c2)
+2026-07-26 21:59:17 | INFO     |     Docked 175 / 392 (active_c2)
+2026-07-26 22:00:12 | INFO     |     Docked 200 / 392 (active_c2)
+2026-07-26 22:00:42 | INFO     |     Docked 225 / 392 (active_c2)
+2026-07-26 22:01:40 | INFO     |     Docked 250 / 392 (active_c2)
+2026-07-26 22:02:27 | INFO     |     Docked 275 / 392 (active_c2)
+2026-07-26 22:03:15 | INFO     |     Docked 300 / 392 (active_c2)
+2026-07-26 22:04:41 | INFO     |     Docked 325 / 392 (active_c2)
+2026-07-26 22:05:44 | INFO     |     Docked 350 / 392 (active_c2)
+2026-07-26 22:06:34 | INFO     |     Docked 375 / 392 (active_c2)
+2026-07-26 22:07:01 | INFO     |   Active-site docking complete: 392/392 scored.
+2026-07-26 22:08:33 | INFO     |   Pharmacophore pre-filter removed 0 surface-binder compounds.
+2026-07-26 22:08:33 | INFO     |   Docking all 392 compounds against PBP2a allosteric site (3 conformers)…
+2026-07-26 22:09:27 | INFO     |     Docked 25 / 392 (allosteric_c0)
+2026-07-26 22:10:05 | INFO     |     Docked 50 / 392 (allosteric_c0)
+2026-07-26 22:10:55 | INFO     |     Docked 75 / 392 (allosteric_c0)
+2026-07-26 22:11:49 | INFO     |     Docked 100 / 392 (allosteric_c0)
+2026-07-26 22:12:34 | INFO     |     Docked 125 / 392 (allosteric_c0)
+2026-07-26 22:13:32 | INFO     |     Docked 150 / 392 (allosteric_c0)
+2026-07-26 22:14:46 | INFO     |     Docked 175 / 392 (allosteric_c0)
+2026-07-26 22:15:56 | INFO     |     Docked 200 / 392 (allosteric_c0)
+2026-07-26 22:16:28 | INFO     |     Docked 225 / 392 (allosteric_c0)
+2026-07-26 22:17:27 | INFO     |     Docked 250 / 392 (allosteric_c0)
+2026-07-26 22:18:30 | INFO     |     Docked 275 / 392 (allosteric_c0)
+2026-07-26 22:19:27 | INFO     |     Docked 300 / 392 (allosteric_c0)
+2026-07-26 22:20:53 | INFO     |     Docked 325 / 392 (allosteric_c0)
+2026-07-26 22:22:06 | INFO     |     Docked 350 / 392 (allosteric_c0)
+2026-07-26 22:23:11 | INFO     |     Docked 375 / 392 (allosteric_c0)
+2026-07-26 22:24:33 | INFO     |     Docked 25 / 392 (allosteric_c1)
+2026-07-26 22:25:11 | INFO     |     Docked 50 / 392 (allosteric_c1)
+2026-07-26 22:26:00 | INFO     |     Docked 75 / 392 (allosteric_c1)
+2026-07-26 22:26:56 | INFO     |     Docked 100 / 392 (allosteric_c1)
+2026-07-26 22:27:39 | INFO     |     Docked 125 / 392 (allosteric_c1)
+2026-07-26 22:28:38 | INFO     |     Docked 150 / 392 (allosteric_c1)
+2026-07-26 22:29:52 | INFO     |     Docked 175 / 392 (allosteric_c1)
+2026-07-26 22:30:58 | INFO     |     Docked 200 / 392 (allosteric_c1)
+2026-07-26 22:31:37 | INFO     |     Docked 225 / 392 (allosteric_c1)
+2026-07-26 22:32:35 | INFO     |     Docked 250 / 392 (allosteric_c1)
+2026-07-26 22:33:40 | INFO     |     Docked 275 / 392 (allosteric_c1)
+2026-07-26 22:34:44 | INFO     |     Docked 300 / 392 (allosteric_c1)
+2026-07-26 22:36:11 | INFO     |     Docked 325 / 392 (allosteric_c1)
+2026-07-26 22:37:24 | INFO     |     Docked 350 / 392 (allosteric_c1)
+2026-07-26 22:38:27 | INFO     |     Docked 375 / 392 (allosteric_c1)
+2026-07-26 22:39:52 | INFO     |     Docked 25 / 392 (allosteric_c2)
+2026-07-26 22:40:32 | INFO     |     Docked 50 / 392 (allosteric_c2)
+2026-07-26 22:41:22 | INFO     |     Docked 75 / 392 (allosteric_c2)
+2026-07-26 22:42:18 | INFO     |     Docked 100 / 392 (allosteric_c2)
+2026-07-26 22:43:04 | INFO     |     Docked 125 / 392 (allosteric_c2)
+2026-07-26 22:44:04 | INFO     |     Docked 150 / 392 (allosteric_c2)
+2026-07-26 22:45:18 | INFO     |     Docked 175 / 392 (allosteric_c2)
+2026-07-26 22:46:29 | INFO     |     Docked 200 / 392 (allosteric_c2)
+2026-07-26 22:47:07 | INFO     |     Docked 225 / 392 (allosteric_c2)
+2026-07-26 22:48:21 | INFO     |     Docked 250 / 392 (allosteric_c2)
+2026-07-26 22:49:34 | INFO     |     Docked 275 / 392 (allosteric_c2)
+2026-07-26 22:50:47 | INFO     |     Docked 300 / 392 (allosteric_c2)
+2026-07-26 22:52:25 | INFO     |     Docked 325 / 392 (allosteric_c2)
+2026-07-26 22:53:48 | INFO     |     Docked 350 / 392 (allosteric_c2)
+2026-07-26 22:54:55 | INFO     |     Docked 375 / 392 (allosteric_c2)
+2026-07-26 22:55:32 | INFO     |   Allosteric-site docking complete: 392/392 scored.
+2026-07-26 22:55:32 | INFO     |   Top 30 candidates by best energy.
+2026-07-26 22:55:32 | INFO     |     1. BRICS-0006: -10.61 kcal/mol (active: -10.61)
+2026-07-26 22:55:32 | INFO     |     2. BRICS-0022: -10.41 kcal/mol (active: -10.41)
+2026-07-26 22:55:32 | INFO     |     3. BRICS-01163: -10.24 kcal/mol (active: -10.24)
+2026-07-26 22:55:32 | INFO     |     4. BRICS-0340: -10.13 kcal/mol (active: -10.13)
+2026-07-26 22:55:32 | INFO     |     5. BRICS-01154: -10.08 kcal/mol (active: -10.08)
+2026-07-26 22:55:32 | INFO     |     6. ALL_QU04: -10.05 kcal/mol (active: -10.05)
+2026-07-26 22:55:32 | INFO     |     7. ALL_QU04: -10.05 kcal/mol (active: -10.05)
+2026-07-26 22:55:32 | INFO     |     8. ALL_SU08: -9.95 kcal/mol (active: -9.95)
+2026-07-26 22:55:32 | INFO     |     9. BRICS-0004: -9.92 kcal/mol (active: -9.92)
+2026-07-26 22:55:32 | INFO     |     10. ALL_SU14: -9.88 kcal/mol (active: -9.88)
+2026-07-26 22:55:32 | INFO     | ─── Phase 3 complete ───
+2026-07-26 22:55:32 | INFO     | ─── Phase 4: Selectivity & Resistance Analysis ───
+2026-07-26 22:55:32 | INFO     |   Docking top 10 vs Human Trypsin (1UTN)…
+2026-07-26 22:57:22 | INFO     |     Docked 25 / 30 (trypsin)
+2026-07-26 22:57:31 | INFO     |   Docking top 10 vs Human Carboxylesterase 1 (1YAH)…
+2026-07-26 22:59:30 | INFO     |     Docked 25 / 30 (ces1)
+2026-07-26 22:59:38 | INFO     |   Docking top 10 vs Human CYP3A4 (1TQN)…
+2026-07-26 23:01:16 | INFO     |     Docked 25 / 30 (cyp3a4)
+2026-07-26 23:01:24 | WARNING  |   BRICS-01154: CES1 energy (-8.73) stronger than PBP2a (-7.76) — possible surface-patch artifact
+2026-07-26 23:01:24 | WARNING  |   BRICS-0022: Low mechanism-restricted selectivity (SI = 1.48 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | INFO     |   BRICS-01163: mechanism-restricted SI = 1.91 (pass).
+2026-07-26 23:01:24 | WARNING  |   BRICS-0340: Low mechanism-restricted selectivity (SI = 1.45 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | WARNING  |   BRICS-01154: Low mechanism-restricted selectivity (SI = 0.97 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | INFO     |   ALL_QU04: mechanism-restricted SI = 1.58 (pass).
+2026-07-26 23:01:24 | WARNING  |   ALL_SU08: Low mechanism-restricted selectivity (SI = 1.38 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | WARNING  |   ALL_SU14: Low mechanism-restricted selectivity (SI = 1.45 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | INFO     |   ALL_QU05: mechanism-restricted SI = 2.03 (pass).
+2026-07-26 23:01:24 | INFO     |   BRICS-0013: mechanism-restricted SI = 1.64 (pass).
+2026-07-26 23:01:24 | WARNING  |   DIV-0277: Low mechanism-restricted selectivity (SI = 1.04 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | WARNING  |   ALL_TE07: Low mechanism-restricted selectivity (SI = 1.20 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | INFO     |   SEED-01150: mechanism-restricted SI = 1.74 (pass).
+2026-07-26 23:01:24 | WARNING  |   ALL_SU03: Low mechanism-restricted selectivity (SI = 1.22 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:24 | WARNING  |   ALL_SP03: Low mechanism-restricted selectivity (SI = 1.48 < 1.5). Flagged for off-target risk.
+2026-07-26 23:01:31 | INFO     | ─── Phase 4 complete ───
+2026-07-26 23:01:36 | INFO     |   MM-GBSA rescoring: 1/30 candidates scored.
+2026-07-26 23:01:36 | INFO     |   Final Top-10 ranked by PBP2a best energy (catalytic-engagement tiebreak).
+2026-07-26 23:01:36 | INFO     |   Diversified final set: 9 diverse + 21 filler = 30 candidate(s).
+2026-07-26 23:01:36 | INFO     |   Final report: 5 candidate(s) at SI >= 1.5, filled to 30 total.
+2026-07-26 23:01:36 | INFO     | ─── Phase 5: Reporting ───
+2026-07-26 23:01:36 | INFO     |   CSV report saved: output/top_candidates.csv
+2026-07-26 23:01:36 | INFO     |   JSON candidates saved: output/top_candidates.json
+2026-07-26 23:01:36 | INFO     |   Image saved: output/top1_ALL_QU05.png
+2026-07-26 23:01:36 | INFO     |   Image saved: output/top2_BRICS-01163.png
+2026-07-26 23:01:36 | INFO     |   Image saved: output/top3_SEED-01150.png
+2026-07-26 23:01:36 | INFO     |   Interaction diagram saved: output/figures/interaction_ALL_QU05.png
+2026-07-26 23:01:36 | INFO     |   Interaction diagram saved: output/figures/interaction_BRICS-01163.png
+2026-07-26 23:01:36 | INFO     |   Interaction diagram saved: output/figures/interaction_SEED-01150.png
+2026-07-26 23:01:36 | INFO     | Interaction diagrams saved to output/figures/
+2026-07-26 23:01:36 | INFO     |   PyMOL script saved: output/visualization.pml (3 ligand pose(s) loaded).
+2026-07-26 23:01:36 | INFO     |   Filter funnel saved: output/filter_funnel.json
+2026-07-26 23:01:36 | INFO     |   ROC curve saved: output/figures/roc_curve.png
+2026-07-26 23:01:36 | INFO     |   Energy distribution saved: output/figures/energy_distribution.png
+2026-07-26 23:01:36 | INFO     |   SI scatter plot saved: output/figures/si_scatter.png
+2026-07-26 23:01:37 | INFO     |   Filter funnel saved: output/figures/filter_funnel.png
+2026-07-26 23:01:37 | INFO     |   Binding diagram saved: output/figures/top3_binding_1_ALL_QU05.png
+2026-07-26 23:01:37 | INFO     |   Binding diagram saved: output/figures/top3_binding_2_BRICS-01163.png
+2026-07-26 23:01:37 | INFO     |   Binding diagram saved: output/figures/top3_binding_3_SEED-01150.png
+2026-07-26 23:01:37 | INFO     |   All figures saved to output/figures
+2026-07-26 23:01:37 | INFO     | ============================================================
+2026-07-26 23:01:37 | INFO     |   PIPELINE SUMMARY
+2026-07-26 23:01:37 | INFO     | ============================================================
+2026-07-26 23:01:37 | INFO     |   Total compounds generated:     3116
+2026-07-26 23:01:37 | INFO     |   After filtering:               392
+2026-07-26 23:01:37 | INFO     |   Top candidates reported:       30
+2026-07-26 23:01:37 | INFO     |   Successfully docked:           30
+2026-07-26 23:01:37 | INFO     |   Selectivity pass (SI >= 2.0):  5
+2026-07-26 23:01:37 | INFO     |   Docking engine:                Vina
+2026-07-26 23:01:37 | INFO     |   Redocking RMSD:                1.937 Å
+2026-07-26 23:01:37 | INFO     |   Redocking validated:           True
+2026-07-26 23:01:37 | INFO     |   Protocol validation: RMSD 1.937 Å (Validated)
+2026-07-26 23:01:37 | INFO     |   CSV report:                    output/top_candidates.csv
+2026-07-26 23:01:37 | INFO     |   Open output/visualization.pml in PyMOL to inspect binding poses.
+2026-07-26 23:01:37 | INFO     | ============================================================
+2026-07-26 23:01:37 | INFO     | Pipeline complete. Exiting.
