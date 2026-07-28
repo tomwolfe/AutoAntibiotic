@@ -24,12 +24,14 @@ dash wid 2.0
 distance hbond_lys_2, Ligand_2_BRICS_01163, resi 406 & name NZ, cutoff=3.8
 dash wid 2.0
 
-load 'output/workdir/ALL_SU15_active_c2_out.pdbqt', Ligand_3_ALL_SU15
-color byelement, Ligand_3_ALL_SU15
-show sticks, Ligand_3_ALL_SU15
-distance hbond_ser_3, Ligand_3_ALL_SU15, resi 403 & name OG, cutoff=3.5
+load 'output/workdir/BRICS_0022_active_c2_out.pdbqt', Ligand_3_BRICS_0022
+color byelement, Ligand_3_BRICS_0022
+show sticks, Ligand_3_BRICS_0022
+distance hbond_ser_3, Ligand_3_BRICS_0022, resi 403 & name OG, cutoff=3.5
 dash wid 2.0
-distance hbond_lys_3, Ligand_3_ALL_SU15, resi 406 & name NZ, cutoff=3.8
+distance hbond_lys_3, Ligand_3_BRICS_0022, resi 406 & name NZ, cutoff=3.8
+dash wid 2.0
+distance hbond_tyr_3, Ligand_3_BRICS_0022, resi 446 & name OH, cutoff=3.5
 dash wid 2.0
 
 
