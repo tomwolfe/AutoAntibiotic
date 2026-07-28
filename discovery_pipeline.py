@@ -1854,7 +1854,7 @@ def analyze_selectivity_and_resistance(
     1. Dock top 10 candidates against the human off-target panel (Trypsin,
        CES1, Albumin, CYP3A4) — 4 proteins for a wider selectivity screen.
     2. Compute Selectivity Index (average human energy over up to 4 targets).
-    3. Optionally rerank the top 10 by a lightweight MM-GBSA-like MMFF score.
+    3. Optionally rerank the top 10 by an MMFF94 strain-interaction rescoring.
     4. Profile resistance risk.
 
     Returns updated records with selectivity and resistance fields.
@@ -2687,17 +2687,17 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 
-    # ── Phase 4.1: MM-GBSA rescoring for top candidates ──
+    # ── Phase 4.1: MMFF94 strain-interaction rescoring for top candidates ──
     try:
-        from utils.docking import rescore_mmffsa
+        from utils.docking import rescore_mmff94_strain
         pb2pa_pdb = targets.get("PBP2a", {}).get("cleaned_pdb")
         for rec in top10:
-            mmffsa = rescore_mmffsa(rec, receptor_pdb=pb2pa_pdb)
-            rec.mmff_sa_score = mmffsa
+            mmff94_score = rescore_mmff94_strain(rec, receptor_pdb=pb2pa_pdb)
+            rec.mmff_sa_score = mmff94_score
         scored = sum(1 for r in top10 if r.mmff_sa_score is not None)
-        log.info(f"  MM-GBSA rescoring: {scored}/{len(top10)} candidates scored.")
+        log.info(f"  MMFF94 strain-interaction rescoring: {scored}/{len(top10)} candidates scored.")
     except Exception as exc:
-        log.warning(f"  ⚠  MM-GBSA rescoring failed: {exc}")
+        log.warning(f"  ⚠  MMFF94 strain-interaction rescoring failed: {exc}")
 
     # ── Phase 4.2: Final ranking ──
     top10 = sorted(top10, key=lambda r: (
@@ -2712,7 +2712,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # ── Phase 4.5: Diversity clustering ──
     # Pick a maximally dissimilar final set (Morgan Tanimoto ≤ 0.4) to fill the
     # reported top-10, improving the odds that reported hits are distinct,
-    # credible binders rather than near-duplicates. The MM-GBSA-like score gate
+    # credible binders rather than near-duplicates. The MMFF94 strain-interaction gate
     # was removed in v4.0; only the diversity logic remains.
     from utils.reporting import diversify_top_n
     top10 = diversify_top_n(

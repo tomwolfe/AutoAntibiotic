@@ -107,8 +107,8 @@ def main():
     ok = n_lib >= 500
     c(11, "Library >= 500 compounds", ok, f"{n_lib} cmpds")
 
-    ok = "MMGBSA_Score" in csv_header
-    c(12, "MMGBSA_Score column in CSV", ok, "Present" if ok else "MISSING")
+    ok = "MMFF94_Strain_Score" in csv_header
+    c(12, "MMFF94_Strain_Score column in CSV", ok, "Present" if ok else "MISSING")
 
     ok = "Human_CYP3A4_Energy" in csv_header
     c(13, "Human_CYP3A4_Energy column in CSV", ok, "Present" if ok else "MISSING")
@@ -128,9 +128,9 @@ def main():
       f"hERG={'Y'if ok_h else 'N'}, Alb={'Y'if ok_a else 'N'}")
 
     docking_src = Path("utils/docking.py").read_text()
-    ok_pi = "receptor_pdb" in docking_src and "e_receptor_interaction" in docking_src
-    c(18, "MMGBSA_Score is protein-ligand ΔG", ok_pi,
-      "Protein-ligand" if ok_pi else "Ligand-only")
+    ok_pi = "rescore_mmff94_strain" in docking_src and "e_receptor_interaction" in docking_src
+    c(18, "MMFF94_Strain_Score is force-field-based ranking", ok_pi,
+      "Strain-interaction" if ok_pi else "Ligand-only")
 
     all_pass = all(criteria_results)
     c(19, "verify_success.py exits 0", all_pass,

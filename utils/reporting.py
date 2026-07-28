@@ -330,10 +330,10 @@ def generate_csv_report(
             # = |E_PBP2a| / 7.3 (no covalent bonus). SI_Tier is the Strong /
             # Promising / Weak / N/A label. Passes_Selectivity_Gate flags the
             # mechanism-restricted gate (SI vs trypsin/CES1 >= 2.0).
-            # Approximate MMFF94-based rescoring score (arbitrary units, NOT kcal/mol).
-            # Computed as: MMFF94 strain + distance-dependent dielectric interaction
-            # + TPSA solvation. Not a true MM-GBSA score.
-            "MMGBSA_Score": (
+            # Approximate MMFF94 strain-interaction rescoring score (arbitrary units,
+            # NOT kcal/mol). Computed as: MMFF94 strain + distance-dependent dielectric
+            # interaction + TPSA solvation. Not a true MM-GBSA score.
+            "MMFF94_Strain_Score": (
                 f"{rec.mmff_sa_score:.2f}" if getattr(rec, "mmff_sa_score", None) is not None
                 else "N/A"
             ),
@@ -388,7 +388,7 @@ def diversify_top_n(
     (best-first) defines the priority used to seed the diverse selection: the
     top-ranked candidate is always kept, then each subsequent candidate is
     admitted only if it is sufficiently dissimilar (Tanimoto ≤ ``max_tanimoto``)
-    from all already-selected compounds. The MM-GBSA-like MMFF score gate that
+    from all already-selected compounds. The MMFF94 strain-interaction gate that
     previously lived here was removed in v4.0 (the simplified pipeline ranks by
     PBP2a consensus energy only).
 

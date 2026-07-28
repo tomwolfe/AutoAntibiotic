@@ -88,7 +88,7 @@ The following were removed because they did not change which molecules appear
 in the report, and they slowed the run:
 - **Flexible (`--flex`) docking** of the active-site step — rigid consensus
   docking is now the authoritative active-site ranking.
-- **MM-GBSA-like rerank** (`MMGBSA_Score`, `rerank_mmff`) — final ranking is by
+- **MMFF94 strain-interaction rescoring** (`MMFF94_Strain_Score`, `rerank_mmff`) — final ranking is by
   PBP2a active-site consensus energy.
 - **Mutation scan** (`Mutant_Energy_Delta`) — resistance is now reported from
   pose-based interaction analysis only.

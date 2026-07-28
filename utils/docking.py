@@ -268,8 +268,9 @@ def _dock_compounds_parallel(
             parent = by_id[rec.compound_id]
             results.append((parent, energy))
             # Propagate the active-site pose path back to the parent record so
-            # downstream pose analysis (MM-GBSA, H-bond flags, mutation scan)
-            # can use it. Only the "active" tag produces a retained pose.
+            # downstream pose analysis (MMFF94 strain-interaction, H-bond flags,
+            # mutation scan) can use it. Only the "active" tag produces a retained
+            # pose.
             if pose is not None:
                 parent.active_docked_pdbqt = pose
             if (i + 1) % 25 == 0:
@@ -302,12 +303,12 @@ def _dock_compounds_parallel(
     return results
 
 
-def rescore_mmffsa(
+def rescore_mmff94_strain(
     record: "CompoundRecord",
     receptor_pdb: Optional[str] = None,
 ) -> Optional[float]:
     """
-    Compute a relative MMFF94 strain-aware rescoring score.
+    MMFF94 strain-interaction rescoring score (NOT MM-GBSA).
 
     The score combines three physically motivated terms:
         score = e_strain + e_receptor_interaction + e_np
@@ -319,6 +320,11 @@ def rescore_mmffsa(
         distance-dependent dielectric interaction between Gasteiger
         ligand charges and a uniform -0.2 receptor atom charge proxy.
       - e_np is a non-polar solvation term estimated from TPSA.
+
+    This is NOT an MM-GBSA (MM/Generalized Born Surface Area) score. It does
+    NOT use Generalized Born or Poisson-Boltzmann electrostatics. The score is
+    a dimensionless relative ranking value and should NOT be interpreted as a
+    binding free energy in kcal/mol.
 
     When the docked pose is unavailable, returns None.
 
@@ -332,8 +338,21 @@ def rescore_mmffsa(
             interaction calculation.
 
     Returns:
-        Approximate protein-ligand MM-GBSA score (kcal/mol) or None.
+        Approximate MMFF94 strain-interaction score (arbitrary units) or None.
     """
+
+
+def rescore_mmffsa(
+    record: "CompoundRecord",
+    receptor_pdb: Optional[str] = None,
+) -> Optional[float]:
+    """Deprecated alias for :func:`rescore_mmff94_strain`."""
+    import warnings
+    warnings.warn(
+        "rescore_mmffsa is deprecated; use rescore_mmff94_strain instead.",
+        DeprecationWarning, stacklevel=2,
+    )
+    return rescore_mmff94_strain(record, receptor_pdb=receptor_pdb)
     mol = record.mol if record.mol is not None else Chem.MolFromSmiles(record.smiles)
     if mol is None:
         return None

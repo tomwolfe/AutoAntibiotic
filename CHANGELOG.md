@@ -2,6 +2,26 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.4.0] — Rename MM-GBSA to MMFF94 strain-interaction score; fix CES1 SI threshold
+
+### Changed
+- **`rescore_mmffsa()` renamed to `rescore_mmff94_strain()`** in `utils/docking.py`.
+  The old name is retained as a deprecated alias emitting `DeprecationWarning`.
+  The function does NOT perform MM-GBSA — it computes an MMFF94 strain penalty +
+  distance-dependent dielectric interaction + TPSA solvation score in arbitrary
+  units. Docstring now explicitly warns: "NOT an MM-GBSA score."
+- **CSV/JSON column `MMGBSA_Score` renamed to `MMFF94_Strain_Score`** in
+  `utils/reporting.py`, `verify_success.py`, and output files.
+- **`paper.tex`:** All "MM-GBSA" references updated to "MMFF94 strain-interaction
+  score" with clarifying footnotes that the previous name was misleading.
+- **`CHANGELOG.md`:** Old entries annotated: "Previously called MM-GBSA rescoring,
+  now renamed to MMFF94 strain-interaction score."
+
+### Added
+- **Minimum binding energy threshold.** Off-target energies with |E| < 1.0 kcal/mol
+  are excluded as non-binders (docking failures) from the SI denominator. See
+  Task 1 details below.
+
 ## [5.3.1] — Full pipeline run completed, paper reconciled with actual output
 
 ### Added
@@ -33,25 +53,28 @@ All notable changes to the pipeline are documented here, newest first.
 - **constants.py:** TOP_N expanded from 20 → 30 to increase selectivity analysis coverage.
 
 ### Fixed
-- MM-GBSA rescoring reports accurate protein-ligand interaction energies rather
-  than ligand-only fallback scores.
+- MMFF94 strain-interaction rescoring (previously called MM-GBSA) reports
+  accurate protein-ligand interaction energies rather than ligand-only fallback
+  scores.
 - 0 CLASH entries in off-target docking columns (all CES1 energies reported as
   numeric values).
 - All 20 `verify_success.py` criteria now pass.
 
-## [5.3.0] — Major library expansion, protein-ligand MM-GBSA, hERG/albumin columns, 20-criteria verification
+## [5.3.0] — Major library expansion, MMFF94 strain-interaction rescoring (previously called MM-GBSA), hERG/albumin columns, 20-criteria verification
 
 ### Added
 - **Library massively expanded to 3,116 compounds** (was 691). Merged all available
   seed CSVs, external libraries, and BRICS-recombined fragments from 8 seed scaffolds.
   Minimal hard filters applied (MW 150–650, no β-lactam, no boron); pipeline's own
   `apply_filters` chain handles ADMET/PAINS/Brenk at screening time.
-- **Protein-ligand MM-GBSA rescoring.** `rescore_mmffsa()` in `utils/docking.py` now
-  loads the docked pose PDBQT, computes MMFF94 strain of the ligand in its bound
+- **MMFF94 strain-interaction rescoring (previously called MM-GBSA).**
+  `rescore_mmffsa()` (now `rescore_mmff94_strain()`) in `utils/docking.py` loads
+  the docked pose PDBQT, computes MMFF94 strain of the ligand in its bound
   conformation, computes a distance-dependent dielectric protein-ligand interaction
   term when a receptor PDB is available, and combines with TPSA solvation. Falls back
   to minimised-ligand energy + solvation when pose is unavailable. The `receptor_pdb`
-  parameter is now functionally utilised.
+  parameter is now functionally utilised. Renamed in v5.4.0 to `rescore_mmff94_strain`
+  and column renamed to `MMFF94_Strain_Score` to avoid the misleading "MM-GBSA" label.
 - **hERG and albumin liability columns.** `Human_hERG_Energy` and
   `Human_Albumin_Energy` columns added to `top_candidates.csv` as report-only
   flags (not docked by default; marked "N/A (not docked)").
@@ -69,14 +92,14 @@ All notable changes to the pipeline are documented here, newest first.
   The expanded library (3,116 compounds) was created but the full Vina docking
   campaign (~376 filtered compounds × 6 docks each ≈ 2,256 Vina runs, ~18–37 h) was
   not re-run in this session. BRICS-01163 was docked in a partial v5.3.0 re-run of
-  the BRICS-enriched subset only. Its MM-GBSA rescoring score (5134.09) is anomalously
+  the BRICS-enriched subset only. Its MMFF94 strain-interaction score (5134.09, then called MM-GBSA) is anomalously
   high, suggesting the rescoring calculation may not be reliable for this compound;
   the Vina binding energies themselves are within normal range. A full pipeline re-run
   with the expanded library is expected to yield additional hits.
 - **MD relaxation (P1.6) skipped.** The optional 2 ns NVT relaxation for top-5 poses
   requires GROMACS/OpenMM infrastructure not configured in this environment.
 
-## [5.2.0] — Library expansion, MM-GBSA rescoring, CYP3A4 profiling, paper update
+## [5.2.0] — Library expansion, MMFF94 strain-interaction rescoring (previously called MM-GBSA), CYP3A4 profiling, paper update
 
 ### Fixed
 - **CES1 grid-box over-inflation.** `analyze_selectivity_and_resistance` now uses
@@ -101,16 +124,18 @@ All notable changes to the pipeline are documented here, newest first.
 - **Library expanded to 691 compounds** (was 244). Merged 8 seed CSVs with
   hard filters (MW 200--550, QED > 0.3, framework 15% cap). Added 3 new scaffold
   families to `SEED_SCAFFOLDS` in `utils/library_gen.py`.
-- **MM-GBSA rescoring.** `rescore_mmffsa()` in `utils/docking.py`: MMFF94
-  optimisation + TPSA solvation + distance-dependent dielectric ($\varepsilon=80$).
-  `mmff_sa_score` field added; integration in pipeline Phase 4.1.
+- **MMFF94 strain-interaction rescoring (previously called MM-GBSA).**
+  `rescore_mmffsa()` (now `rescore_mmff94_strain()`) in `utils/docking.py`:
+  MMFF94 optimisation + TPSA solvation + distance-dependent dielectric
+  ($\varepsilon=80$). `mmff_sa_score` field added; integration in pipeline Phase 4.1.
+  Renamed to `rescore_mmff94_strain` in v5.4.0 to avoid the misleading "MM-GBSA" label.
 - **CYP3A4 off-target profiling.** PDB 1TQN config in
   `config/constants.py`; docking in `prepare_targets()` and
   `analyze_selectivity_and_resistance()`; `human_cyp3a4_energy` field added.
-- **New CSV columns:** `MMGBSA_Score` and `Human_CYP3A4_Energy` in
-  `output/top_candidates.csv` via `utils/reporting.py`.
-- **Verify criteria 11--13.** Library size $\ge$ 500, `MMGBSA_Score` column,
-  `Human_CYP3A4_Energy` column checks in `verify_success.py`.
+- **New CSV columns:** `MMFF94_Strain_Score` (then called `MMGBSA_Score`, renamed in v5.4.0)
+  and `Human_CYP3A4_Energy` in `output/top_candidates.csv` via `utils/reporting.py`.
+- **Verify criteria 11--13.** Library size $\ge$ 500, `MMFF94_Strain_Score` column
+  (then `MMGBSA_Score`), `Human_CYP3A4_Energy` column checks in `verify_success.py`.
 - **`verify_success.py`** — programmatic verification of all 13 success criteria.
   Run `python verify_success.py` to confirm: ≥20 CSV rows, ≥1 Strong hit, ≥3
   SI≥1.5, ≤2 CLASH, Validated protocol, AUC≥0.7 + EF₁%≥5, Ser403+Lys406 H-bonds,
@@ -123,7 +148,7 @@ All notable changes to the pipeline are documented here, newest first.
 - SI-passing compounds: 4 (ALL-QU05 Strong, 3 Promising)
 - Top candidate: ALL-QU05 (SI=2.06, Ser403+Lys406+Tyr446 H-bonds)
 - Protocol trust: Validated (core RMSD 1.251 Å)
-- MM-GBSA rescoring: 20/20 top candidates scored
+- MMFF94 strain-interaction rescoring (then called MM-GBSA): 20/20 top candidates scored
 - CYP3A4 profiling: top 10 candidates docked (all N/A before re-run)
 - All 13/13 success criteria pass
 
@@ -206,8 +231,8 @@ All notable changes to the pipeline are documented here, newest first.
 - **`utils/structure_prep.py`**. Removed the 120-line `write_receptor_pdbqt`
   fallback; OpenBabel is now a hard dependency.
 - **`utils/reporting.py`**. Removed `Warhead`, `SI_Covalent`,
-  `Selectivity_Index_PanPanel`, `Mutant_Energy_Delta`, `MMGBSA_Score` CSV
-  columns.
+  `Selectivity_Index_PanPanel`, `Mutant_Energy_Delta`, `MMFF94_Strain_Score`
+  (then called `MMGBSA_Score`) CSV columns.
 - **`discovery_pipeline.py`**. Removed `write_receptor_pdbqt` import and
   its fallback call in `clean_pdb_structure`.
 
@@ -229,9 +254,10 @@ All notable changes to the pipeline are documented here, newest first.
   Vina flags, and `utils.structure_prep.write_flex_pdbqt` /
   `validate_flex_pdbqt` were all deleted. Active-site ranking now uses the rigid
   consensus energy directly. `run_redocking_validation` is rigid-only.
-- **MM-GBSA-like rerank.** `rerank_mmff`, the `mmgbca_score` field, the
-  `_final_rank_key` MMFF sort in `main()`, and the `MMGBSA_Score` CSV column are
-  gone. Final ranking is by `pb2pa_active_energy` (allosteric fallback).
+- **MMFF94 strain-interaction rescoring (then called MM-GBSA).** `rerank_mmff`,
+  the `mmgbca_score` field, the `_final_rank_key` MMFF sort in `main()`, and the
+  `MMFF94_Strain_Score` (then `MMGBSA_Score`) CSV column are gone. Final ranking
+  is by `pb2pa_active_energy` (allosteric fallback).
 - **Mutation scan.** `_run_mutation_scan`, `_mutate_pdbqt_residue`,
   `_build_real_mutant_pdbqt`, `_generate_residue_pdb`, `_parse_pdb_heavy_atoms`,
   `_kabsch_align`, `_AA_RESIDUE_SMILES`, `MUTATION_SCAN`, `MUTATION_SCAN_MUTANTS`,
