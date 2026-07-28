@@ -44,3 +44,6 @@ library.csv
 *.swp
 *.swo
 *~
+
+# Log files (ephemeral, change every run)
+*.log
