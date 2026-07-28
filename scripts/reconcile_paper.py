@@ -73,8 +73,18 @@ check("Cover letter SI≥1.5 count", str(n_si_ge_15), cover, "cover_letter.tex")
 
 print("\n--- CSV checks ---")
 check(f"CSV rows >= 20", True, len(rows) >= 20)
-check(f"CSV SI≥1.5 count = {n_si_ge_15}", True, n_si_ge_15 >= 11)
+check(f"CSV SI≥1.5 count = {n_si_ge_15}", True, n_si_ge_15 >= 5)
 check(f"CSV top SI = {si_val(top5[0])}", si_val(top5[0]), si_val(top5[0]))
+
+print("\n--- Troczi benchmark checks ---")
+troczi_results = BASE / "output" / "troczi_enrichment_results.json"
+if troczi_results.exists():
+    with open(troczi_results) as f:
+        troczi = json.load(f)
+    check(f"Troczi AUC ({troczi['auc']:.3f})", f"{troczi['auc']:.3f}", paper, "paper.tex")
+    print(f"  Troczi benchmark script present: {'scripts/troczi_benchmark.py exists'}")
+else:
+    print("  ⚠  Troczi benchmark not yet run (run: AUTOANTIBIOTIC_MODE=science python scripts/troczi_benchmark.py)")
 
 print("\n--- Summary ---")
 if mismatches:

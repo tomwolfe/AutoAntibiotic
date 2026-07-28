@@ -1,0 +1,29 @@
+{
+  "n_compounds": 160,
+  "n_actives": 10,
+  "n_decoys": 150,
+  "auc": 0.2973,
+  "ef_1pct": 0.0,
+  "ef_5pct": 0.0,
+  "active_box": [
+    20.0,
+    20.0,
+    20.0
+  ],
+  "verdict": "FAIL",
+  "troczi_comparison": {
+    "this_work": {
+      "auc": 0.2973,
+      "ef_1pct": 0.0,
+      "ef_5pct": 0.0,
+      "n_actives": 10,
+      "n_decoys": 150
+    },
+    "troczi_2013_reported": {
+      "auc": 0.82,
+      "ef_1pct": 15.0,
+      "note": "Approximate values from Troczi et al. JCIM 2013, Figure 4 and Table 2 (oxadiazole series enrichment against PBP2a apo structure)."
+    }
+  },
+  "label_source": "troczi_2013_actives.csv / known_decoys.csv"
+}

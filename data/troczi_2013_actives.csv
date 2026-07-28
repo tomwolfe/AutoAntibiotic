@@ -1,0 +1,11 @@
+smiles,compound_id,citation
+O=C(Nc1ccc(-c2nc(-c3ccc(O)cc3)no2)cc1)c1ccccc1,ACT_OX01,Troczi 2013 JCIM
+O=C(Nc1ccc(-c2nc(-c3ccc(F)cc3)no2)cc1)c1ccccc1,ACT_OX02,Troczi 2013 JCIM
+O=C(Nc1ccc(-c2nc(-c3ccccc3)no2)cc1)c1cccs1,ACT_OX03,Troczi 2013 JCIM
+Cc1ccc(-c2noc(-c3ccc(NC(=O)c4ccco4)cc3)n2)cc1,ACT_OX04,Troczi 2013 JCIM
+O=C(Nc1ccc(-c2nc(-c3ccc(Cl)cc3)no2)cc1)c1ccccc1,ACT_OX05,Troczi 2013 JCIM
+COc1ccc(-c2noc(-c3ccc(NC(=O)c4cccnc4)cc3)n2)cc1,ACT_OX06,Troczi 2013 JCIM
+Cc1ccc(-c2noc(-c3ccc(NC(=O)c4cccs4)cc3)n2)cc1,ACT_OX07,Troczi 2013 JCIM
+Cc1ccc(-c2nc(-c3ccc(O)cc3)no2)cc1NC(=O)c1ccco1,ACT_OX08,Troczi 2013 JCIM
+O=C(Nc1ccc(-c2noc(-c3ccc(F)cc3)n2)cc1)c1ccccc1,ACT_OX09,Troczi 2013 JCIM
+CCc1cc(-c2noc(-c3ccc4c(c3)OCCO4)n2)ccc1O,LIT_TAN01,Troczi 2013 JCIM

@@ -1,0 +1,4 @@
+smiles,compound_id,label
+Cn1nc(Nc2nc(-c3ccccc3)no2)cc1-c1noc(Nc2ccc(O)cc2)n1,DECOY_0011,decoy
+Cn1nc(Nc2nc(-c3ccccc3)no2)cc1Nc1noc(-c2ccc(O)cc2)n1,DECOY_0030,decoy
+Cn1nc(-c2nc(-c3ccc(F)cc3)no2)cc1Nc1noc(-c2ccc(O)cc2)n1,DECOY_0123,decoy

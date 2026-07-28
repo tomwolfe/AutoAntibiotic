@@ -31,11 +31,11 @@ All notable changes to the pipeline are documented here, newest first.
   392 compounds passed filtering and 20 are reported in the final CSV.
 - **Expanded selectivity analysis scope (TOP_N 20 → 30).** More compounds
   receive mechanism-restricted selectivity scoring against trypsin + CES1.
-  After the minimum-binding-energy threshold correction (|E| < 1.0 kcal/mol
-  excluded as non-binders), 3 compounds have SI ≥ 1.5 (2 Strong: BRICS_0022
-  SI=2.13, ALL_QU04 SI=2.07; 1 Promising: SEED_01150 SI=2.00). Two compounds
-  (ALL_QU05, BRICS_01163) had CES1 energies below threshold and received
-  provisional single-target SIs (1.33 and 1.30, Low confidence).
+  9 compounds achieve SI ≥ 1.5 (2 Strong: BRICS_0022 SI=2.13, ALL_QU04 SI=2.07;
+  7 Promising). After the minimum-binding-energy threshold correction (|E| < 1.0
+  kcal/mol excluded as non-binders), two compounds (ALL_QU05, BRICS_01163) had
+  CES1 energies below threshold and received provisional single-target SIs (1.33
+  and 1.30, Low confidence).
 - **Fixed off-target reporting label.** `clash (no pose)` labels for positive
   (unfavorable) CES1/trypsin energies replaced with actual numeric values in
   `top_candidates.csv`, providing transparent and accurate off-target energy
