@@ -1,5 +1,6 @@
 paper.*
 !paper.tex
+!paper.pdf
 unsrtnat.bst
 *.egg-info/
 benchmarks/
