@@ -413,9 +413,12 @@ class _CentroidCheckDock:
     artefacts in trypsin / CES1.
     """
 
-    def __init__(self, target_center: np.ndarray, max_dist: float = 8.0):
+    def __init__(self, target_center: np.ndarray, max_dist: float = 8.0,
+                 exhaustiveness: int = 8, num_modes: int = 3):
         self._target_center = tuple(target_center)
         self._max_dist = max_dist
+        self._exhaustiveness = exhaustiveness
+        self._num_modes = num_modes
 
     def __call__(
         self,
@@ -424,7 +427,9 @@ class _CentroidCheckDock:
         timeout: Optional[int] = None,
     ) -> Optional[float]:
         energy = dock_compound(record, receptor_pdbqt, center, box_size,
-                               work_dir, tag, timeout=timeout)
+                               work_dir, tag, timeout=timeout,
+                               exhaustiveness=self._exhaustiveness,
+                               num_modes=self._num_modes)
         if energy is not None:
             safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
             out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
@@ -448,10 +453,14 @@ class _CentroidCheckDock:
 def _offtarget_dock_with_centroid_check(
     target_center: np.ndarray,
     max_dist: float = 8.0,
+    exhaustiveness: int = 8,
+    num_modes: int = 3,
 ) -> Callable:
     """Return a dock_compound wrapper that rejects poses too far from the
     catalytic-triad centroid. Used for trypsin and CES1 selectivity screening."""
-    return _CentroidCheckDock(target_center, max_dist=max_dist)
+    return _CentroidCheckDock(target_center, max_dist=max_dist,
+                              exhaustiveness=exhaustiveness,
+                              num_modes=num_modes)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1869,6 +1878,8 @@ def analyze_selectivity_and_resistance(
         rec.human_trypsin_energy = energy
 
     # ── Dock vs CES1 (using computed catalytic triad centre) ──
+    # Uses higher exhaustiveness (32) and more modes (9) to improve pose
+    # recovery in the narrow CES1 catalytic gorge.
     log.info("  Docking top 10 vs Human Carboxylesterase 1 (1YAH)…")
     ces1_box = _auto_box_size(
         targets["CES1"].get("cleaned_pdb"), targets["CES1"].get("active_center"),
@@ -1876,7 +1887,9 @@ def analyze_selectivity_and_resistance(
         site_residues=CES1_CATALYTIC_RESIDUES,
     ) if targets["CES1"].get("active_center") is not None else SELECTIVITY_BOX_SIZE
     ces1_center = targets["CES1"].get("active_center")
-    ces1_dock_func = _offtarget_dock_with_centroid_check(ces1_center, max_dist=11.0) if ces1_center is not None else None
+    ces1_dock_func = _offtarget_dock_with_centroid_check(
+        ces1_center, max_dist=11.0, exhaustiveness=32, num_modes=9
+    ) if ces1_center is not None else None
     ces1_results = _dock_compounds_parallel(
         top10, targets["CES1"]["pdbqt"],
         ces1_center, ces1_box,

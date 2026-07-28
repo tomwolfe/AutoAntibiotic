@@ -26,6 +26,9 @@ env/
 # macOS
 .DS_Store
 
+# Downloaded PDB structures
+pdb/
+
 # Run log
 run_log.txt
 

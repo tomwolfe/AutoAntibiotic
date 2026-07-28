@@ -37,10 +37,16 @@ def _run_vina_docking(
     center: np.ndarray,
     box_size: Tuple[float, float, float],
     timeout: Optional[int] = None,
+    exhaustiveness: int = 8,
+    num_modes: int = 3,
 ) -> Optional[float]:
     """
     Run a single Vina docking job. Returns best binding energy (kcal/mol)
     or None on failure.
+
+    Args:
+        exhaustiveness: Vina exhaustiveness (default 8, use 32 for CES1).
+        num_modes: Number of output modes (default 3, use 9 for CES1).
     """
     if timeout is None:
         timeout = VINA_TIMEOUT_S
@@ -56,8 +62,8 @@ def _run_vina_docking(
         "--size_x", f"{box_size[0]:.1f}",
         "--size_y", f"{box_size[1]:.1f}",
         "--size_z", f"{box_size[2]:.1f}",
-        "--exhaustiveness", "8",
-        "--num_modes", "3",
+        "--exhaustiveness", str(exhaustiveness),
+        "--num_modes", str(num_modes),
     ]
 
     try:
@@ -123,6 +129,8 @@ def dock_compound(
     work_dir: str,
     tag: str = "",
     timeout: Optional[int] = None,
+    exhaustiveness: int = 8,
+    num_modes: int = 3,
 ) -> Optional[float]:
     """
     Full docking pipeline for a single compound: PDBQT prep → Vina → parse.
@@ -135,6 +143,8 @@ def dock_compound(
         work_dir: Scratch directory.
         tag: Label for temp files (e.g. 'allosteric').
         timeout: Optional per-call Vina timeout override (seconds).
+        exhaustiveness: Vina exhaustiveness (default 8).
+        num_modes: Number of output modes (default 3).
 
     Returns:
         Best binding energy (Vina) or None on failure.
@@ -170,6 +180,8 @@ def dock_compound(
         receptor_pdbqt, lig_pdbqt, out_pdbqt,
         center, box_size,
         timeout=timeout,
+        exhaustiveness=exhaustiveness,
+        num_modes=num_modes,
     )
 
     is_active_pose = tag == "active" or tag.startswith("active_")
@@ -479,8 +491,8 @@ def rescore_mmffsa(
         if e_lig_bound is None:
             return None
         score = e_strain + e_receptor_interaction + e_np
-        # Sanity bound: discard any pathological score beyond ±1e6 a.u.
-        if abs(score) > 1e6:
+        # Sanity bound: discard any pathological score beyond ±700 a.u.
+        if abs(score) > 700:
             return None
         return float(score)
 
