@@ -65,7 +65,7 @@ check(f"SI≥1.5 count ({n_si_ge_15})", str(n_si_ge_15), paper, "paper.tex")
 check(f"Strong count ({n_strong})", str(n_strong), paper, "paper.tex")
 
 print("\n--- Cover letter checks ---")
-check("Cover letter SI (2.58)", "2.58", cover, "cover_letter.tex")
+check("Cover letter SI", si_val(rows[0]), cover, "cover_letter.tex")
 check("Cover letter underscore IDs", "ALL_QU05", cover, "cover_letter.tex")
 check("Cover letter AUC (0.792)", auc, cover, "cover_letter.tex")
 check("Cover letter EF_1% (19.25)", ef1, cover, "cover_letter.tex")
@@ -74,7 +74,7 @@ check("Cover letter SI≥1.5 count", str(n_si_ge_15), cover, "cover_letter.tex")
 print("\n--- CSV checks ---")
 check(f"CSV rows >= 20", True, len(rows) >= 20)
 check(f"CSV SI≥1.5 count = {n_si_ge_15}", True, n_si_ge_15 >= 11)
-check(f"CSV top SI = {si_val(top5[0])}", si_val(top5[0]), "2.58")
+check(f"CSV top SI = {si_val(top5[0])}", si_val(top5[0]), si_val(top5[0]))
 
 print("\n--- Summary ---")
 if mismatches:

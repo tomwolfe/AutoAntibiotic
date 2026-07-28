@@ -30,25 +30,29 @@ All notable changes to the pipeline are documented here, newest first.
   3 PBP2a conformers (1VQQ, 3ZG0, 4DKI) across active and allosteric sites.
   392 compounds passed filtering and 20 are reported in the final CSV.
 - **Expanded selectivity analysis scope (TOP_N 20 → 30).** More compounds
-  receive mechanism-restricted selectivity scoring against trypsin + CES1,
-  yielding 5 compounds with SI ≥ 1.5 (1 Strong, 4 Promising) including
-  ALL_QU05 (SI = 2.03, Strong tier).
+  receive mechanism-restricted selectivity scoring against trypsin + CES1.
+  After the minimum-binding-energy threshold correction (|E| < 1.0 kcal/mol
+  excluded as non-binders), 3 compounds have SI ≥ 1.5 (2 Strong: BRICS_0022
+  SI=2.13, ALL_QU04 SI=2.07; 1 Promising: SEED_01150 SI=2.00). Two compounds
+  (ALL_QU05, BRICS_01163) had CES1 energies below threshold and received
+  provisional single-target SIs (1.33 and 1.30, Low confidence).
 - **Fixed off-target reporting label.** `clash (no pose)` labels for positive
   (unfavorable) CES1/trypsin energies replaced with actual numeric values in
   `top_candidates.csv`, providing transparent and accurate off-target energy
   reporting. CLASH count reduced to 0.
 - **Paper reconciled with actual pipeline output.** All compound IDs (ALL_QU05,
-  BRICS-01163, etc.), SI values (2.03), PBP2a energies, and enrichment metrics
-  (AUC = 0.792, EF₁% = 19.25) now exactly match `output/top_candidates.csv`
-  and `output/enrichment_results.json`.
+  BRICS-01163, etc.), SI values (updated after CES1 threshold correction),
+  PBP2a energies, and enrichment metrics (AUC = 0.792, EF₁% = 19.25) now
+  exactly match `output/top_candidates.csv` and `output/enrichment_results.json`.
 - **Enrichment results preserved** (AUC = 0.792, EF₁% = 19.25) from cached
   validation.
 
 ### Changed
-- **paper.tex:** ALL-QU05 SI corrected from 2.06 → 2.03 to match actual output.
-  All compound IDs updated from hyphenated format (ALL-QU05) to underscore
-  format (ALL_QU05) matching CSV output.
-- **cover_letter.ts:** SI value corrected from 2.06 → 2.03.
+- **paper.tex:** ALL-QU05 SI corrected from 2.06 → provisional 1.33 (Low
+  confidence) after CES1 minimum-binding-energy threshold correction. All
+  compound IDs updated from hyphenated format (ALL-QU05) to underscore format
+  (ALL_QU05) matching CSV output.
+- **cover_letter.ts:** SI value corrected from 2.06 → 1.33 (provisional).
 - **config.yaml:** Confirmed `mode: science` and `native_ligand_resname: AI8`.
 - **constants.py:** TOP_N expanded from 20 → 30 to increase selectivity analysis coverage.
 
