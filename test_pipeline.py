@@ -49,6 +49,7 @@ from config.constants import (
     protocol_trust,
     SI_STRONG_THRESHOLD,
     SI_PROMISING_THRESHOLD,
+    MIN_BINDING_ENERGY,
 )
 from tests.helpers import create_minimal_pdb
 from rdkit import Chem
@@ -2392,6 +2393,79 @@ class TestEnrichmentValidationWritesResults:
         assert "ef_1pct" in data, "Missing 'ef_1pct' key"
         assert "verdict" in data, "Missing 'verdict' key"
         assert data["verdict"] in ("PASS", "FAIL"), f"Unexpected verdict: {data['verdict']}"
+
+
+# ── Test: Minimum Binding Energy Threshold (Task 1) ───────────────────────
+
+class TestMinBindingEnergyThreshold:
+    """Tests for the MIN_BINDING_ENERGY threshold that excludes near-zero
+    off-target energies from the SI denominator."""
+
+    @staticmethod
+    def _make_records(pb2pa_e, trypsin_e, ces1_e):
+        rec = CompoundRecord(compound_id="TEST", smiles="c1ccccc1",
+                             mol=Chem.MolFromSmiles("c1ccccc1"))
+        rec.pb2pa_active_energy = pb2pa_e
+        rec.human_trypsin_energy = trypsin_e
+        rec.human_ces1_energy = ces1_e
+        return [rec]
+
+    @staticmethod
+    def _run(records, tmp_path):
+        targets = {
+            "trypsin": {"pdbqt": "t.pdbqt", "active_center": np.zeros(3)},
+            "CES1": {"pdbqt": "c.pdbqt", "active_center": np.zeros(3)},
+        }
+
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
+                          dock_func=None):
+            return [(r, getattr(r, f"human_{tag}_energy")) for r in recs]
+
+        with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
+            return analyze_selectivity_and_resistance(
+                records, targets, str(tmp_path),
+                {"vina": True, "USE_VINA": True},
+            )
+
+    def test_si_excludes_subthreshold_offtarget(self, tmp_path):
+        """An off-target energy of -0.22 (below MIN_BINDING_ENERGY) is
+        excluded from the SI denominator."""
+        rec = self._make_records(pb2pa_e=-9.77, trypsin_e=-7.36, ces1_e=-0.22)
+        out = self._run(rec, tmp_path)
+        assert out[0].selectivity_index is None, (
+            "SI should be None when only one off-target survives threshold"
+        )
+        assert out[0].selectivity_confidence == "Low"
+        assert out[0].si_provisional is not None
+        # Provisional SI = |PBP2a| / |trypsin| = 9.77 / 7.36
+        assert out[0].si_provisional == pytest.approx(9.77 / 7.36, rel=1e-3)
+
+    def test_si_both_offtargets_rejected(self, tmp_path):
+        """SI is None when both off-targets are below MIN_BINDING_ENERGY."""
+        rec = self._make_records(pb2pa_e=-9.0, trypsin_e=-0.5, ces1_e=-0.3)
+        out = self._run(rec, tmp_path)
+        assert out[0].selectivity_index is None
+        assert out[0].selectivity_confidence == "None"
+        assert out[0].si_provisional is None
+
+    def test_si_one_offtarget_survives(self, tmp_path):
+        """Provisional SI with Low confidence when one off-target survives."""
+        rec = self._make_records(pb2pa_e=-10.0, trypsin_e=-0.8, ces1_e=-5.0)
+        out = self._run(rec, tmp_path)
+        assert out[0].selectivity_index is None
+        assert out[0].selectivity_confidence == "Low"
+        assert out[0].si_provisional is not None
+        # Provisional SI = |PBP2a| / |CES1| = 10.0 / 5.0
+        assert out[0].si_provisional == pytest.approx(10.0 / 5.0)
+
+    def test_si_both_above_threshold_normal(self, tmp_path):
+        """When both off-targets are above threshold, normal SI calculation."""
+        rec = self._make_records(pb2pa_e=-10.0, trypsin_e=-4.0, ces1_e=-3.0)
+        out = self._run(rec, tmp_path)
+        assert out[0].selectivity_index is not None
+        assert out[0].selectivity_confidence == "High"
+        # SI = |PBP2a| / mean(|trypsin|, |CES1|) = 10.0 / 3.5
+        assert out[0].selectivity_index == pytest.approx(10.0 / 3.5)
 
 
 if __name__ == "__main__":

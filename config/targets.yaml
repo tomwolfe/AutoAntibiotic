@@ -12,3 +12,4 @@ selectivity:
 thresholds:
   rmsd_validated_max: 1.5
   rmsd_marginal_max: 2.0
+  min_binding_energy: 1.0

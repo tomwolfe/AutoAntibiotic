@@ -131,6 +131,7 @@ CEFTAROLINE_CONTROL_E = _loaded_selectivity["CEFTAROLINE_CONTROL_E"]
 # overridden by the ``thresholds:`` block in ``config/targets.yaml`` when present.
 _RMSD_VALIDATED_MAX_DEFAULT = 1.5
 _RMSD_MARGINAL_MAX_DEFAULT = 2.0
+_MIN_BINDING_ENERGY_DEFAULT = 1.0
 
 
 def _load_thresholds() -> Dict[str, float]:
@@ -146,6 +147,7 @@ def _load_thresholds() -> Dict[str, float]:
     defaults = {
         "rmsd_validated_max": _RMSD_VALIDATED_MAX_DEFAULT,
         "rmsd_marginal_max": _RMSD_MARGINAL_MAX_DEFAULT,
+        "min_binding_energy": _MIN_BINDING_ENERGY_DEFAULT,
     }
     try:
         import yaml
@@ -154,7 +156,7 @@ def _load_thresholds() -> Dict[str, float]:
             with open(TARGETS_FILE) as fh:
                 data = yaml.safe_load(fh) or {}
             thr = data.get("thresholds", {}) if isinstance(data, dict) else {}
-            for key in ("rmsd_validated_max", "rmsd_marginal_max"):
+            for key in ("rmsd_validated_max", "rmsd_marginal_max", "min_binding_energy"):
                 val = thr.get(key)
                 if isinstance(val, (int, float)) and float(val) > 0:
                     defaults[key] = float(val)
@@ -166,6 +168,11 @@ def _load_thresholds() -> Dict[str, float]:
 _loaded_thresholds = _load_thresholds()
 RMSD_VALIDATED_MAX = _loaded_thresholds["rmsd_validated_max"]
 RMSD_MARGINAL_MAX = _loaded_thresholds["rmsd_marginal_max"]
+# Minimum |E| (kcal/mol) for an off-target docking result to be considered a
+# genuine binder. Results below this threshold are treated as docking failures /
+# non-binders and excluded from the Selectivity Index denominator.  Justification:
+# Vina scores near 0 indicate no meaningful protein-ligand interaction.
+MIN_BINDING_ENERGY = _loaded_thresholds["min_binding_energy"]
 
 
 def _load_target_residues() -> Dict[str, List[str]]:
@@ -229,6 +236,11 @@ DIVERSITY_MIN_COUNT = 100
 SELECTIVITY_INDEX_THRESHOLD = 1.5
 SI_STRONG_THRESHOLD = 2.0
 SI_PROMISING_THRESHOLD = 1.5
+
+# Suspect score threshold: Vina scores more negative than this may indicate
+# scoring artifacts (overly large ligands, metal chelation, or scoring function
+# breakdown).
+SUSPECT_SCORE_THRESHOLD = -11.0  # kcal/mol
 
 # Outputs
 OUTPUT_DIR = Path("output")

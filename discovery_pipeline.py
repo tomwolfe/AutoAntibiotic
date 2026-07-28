@@ -116,6 +116,8 @@ from config.constants import (
     SI_STRONG_THRESHOLD,
     SI_PROMISING_THRESHOLD,
     SELECTIVITY_PANEL_TARGETS,
+    MIN_BINDING_ENERGY,
+    SUSPECT_SCORE_THRESHOLD,
     CEFTAROLINE_CONTROL_E,
     RMSD_VALIDATED_MAX,
     RMSD_MARGINAL_MAX,
@@ -1408,9 +1410,9 @@ def screen_library(
         rec.pb2pa_active_energy = active_best.get(rec.compound_id)
         if rec.pb2pa_active_energy is not None:
             n_scored_active += 1
-            if rec.pb2pa_active_energy < -11.0:
+            if rec.pb2pa_active_energy < SUSPECT_SCORE_THRESHOLD:
                 rec.suspect_score = True
-                log.warning(f"  ⚠  {rec.compound_id}: Vina score {rec.pb2pa_active_energy:.2f} < -11 — flagged suspect")
+                log.warning(f"  ⚠  {rec.compound_id}: Vina score {rec.pb2pa_active_energy:.2f} < {SUSPECT_SCORE_THRESHOLD} — flagged suspect")
 
     log.info(f"  Active-site docking complete: {n_scored_active}/{len(records)} scored.")
 
@@ -1943,9 +1945,22 @@ def analyze_selectivity_and_resistance(
         ]
         n_human_targets = len(energies_human)
 
+        # ── Minimum binding energy threshold ──
+        # Before including an off-target energy in the SI denominator, reject
+        # any energy where |E| < MIN_BINDING_ENERGY as a non-binder (set to
+        # None). Vina scores near 0 indicate no meaningful protein-ligand
+        # interaction.
+        for target_name, energy in raw_human:
+            if energy is not None and abs(energy) < MIN_BINDING_ENERGY:
+                log.warning(
+                    f"  {rec.compound_id}: {target_name} energy ({energy:.2f} kcal/mol) "
+                    f"below minimum binding threshold ({MIN_BINDING_ENERGY} kcal/mol) "
+                    "\u2014 treated as non-binder, excluded from SI denominator."
+                )
+
         panel_valid = [
             e for label, e in raw_human
-            if label in sel_panel and e is not None and e <= -0.01
+            if label in sel_panel and e is not None and abs(e) >= MIN_BINDING_ENERGY and e <= -0.01
         ]
 
         pb2pa_best = rec.pb2pa_best_energy if rec.pb2pa_best_energy is not None else (rec.pb2pa_active_energy if rec.pb2pa_active_energy is not None else rec.pb2pa_allosteric_energy)
@@ -1961,11 +1976,18 @@ def analyze_selectivity_and_resistance(
             rec.selectivity_index = None
             rec.selectivity_confidence = CompoundRecord.CONF_NONE
             rec.report_tier = "Below gate"
-            rec.si_provisional = (
-                abs(pb2pa_best) / abs(panel_valid[0])
-                if pb2pa_best is not None and len(panel_valid) == 1
-                else None
-            )
+            if pb2pa_best is not None and len(panel_valid) == 1:
+                rec.selectivity_confidence = CompoundRecord.CONF_LOW
+                si_prov = abs(pb2pa_best) / abs(panel_valid[0])
+                rec.si_provisional = si_prov
+                log.warning(
+                    f"  {rec.compound_id}: only one valid off-target energy — "
+                    f"provisional SI = {si_prov:.2f} with Low confidence."
+                )
+            else:
+                rec.si_provisional = None
+                if len(panel_valid) == 0:
+                    rec.selectivity_confidence = CompoundRecord.CONF_NONE
             continue
 
         rec.selectivity_confidence = CompoundRecord.CONF_HIGH
@@ -2557,7 +2579,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     # ── Phase 3: Virtual screening ──
     top10 = screen_library(filtered, targets, work_dir, deps)
 
-    # Exclude suspect (E < -11) compounds from reported top-N
+    # Exclude suspect (E < SUSPECT_SCORE_THRESHOLD) compounds from reported top-N
     non_suspect = [r for r in top10 if not getattr(r, "suspect_score", False)]
     suspect_removed = [r for r in top10 if getattr(r, "suspect_score", False)]
     for r in suspect_removed:
