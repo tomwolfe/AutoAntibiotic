@@ -1948,7 +1948,11 @@ def analyze_selectivity_and_resistance(
             rec.selectivity_index = None
             rec.selectivity_confidence = CompoundRecord.CONF_NONE
             rec.report_tier = "Below gate"
-            rec.si_provisional = None
+            rec.si_provisional = (
+                abs(pb2pa_best) / abs(panel_valid[0])
+                if pb2pa_best is not None and len(panel_valid) == 1
+                else None
+            )
             continue
 
         rec.selectivity_confidence = CompoundRecord.CONF_HIGH
