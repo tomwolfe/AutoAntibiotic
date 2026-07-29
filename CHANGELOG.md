@@ -2,6 +2,23 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.5.0] — OpenMM minimisation; paper reframe; CHANGELOG/cover letter fixes
+
+### Added
+- **OpenMM Amber14 complex minimisation** (`scripts/openmm_minimize.py`). The
+  top-5 candidates are minimised with OpenMM 8.5.2 (Amber14 force field, 500-step
+  L-BFGS, 10 kcal/mol/Å² receptor restraints). All five converged: ΔE = −155k to
+  −177k kcal/mol, RMSD = 1.28–1.32 Å.
+- **`paper.tex` reframed.** Emphasis shifted from CES1 selectivity as primary
+  filter to PBP2a binding affinity + drug-like properties. OpenMM minimisation
+  results added as Methods subsection and Results table. SI profiling treated as
+  secondary prioritisation.
+
+### Fixed
+- **CHANGELOG v5.3.1 ALL_QU05 SI corrected.** v5.3.1 entry previously reported
+  SI=2.03; corrected to 1.33 (Low confidence, provisional single-target).
+  SI≥1.5 count corrected from 11→9 to match actual CSV output.
+
 ## [5.4.0] — Rename MM-GBSA to MMFF94 strain-interaction score; fix CES1 SI threshold
 
 ### Changed
