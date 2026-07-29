@@ -1,0 +1,85 @@
+================================================================================
+Binding Mode Analysis — AutoAntibiotic Top Candidates
+================================================================================
+
+  Compound         E(PBP2a)  SI       Tier         Contacts     SA  MD details
+  ----------------------------------------------------------------------------
+  ALL_QU05           -9.77  1.23     Below gate   S403+K406+Y446 2.13    MD RMSD: 6.64 A
+  BRICS_01163       -10.24  N/A (low-conf) N/A          S403+K406  2.23    MD RMSD: 5.22 A
+  BRICS_0022        -10.52  2.13     Strong       S403+K406+Y446 3.48    MD RMSD: 7.74 A
+  ALL_QU04          -10.07  2.07     Strong       S403+K406+Y446 1.78    MD RMSD: 5.85 A
+  SEED_01150         -9.52  2.00     Promising    S403+K406+Y446 1.79    MD RMSD: 6.95 A
+
+  Candidates engaging all three catalytic residues: 4/5
+
+--------------------------------------------------------------------------------
+Comparison with ceftaroline (PDB 3ZG0, ligand AI8)
+--------------------------------------------------------------------------------
+  Property                            ALL_QU05             Ceftaroline         
+  ---------------------------------------------------------------------------
+  MW (g/mol)                          351.1                746.2               
+  QED                                 0.52                 0.32                
+  SA score                            2.13                 4.53                
+  Binding mode                        Non-covalent H-bonds Covalent acylation  
+  Catalytic contacts                  S403 + K406 + Y446   S403 (covalent) + K406 + Y446
+  SI (trypsin + CES1)                 1.23                 0.81                
+  Beta-lactam                         No                   Yes                 
+
+--------------------------------------------------------------------------------
+Interaction fingerprint summary
+--------------------------------------------------------------------------------
+
+  ALL_QU05 (O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1...)
+    PBP2a energy: -9.77 kcal/mol
+    Catalytic H-bonds: S403 / K406 / Y446
+    SI: 1.23 (Below gate)
+    SA score: 2.13, QED: 0.517
+    MD ligand RMSD: 6.645 +/- ... A (max: 11.101 A)
+    MD H-bond S403_OG: (none)
+    MD H-bond K406_NZ: (none)
+    MD H-bond Y446_OH: (none)
+    MMFF94 strain: 472.5 a.u.
+
+  BRICS_01163 (O=c1[nH]c(=O)n(Cc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)c2ccccc12...)
+    PBP2a energy: -10.24 kcal/mol
+    Catalytic H-bonds: S403 / K406 / ---
+    SI: N/A (low-conf) (N/A)
+    SA score: 2.23, QED: 0.500
+    MD ligand RMSD: 5.217 +/- ... A (max: 7.460 A)
+    MD H-bond S403_OG: (none)
+    MD H-bond K406_NZ: (none)
+    MD H-bond Y446_OH: (none)
+    MMFF94 strain: 445.5 a.u.
+
+  BRICS_0022 (COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O...)
+    PBP2a energy: -10.52 kcal/mol
+    Catalytic H-bonds: S403 / K406 / Y446
+    SI: 2.13 (Strong)
+    SA score: 3.48, QED: 0.522
+    MD ligand RMSD: 7.739 +/- ... A (max: 13.698 A)
+    MD H-bond S403_OG: (none)
+    MD H-bond K406_NZ: (none)
+    MD H-bond Y446_OH: (none)
+    MMFF94 strain: 738.4 a.u.
+
+  ALL_QU04 (O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1...)
+    PBP2a energy: -10.07 kcal/mol
+    Catalytic H-bonds: S403 / K406 / Y446
+    SI: 2.07 (Strong)
+    SA score: 1.78, QED: 0.574
+    MD ligand RMSD: 5.846 +/- ... A (max: 9.187 A)
+    MD H-bond S403_OG: (none)
+    MD H-bond K406_NZ: (none)
+    MD H-bond Y446_OH: (none)
+    MMFF94 strain: 366.5 a.u.
+
+  SEED_01150 (O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12...)
+    PBP2a energy: -9.52 kcal/mol
+    Catalytic H-bonds: S403 / K406 / Y446
+    SI: 2.00 (Promising)
+    SA score: 1.79, QED: 0.626
+    MD ligand RMSD: 6.950 +/- ... A (max: 11.008 A)
+    MD H-bond S403_OG: (none)
+    MD H-bond K406_NZ: (none)
+    MD H-bond Y446_OH: (none)
+    MMFF94 strain: 440.1 a.u.

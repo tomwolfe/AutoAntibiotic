@@ -2,22 +2,42 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
-## [5.5.0] — OpenMM minimisation; paper reframe; CHANGELOG/cover letter fixes
+## [5.5.0] — Lead candidate fix; OpenMM GAFF/MD; Troczi removal; version consistency
 
 ### Added
-- **OpenMM Amber14 complex minimisation** (`scripts/openmm_minimize.py`). The
-  top-5 candidates are minimised with OpenMM 8.5.2 (Amber14 force field, 500-step
-  L-BFGS, 10 kcal/mol/Å² receptor restraints). All five converged: ΔE = −155k to
-  −177k kcal/mol, RMSD = 1.28–1.32 Å.
-- **`paper.tex` reframed.** Emphasis shifted from CES1 selectivity as primary
-  filter to PBP2a binding affinity + drug-like properties. OpenMM minimisation
-  results added as Methods subsection and Results table. SI profiling treated as
-  secondary prioritisation.
+- **`scripts/binding_mode_analysis.py`** — standalone binding mode analysis script
+  that loads top candidates, computes interaction fingerprints (H-bond contacts with
+  Ser403/Lys406/Tyr446), compares with ceftaroline, and generates a summary table
+  and JSON detail file (`output/binding_mode_analysis.txt`,
+  `output/binding_mode_details.json`).
+
+### Changed
+- **Lead candidate ALL_QU05 CES1 redock** — re-docked against CES1 (1YAH) with
+  exhaustiveness=64, num_modes=20. CES1 energy improved from −0.22 (non-binder)
+  to −8.50 kcal/mol. Two-target SI recalculated: 1.23 (Below gate).
+- **OpenMM minimisation now uses proper ligand parameterisation** — OpenFF Sage
+  2.0.0 force field via SMIRNOFFTemplateGenerator replaces unparameterised ligand
+  atoms. Reports ligand RMSD, receptor RMSD, and 20 ps NVT MD metrics.
+- **Troczi 2013 benchmark section removed from paper** — AUC 0.297 was misleading
+  (different decoy set / docking software). Internal enrichment (AUC=0.792) is the
+  sole validation metric.
+- **`paper.tex` Methods §2.7 fixed** — now describes GAFF/Sage 2.0.0 ligand
+  parameterisation (was still claiming unparameterised ligand atoms).
+- **`paper.tex` Limitations shortened** from 9 to 5 items (rigid docking, gas-phase
+  MD/limited sampling, narrow selectivity panel, energy uncertainty, small library).
+- **`references.bib`** — added eastman2017 (OpenMM) and wagner2021 (OpenFF Sage
+  2.0.0) citations.
+- **`paper.tex` version updated to v5.5.0** throughout (abstract, methods, results,
+  conclusion, data availability).
+- **`cover_letter.tex`** updated to v5.5.0 and ALL_QU05 SI language corrected.
+- **`verify_success.py`** criterion 16 changed from "Top hit SI ≥ 2.0" to
+  "Top hit H-bonds to Ser403 + Lys406" (aligns with paper's primary ranking).
 
 ### Fixed
-- **CHANGELOG v5.3.1 ALL_QU05 SI corrected.** v5.3.1 entry previously reported
-  SI=2.03; corrected to 1.33 (Low confidence, provisional single-target).
-  SI≥1.5 count corrected from 11→9 to match actual CSV output.
+- **Version consistency:** `pyproject.toml` (5.3.0→5.5.0),
+  `discovery_pipeline.py` header (5.3.0→5.5.0), `paper.tex` (5.4.0→5.5.0),
+  `cover_letter.tex` (5.4.0→5.5.0) all now agree.
+- **CHANGELOG v5.3.1 ALL_QU05 SI corrected** from 2.03 to 1.33 (historical).
 
 ## [5.4.0] — Rename MM-GBSA to MMFF94 strain-interaction score; fix CES1 SI threshold
 

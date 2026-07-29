@@ -2,50 +2,185 @@
   {
     "compound_id": "ALL_QU05",
     "smiles": "O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1",
-    "initial_energy": 141827.83,
-    "final_energy": -34952.32,
-    "delta_energy": -176780.15,
-    "rmsd": 1.32,
+    "minimization": {
+      "initial_energy_kcal": 60064.7,
+      "final_energy_kcal": -9603.5,
+      "delta_energy_kcal": -69668.2,
+      "receptor_rmsd_A": 0.217,
+      "ligand_rmsd_A": 0.058,
+      "success": true
+    },
+    "md": {
+      "nvt_duration_ps": 20.0,
+      "temperature_K": 300,
+      "final_energy_kcal": 5699.7,
+      "ligand_rmsd_mean_A": 6.645,
+      "ligand_rmsd_std_A": 3.284,
+      "ligand_rmsd_max_A": 11.101,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "LYS406_NZ": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "TYR446_OH": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        }
+      },
+      "success": true
+    },
     "success": true,
     "error": null
   },
   {
     "compound_id": "BRICS_01163",
     "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)c2ccccc12",
-    "initial_energy": 120542.02,
-    "final_energy": -34824.71,
-    "delta_energy": -155366.72,
-    "rmsd": 1.31,
+    "minimization": {
+      "initial_energy_kcal": 58933.8,
+      "final_energy_kcal": -9731.1,
+      "delta_energy_kcal": -68664.9,
+      "receptor_rmsd_A": 0.216,
+      "ligand_rmsd_A": 0.053,
+      "success": true
+    },
+    "md": {
+      "nvt_duration_ps": 20.0,
+      "temperature_K": 300,
+      "final_energy_kcal": 5554.1,
+      "ligand_rmsd_mean_A": 5.217,
+      "ligand_rmsd_std_A": 1.859,
+      "ligand_rmsd_max_A": 7.46,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "LYS406_NZ": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "TYR446_OH": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        }
+      },
+      "success": true
+    },
     "success": true,
     "error": null
   },
   {
     "compound_id": "BRICS_0022",
     "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-    "initial_energy": 136572.89,
-    "final_energy": -34775.64,
-    "delta_energy": -171348.54,
-    "rmsd": 1.282,
+    "minimization": {
+      "initial_energy_kcal": 73161.6,
+      "final_energy_kcal": -7976.0,
+      "delta_energy_kcal": -81137.5,
+      "receptor_rmsd_A": 0.233,
+      "ligand_rmsd_A": 0.093,
+      "success": true
+    },
+    "md": {
+      "nvt_duration_ps": 20.0,
+      "temperature_K": 300,
+      "final_energy_kcal": 7152.1,
+      "ligand_rmsd_mean_A": 7.739,
+      "ligand_rmsd_std_A": 4.547,
+      "ligand_rmsd_max_A": 13.698,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "LYS406_NZ": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "TYR446_OH": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        }
+      },
+      "success": true
+    },
     "success": true,
     "error": null
   },
   {
     "compound_id": "ALL_QU04",
     "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
-    "initial_energy": 131338.94,
-    "final_energy": -34826.8,
-    "delta_energy": -166165.74,
-    "rmsd": 1.301,
+    "minimization": {
+      "initial_energy_kcal": 65450.9,
+      "final_energy_kcal": -9153.9,
+      "delta_energy_kcal": -74604.8,
+      "receptor_rmsd_A": 0.223,
+      "ligand_rmsd_A": 0.078,
+      "success": true
+    },
+    "md": {
+      "nvt_duration_ps": 20.0,
+      "temperature_K": 300,
+      "final_energy_kcal": 6155.0,
+      "ligand_rmsd_mean_A": 5.846,
+      "ligand_rmsd_std_A": 2.562,
+      "ligand_rmsd_max_A": 9.187,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "LYS406_NZ": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "TYR446_OH": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        }
+      },
+      "success": true
+    },
     "success": true,
     "error": null
   },
   {
     "compound_id": "SEED_01150",
     "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
-    "initial_energy": 127838.1,
-    "final_energy": -34923.34,
-    "delta_energy": -162761.44,
-    "rmsd": 1.321,
+    "minimization": {
+      "initial_energy_kcal": 70877.8,
+      "final_energy_kcal": -8314.5,
+      "delta_energy_kcal": -79192.3,
+      "receptor_rmsd_A": 0.229,
+      "ligand_rmsd_A": 0.046,
+      "success": true
+    },
+    "md": {
+      "nvt_duration_ps": 20.0,
+      "temperature_K": 300,
+      "final_energy_kcal": 7127.9,
+      "ligand_rmsd_mean_A": 6.95,
+      "ligand_rmsd_std_A": 2.568,
+      "ligand_rmsd_max_A": 11.008,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "LYS406_NZ": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "TYR446_OH": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        }
+      },
+      "success": true
+    },
     "success": true,
     "error": null
   }

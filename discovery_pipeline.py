@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AutoAntibiotic Discovery Pipeline v5.3.0
+AutoAntibiotic Discovery Pipeline v5.5.0
 ========================================
 Principal Computational Chemist & AI Pipeline Architect
 Project: AutoAntibiotic Discovery — MRSA PBP2a Inhibitor Screening

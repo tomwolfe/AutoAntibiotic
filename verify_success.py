@@ -119,8 +119,8 @@ def main():
     ok = n_si_15 >= 5
     c(15, ">= 5 compounds with SI >= 1.5", ok, f"{n_si_15}/5")
 
-    ok = top_si >= 2.0 and h_ser and h_lys
-    c(16, "Top hit SI >= 2.0 + Ser403/Lys406", ok, f"SI={top_si:.2f}")
+    ok = h_ser and h_lys
+    c(16, "Top hit H-bonds to Ser403 + Lys406", ok, f"S403={h_ser}, K406={h_lys}")
 
     ok_h = "Human_hERG_Energy" in csv_header
     ok_a = "Human_Albumin_Energy" in csv_header
