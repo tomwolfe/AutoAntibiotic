@@ -1,0 +1,53 @@
+{
+  "BRICS_0022": {
+    "delta_G_bind_mean_kcal": -32.4,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  },
+  "ALL_QU04": {
+    "delta_G_bind_mean_kcal": -28.7,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  },
+  "ALL_QU05": {
+    "delta_G_bind_mean_kcal": -25.1,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  }
+}

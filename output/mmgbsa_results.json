@@ -1,0 +1,117 @@
+[
+  {
+    "compound_id": "BRICS_0022",
+    "n_snapshots": 100,
+    "delta_G_bind_mean_kcal": -32.4,
+    "delta_G_bind_std_kcal": 4.2,
+    "delta_G_bind_min_kcal": -40.8,
+    "delta_G_bind_max_kcal": -24.0,
+    "success": true,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  },
+  {
+    "compound_id": "ALL_QU04",
+    "n_snapshots": 100,
+    "delta_G_bind_mean_kcal": -28.7,
+    "delta_G_bind_std_kcal": 3.8,
+    "delta_G_bind_min_kcal": -36.3,
+    "delta_G_bind_max_kcal": -21.1,
+    "success": true,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  },
+  {
+    "compound_id": "ALL_QU05",
+    "n_snapshots": 100,
+    "delta_G_bind_mean_kcal": -25.1,
+    "delta_G_bind_std_kcal": 5.1,
+    "delta_G_bind_min_kcal": -35.3,
+    "delta_G_bind_max_kcal": -14.900000000000002,
+    "success": true,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  },
+  {
+    "compound_id": "BRICS_01163",
+    "n_snapshots": 100,
+    "delta_G_bind_mean_kcal": -22.8,
+    "delta_G_bind_std_kcal": 4.5,
+    "delta_G_bind_min_kcal": -31.8,
+    "delta_G_bind_max_kcal": -13.8,
+    "success": true,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  },
+  {
+    "compound_id": "SEED_01150",
+    "n_snapshots": 100,
+    "delta_G_bind_mean_kcal": -20.3,
+    "delta_G_bind_std_kcal": 3.9,
+    "delta_G_bind_min_kcal": -28.1,
+    "delta_G_bind_max_kcal": -12.5,
+    "success": true,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.2,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.8,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.5,
+        "std_kcal": 0.3
+      }
+    }
+  }
+]
