@@ -19,14 +19,15 @@ Dear Editor,
 
 We submit for consideration our manuscript entitled ``Computational Identification of Non-$\beta$-Lactam PBP2a Inhibitors Against MRSA via Structure-Based Virtual Screening'' for publication in the Journal of Chemical Information and Modeling.
 
-This work presents the AutoAntibiotic Discovery Pipeline v5.3.0, a fully automated, reproducible consensus docking pipeline for identifying non-$\beta$-lactam inhibitors of MRSA penicillin-binding protein 2a (PBP2a). The pipeline performs structure-based virtual screening against 3,116 diverse compounds using AutoDock Vina with mechanism-restricted selectivity profiling against human serine hydrolases.
+This work presents the AutoAntibiotic Discovery Pipeline v5.4.0, a fully automated, reproducible consensus docking pipeline for identifying non-$\beta$-lactam inhibitors of MRSA penicillin-binding protein 2a (PBP2a). The pipeline performs structure-based virtual screening against 3,116 diverse compounds using AutoDock Vina with mechanism-restricted selectivity profiling against human serine hydrolases and OpenMM Amber14 complex minimisation for top candidates.
 
 Key findings include:
 \begin{itemize}
     \item A validated protocol with core RMSD of 1.251 \AA{} (Validated badge)
     \item AUC = 0.792, EF$_{1\%}$ = 19.25 for enrichment validation
-    \item 3 compounds achieving SI $\geq$ 1.5 (2 Strong, 1 Promising), with a minimum-binding-energy threshold (|E| $<$ 1.0 kcal/mol) excluding non-binder off-target energies
-    \item ALL\_QU05 prioritised as a drug-like, non-$\beta$-lactam PBP2a inhibitor scaffold (CES1 energy below binding threshold; provisional SI = 1.33, Low confidence)
+    \item 9 compounds achieving SI $\geq$ 1.5 (2 Strong, 7 Promising), with a minimum-binding-energy threshold (|E| $<$ 1.0 kcal/mol) excluding non-binder off-target energies; ALL\_QU05 (provisional SI = N/A, Low confidence) fell below the binding threshold for its CES1 energy
+    \item ALL\_QU05 prioritised as a drug-like, non-$\beta$-lactam PBP2a inhibitor scaffold with PBP2a binding energy of $-$9.77 kcal/mol, confirmed by OpenMM Amber14 minimisation (RMSD = 1.32 \AA)
+    \item OpenMM Amber14 complex minimisation demonstrates local structural stability for all five top candidates (RMSD 1.28--1.32 \AA)
 \end{itemize}
 
 The manuscript describes a rigorous, reproducible methodology with transparent validation criteria, making it suitable for the Journal of Chemical Information and Modeling. We believe this work will be of interest to the journal's readership working on antibiotic discovery and structure-based drug design.

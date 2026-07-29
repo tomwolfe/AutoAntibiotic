@@ -65,8 +65,9 @@ check(f"SI≥1.5 count ({n_si_ge_15})", str(n_si_ge_15), paper, "paper.tex")
 check(f"Strong count ({n_strong})", str(n_strong), paper, "paper.tex")
 
 print("\n--- Cover letter checks ---")
-check("Cover letter SI", si_val(rows[0]), cover, "cover_letter.tex")
-check("Cover letter underscore IDs", "ALL_QU05", cover, "cover_letter.tex")
+check("Cover letter SI", si_val(rows[0]), cover.replace("\\_", "_"), "cover_letter.tex")
+# LaTeX escapes underscores, so check both escaped and unescaped forms
+check("Cover letter underscore IDs", "ALL_QU05", cover.replace("\\_", "_"), "cover_letter.tex")
 check("Cover letter AUC (0.792)", auc, cover, "cover_letter.tex")
 check("Cover letter EF_1% (19.25)", ef1, cover, "cover_letter.tex")
 check("Cover letter SI≥1.5 count", str(n_si_ge_15), cover, "cover_letter.tex")
