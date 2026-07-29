@@ -1,0 +1,12 @@
+Figure 5: 3D binding mode analysis.
+Left panel: BRICS_0022 bound in PBP2a active site.
+Right panel: ALL_QU04 bound in PBP2a active site.
+
+Key interactions:
+- Red sticks: Catalytic triad (Ser403, Lys406, Tyr446)
+- Marine sticks: Lead compound
+- Yellow dashes: Hydrogen bonds (< 3.5 Å)
+- Grey surface: PBP2a active site pocket
+
+Rendered with PyMOL (ray-traced, 2400×2400, antialias=2).
+See figure5_pymol.pml for the full rendering script.

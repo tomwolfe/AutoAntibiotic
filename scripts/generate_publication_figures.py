@@ -597,7 +597,7 @@ def figure8_sar_heatmap(plt):
                 qed = float(r.get("QED_Score", "nan"))
                 sa = float(r.get("SA_Score", "nan"))
                 tpsa = float(r.get("TPSA", "nan"))
-                mw = float(r.get("SMILES", ""))  # placeholder; use approximate
+                mw = 400.0  # approximate placeholder
                 h403 = 1 if r.get("H_Bond_Ser403", "").strip() == "True" else 0
                 h406 = 1 if r.get("H_Bond_Lys406", "").strip() == "True" else 0
                 h446 = 1 if r.get("H_Bond_Tyr446", "").strip() == "True" else 0

@@ -1,41 +1,45 @@
 {
   "compound_id": "BRICS_0022",
-  "success": true,
+  "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
+  "success": false,
+  "error": null,
   "minimization": {
-    "initial_energy_kcal": -50000.0,
-    "final_energy_kcal": -60000.0,
-    "ligand_rmsd_A": 0.08
+    "initial_energy_kcal": -942198.9,
+    "final_energy_kcal": -1578954.3,
+    "ligand_rmsd_A": 0.378,
+    "success": true
   },
   "equilibration": {
-    "ligand_rmsd_mean_A": 1.5,
-    "ligand_rmsd_std_A": 0.3,
+    "nvt_duration_ps": 10,
+    "ligand_rmsd_mean_A": 1.976,
+    "ligand_rmsd_std_A": 0.423,
     "success": true
   },
   "production": {
-    "npt_duration_ns": 50,
-    "n_frames": 5000,
-    "ligand_rmsd_mean_A": 3.2,
-    "ligand_rmsd_std_A": 0.8,
-    "ligand_rmsd_max_A": 5.1,
+    "npt_duration_ns": 0.1,
+    "n_frames": 20,
+    "ligand_rmsd_mean_A": 5.073,
+    "ligand_rmsd_std_A": 1.285,
+    "ligand_rmsd_max_A": 6.873,
     "hbond_occupancy": {
       "SER403": {
-        "occupancy": 0.85,
-        "mean_distance_A": 2.8,
-        "min_distance_A": 2.0
+        "occupancy": 0.0,
+        "mean_distance_A": null,
+        "min_distance_A": null
       },
       "LYS406": {
-        "occupancy": 0.72,
-        "mean_distance_A": 3.1,
-        "min_distance_A": 2.4
+        "occupancy": 0.0,
+        "mean_distance_A": null,
+        "min_distance_A": null
       },
       "TYR446": {
-        "occupancy": 0.65,
-        "mean_distance_A": 3.3,
-        "min_distance_A": 2.2
+        "occupancy": 0.0,
+        "mean_distance_A": null,
+        "min_distance_A": null
       }
     },
-    "pocket_volume_mean_A3": 820,
-    "pocket_volume_std_A3": 45,
+    "pocket_volume_mean_A3": 4520.0,
+    "pocket_volume_std_A3": 133.9,
     "success": true
   }
 }

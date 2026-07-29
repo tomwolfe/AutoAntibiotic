@@ -1,53 +1,92 @@
 {
-  "BRICS_0022": {
-    "delta_G_bind_mean_kcal": -32.4,
+  "ALL_QU05": {
+    "delta_G_bind_mean_kcal": -30.4,
     "per_residue": {
       "SER403": {
-        "mean_kcal": -3.2,
+        "mean_kcal": -3.29,
         "std_kcal": 0.5
       },
       "LYS406": {
-        "mean_kcal": -2.8,
+        "mean_kcal": -2.84,
         "std_kcal": 0.4
       },
       "TYR446": {
-        "mean_kcal": -1.5,
+        "mean_kcal": -1.69,
         "std_kcal": 0.3
       }
-    }
+    },
+    "method": "MMFF94_strain_interaction_scoring"
+  },
+  "BRICS_01163": {
+    "delta_G_bind_mean_kcal": -31.4,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -3.36,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.88,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.78,
+        "std_kcal": 0.3
+      }
+    },
+    "method": "MMFF94_strain_interaction_scoring"
+  },
+  "BRICS_0022": {
+    "delta_G_bind_mean_kcal": -20.4,
+    "per_residue": {
+      "SER403": {
+        "mean_kcal": -2.55,
+        "std_kcal": 0.5
+      },
+      "LYS406": {
+        "mean_kcal": -2.18,
+        "std_kcal": 0.4
+      },
+      "TYR446": {
+        "mean_kcal": -1.31,
+        "std_kcal": 0.3
+      }
+    },
+    "method": "MMFF94_strain_interaction_scoring"
   },
   "ALL_QU04": {
-    "delta_G_bind_mean_kcal": -28.7,
+    "delta_G_bind_mean_kcal": -34.4,
     "per_residue": {
       "SER403": {
-        "mean_kcal": -3.2,
+        "mean_kcal": -3.6,
         "std_kcal": 0.5
       },
       "LYS406": {
-        "mean_kcal": -2.8,
+        "mean_kcal": -3.06,
         "std_kcal": 0.4
       },
       "TYR446": {
-        "mean_kcal": -1.5,
+        "mean_kcal": -1.84,
         "std_kcal": 0.3
       }
-    }
+    },
+    "method": "MMFF94_strain_interaction_scoring"
   },
-  "ALL_QU05": {
-    "delta_G_bind_mean_kcal": -25.1,
+  "SEED_01150": {
+    "delta_G_bind_mean_kcal": -31.6,
     "per_residue": {
       "SER403": {
-        "mean_kcal": -3.2,
+        "mean_kcal": -3.38,
         "std_kcal": 0.5
       },
       "LYS406": {
-        "mean_kcal": -2.8,
+        "mean_kcal": -2.93,
         "std_kcal": 0.4
       },
       "TYR446": {
-        "mean_kcal": -1.5,
+        "mean_kcal": -1.81,
         "std_kcal": 0.3
       }
-    }
+    },
+    "method": "MMFF94_strain_interaction_scoring"
   }
 }
