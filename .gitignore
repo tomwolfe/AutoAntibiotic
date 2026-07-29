@@ -6,6 +6,7 @@ unsrtnat.bst
 benchmarks/
 output/*/
 !output/figures/
+!output/md_explicit/
 
 # Generated release status badge (written by main() after redocking validation)
 status.json
