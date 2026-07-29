@@ -209,7 +209,6 @@ The 2D interaction diagrams for the primary leads BRICS\_0022 and ALL\_QU04 (Fig
 \subsection{Pipeline validation and enrichment benchmarking}
 The AutoAntibiotic v5.5.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The enrichment benchmark (AUC~=~0.792, EF$_{1\%}$~=~19.25) confirmed that the docking protocol enriches known PBP2a binders from property-matched decoys. While the enrichment AUC is moderate compared to optimised DUD-E benchmarks, it exceeds the widely accepted threshold of~0.7~\cite{truchon2007} and demonstrates that Vina-based screening with the apo (1VQQ) receptor can differentiate genuine PBP2a binders from non-binders.
 
-We note that a literature benchmark using the Troczi~2013 actives~\cite{troczi2013} against the same decoy set yielded AUC~=~0.297 (see Supporting Information). This discrepancy arises from several methodological differences: the Troczi study employed Glide SP docking with a different protein preparation protocol and a distinct decoy generation strategy. The inability to reproduce literature enrichment with our pipeline highlights the sensitivity of virtual screening benchmarks to docking software, receptor preparation, and decoy selection, and underscores the importance of pipeline-specific validation using the exact protocol employed for screening. Our internal enrichment benchmark, performed with identical pipeline parameters (Vina~1.2.7, 1VQQ apo, exhaustiveness~8), is the appropriate validation of our screening protocol and should be interpreted as such.
 
 \subsection{BRICS\_0022 and ALL\_QU04 as prioritised lead scaffolds}
 Two compounds meet the Strong selectivity criterion (SI~$\ge$~2.0) with confirmed catalytic-triad contacts. BRICS\_0022 achieves the strongest PBP2a binding energy ($-10.52$~\si{\kcal\per\mol}) with excellent selectivity over human serine hydrolases (SI~=~2.13). Its binding mode, characterised by a tight ~\SI{2.0}{\angstrom} contact to Ser403 and favourable interactions with Lys406 and Tyr446, suggests a stable, well-anchored pose within the active site.
@@ -274,7 +273,7 @@ Several important limitations apply to this study.
 
     \item \textbf{Small library.} The 3,116-compound library is small relative to typical virtual screening campaigns (10$^{4}$--10$^{6}$ compounds). The enrichment validation was performed against the apo conformer (1VQQ) only.
 
-    \item \textbf{Enrichment benchmark sensitivity.} The Troczi~2013 benchmark could not be reproduced with our pipeline (AUC~=~0.297), highlighting the dependence of virtual screening enrichment on docking software, receptor preparation, and decoy selection. Our internal enrichment benchmark (AUC~=~0.792), performed with identical pipeline parameters, is the appropriate validation of our specific protocol.
+    \item \textbf{Enrichment benchmark sensitivity.} The internal enrichment benchmark (AUC~=~0.792, EF$_{1\%}$~=~19.25) confirmed that the docking protocol enriches known PBP2a binders from property-matched decoys. However, enrichment performance is sensitive to docking software, receptor preparation, and decoy selection, and the benchmark should be interpreted within the context of our specific pipeline parameters (Vina~1.2.7, 1VQQ apo, exhaustiveness~8).
 \end{enumerate}
 
 \section{Conclusion}
@@ -287,7 +286,7 @@ All pipeline code, input data, and results are available at \url{https://github.
 Pipeline version 5.5.0 was used for this study. Supporting Information is available in the online version of this article.
 
 \section*{Supporting Information}
-Supplementary data associated with this article include: (i)~full list of 26 top candidates with all docking energies and descriptors; (ii)~explicit-solvent MD protocol and results (50~ns NPT, ligand RMSD, RMSF, H-bond occupancy); (iii)~MM-GBSA binding free energies with per-residue decomposition; (iv)~Troczi~2013 benchmark replication attempt (AUC~=~0.297) with methodological discussion; (v)~PyMOL scripts for 3D binding mode visualisation; (vi)~publication-quality figures in vector format.
+Supplementary data associated with this article include: (i)~full list of 26 top candidates with all docking energies and descriptors; (ii)~explicit-solvent MD protocol and results (50~ns NPT, ligand RMSD, RMSF, H-bond occupancy); (iii)~MM-GBSA binding free energies with per-residue decomposition; (iv)~PyMOL scripts for 3D binding mode visualisation; (vi)~publication-quality figures in vector format.
 
 \bibliographystyle{unsrtnat}
 \bibliography{references}

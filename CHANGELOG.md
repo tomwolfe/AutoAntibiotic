@@ -2,6 +2,43 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [5.6.0] — MMFF94 rescoring fix; CSV ranking; ADMET filters; flexible docking; MD stability gate
+
+### Added
+- **ADMET liability filters (`utils/filtering.py`)** — `predict_herg_risk()` and
+  `predict_cyp_inhibition()` functions that use structural SMARTS alerts and
+  physicochemical rules to flag hERG blockade and CYP450 inhibition risk.
+  Integrated into CSV report as `hERG_Risk` and `CYP_Inhibition_Risk` columns.
+- **MD stability filter (`utils/filtering.py:filter_by_md_stability`)** — post-MD
+  gate that flags candidates with mean ligand RMSD > 3.0 Å or zero H-bond contacts
+  to catalytic residues during explicit-solvent MD.
+- **Flexible side-chain docking (`utils/docking.py`)** — `dock_compound_flexible()`
+  and `_prepare_flexible_pdbqt()` enable Vina `--flex` docking for specified
+  receptor residues (e.g., Tyr446, Ser403). Configurable per-residue flexibility
+  via residue name/number pairs.
+
+### Changed
+- **CSV report sorting (`utils/reporting.py`)** — `generate_csv_report()` now
+  explicitly sorts passing (SI ≥ 1.5) compounds first by SI descending, then
+  below-gate compounds by PBP2a energy. This ensures Strong/Promising candidates
+  always appear before Below-gate entries regardless of pipeline ordering.
+- **Phase 4.6 tiered SI selection (`discovery_pipeline.py`)** — `report_tier` is
+  explicitly cleared (`None`) for passing compounds to prevent stale labels from
+  earlier selectivity-analysis steps.
+
+### Fixed
+- **`rescore_mmff94_strain` dead-code bug (`utils/docking.py`)** — The function
+  body was empty (only a docstring), returning `None`. The deprecated alias
+  `rescore_mmffsa()` had the actual 140-line implementation sitting below its
+  `return` statement as unreachable dead code. Implementation moved into
+  `rescore_mmff94_strain`; `rescore_mmffsa` now correctly delegates to it.
+- **`paper.tex` Troczi benchmark sections removed** — Per the v5.5.0 CHANGELOG
+  claim that the "Troczi 2013 benchmark section" was removed, three remaining
+  passages discussing the unreproducible Troczi AUC (Discussion paragraph,
+  Limitations item, Supporting Information summary) have now been deleted.
+  Background citations (lines 37, 63) are retained as standard literature
+  references.
+
 ## [5.5.0] — Lead candidate fix; OpenMM GAFF/MD; Troczi removal; version consistency
 
 ### Added

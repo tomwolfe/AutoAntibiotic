@@ -34,6 +34,8 @@ from config.constants import (
     SI_PROMISING_THRESHOLD,
 )
 
+from utils.filtering import predict_herg_risk, predict_cyp_inhibition
+
 # A module-level logger sharing the pipeline's "AutoAntibiotic" logger name so
 # that handlers configured in discovery_pipeline capture these messages too.
 log = logging.getLogger("AutoAntibiotic")
@@ -199,6 +201,15 @@ def generate_csv_report(
             seen_recs[cid] = rec
     top10 = list(seen_recs.values())
 
+    # Sort: passing (SI >= 1.5) compounds first by SI descending,
+    # then below-gate compounds by PBP2a best energy (most negative first).
+    passing = [r for r in top10 if r.selectivity_index is not None
+               and r.selectivity_index >= SI_PROMISING_THRESHOLD]
+    passing.sort(key=lambda r: r.selectivity_index or float("inf"), reverse=True)
+    below = [r for r in top10 if r not in passing]
+    below.sort(key=lambda r: r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf"))
+    top10 = list(passing) + below
+
     for rec in top10:
         # Per-residue H-bond flags derived from the interaction fingerprint
         # captured during Phase 4 (min distance to the conserved residue; a
@@ -289,6 +300,17 @@ def generate_csv_report(
             "Max_Similarity": f"{rec.max_similarity:.3f}",
             "Passes_Lipinski": str(rec.passes_lipinski),
             "QED_Score": f"{rec.qed_score:.3f}",
+            # ADMET risk flags (hERG, CYP450)
+            "hERG_Risk": (
+                predict_herg_risk(rec.mol if rec.mol is not None else Chem.MolFromSmiles(rec.smiles)).get("risk", "Unknown")
+                if rec.mol is not None or Chem.MolFromSmiles(rec.smiles) is not None
+                else "Unknown"
+            ),
+            "CYP_Inhibition_Risk": (
+                predict_cyp_inhibition(rec.mol if rec.mol is not None else Chem.MolFromSmiles(rec.smiles)).get("risk", "Unknown")
+                if rec.mol is not None or Chem.MolFromSmiles(rec.smiles) is not None
+                else "Unknown"
+            ),
             # Phase C — synthetic accessibility & physicochemical descriptors
             # computed during library generation (paper §2.6, §3). These columns
             # let the reader judge drug-likeness of each reported candidate.

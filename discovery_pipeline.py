@@ -2729,6 +2729,8 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     passing = [r for r in top10 if r.selectivity_index is not None
                and r.selectivity_index >= SI_PROMISING_THRESHOLD]
     passing.sort(key=lambda r: r.selectivity_index or float("inf"), reverse=True)
+    for rec in passing:
+        rec.report_tier = None
     below = [r for r in top10 if r not in passing]
     below.sort(key=lambda r: r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf"))
     report_list = list(passing)

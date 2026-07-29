@@ -34,6 +34,138 @@ from config.constants import (
 log = logging.getLogger("AutoAntibiotic")
 
 
+# ── hERG / CYP450 ADMET Filters ──────────────────────────────────────────────
+# Simple rule-based filters to flag pharmacological off-target liabilities.
+# These are NOT predictive models — they flag structural features associated
+# with hERG blockade and CYP450 inhibition using published rules-of-thumb.
+
+HERG_RISK_SMARTS = [
+    "[N;H0;$(N(-[C])-[C])]",        # tertiary amine (common hERG motif)
+    "[nH]1ccc2ccccc12",             # indole
+    "[#7]1([#6])[#6][#6][#6][#6]1",  # N-alkyl piperidine
+    "[#7]1[#6][#6][#6][#6][#6]1",    # piperidine
+    "c1ccc2[nH]c3ccccc3c2c1",        # carbazole-like
+]
+
+CYP450_INHIBITOR_SMARTS = [
+    "[NX3;H2;$(N~C(~O))]",          # aniline / aromatic amine (CYP2E1)
+    "[NX2]=[CX3]([NX3])[NX3]",      # guanidine / amidine (CYP2D6)
+    "c1ccc(O)c(OC)c1",              # guaiacol (CYP1A2/2E1)
+    "[SX2]c1ccccc1",                # thiophenol
+    "c1ccc2c(c1)OCO2",              # methylenedioxyphenyl (CYP2D6/3A4)
+    "c1ccc2c(c1)OCCO2",             # ethylenedioxyphenyl
+    "c1ccc2oc(=O)nc2c1",            # coumarin-like
+    "[CX3](=O)[OX2][CX3](=O)",      # anhydride
+    "[NX3;H2]c1ccccc1",             # primary aromatic amine
+    "[CX3](=O)[CX3]([F,Cl,Br,I])",  # alpha-halo ketone
+]
+
+
+# ── MD Stability Filter ───────────────────────────────────────────────────────
+# Post-docking filter: drop candidates whose OpenMM explicit-solvent MD
+# simulation indicates unstable binding (high ligand RMSD or zero H-bond
+# occupancy for catalytic residues).
+
+MD_STABILITY_MAX_RMSD = 3.0  # mean ligand RMSD threshold (Å)
+MD_STABILITY_MIN_HBOND = 1.0  # minimum H-bond contacts for any catalytic residue
+
+
+def filter_by_md_stability(record, md_results=None) -> dict:
+    """Check if a candidate passes the MD-stability gate.
+
+    Reads from *md_results* (a dict keyed by compound_id, as stored in
+    ``output/openmm_minimization_results.json``) and applies two criteria:
+
+        1. Mean ligand RMSD during the simulation <= MD_STABILITY_MAX_RMSD (3.0 Å).
+        2. At least one H-bond contact observed for any catalytic residue
+           (Ser403, Lys406, Tyr446) during the simulation.
+
+    When *md_results* is None or the compound has no MD data, the function
+    returns an {"unstable": True, "reason": "no MD data"} — the candidate
+    cannot be validated without simulation.
+
+    Returns:
+        {"unstable": bool, "reason": str}
+    """
+    if md_results is None:
+        return {"unstable": True, "reason": "no MD data"}
+    entry = md_results.get(record.compound_id)
+    if entry is None:
+        return {"unstable": True, "reason": f"no MD data for {record.compound_id}"}
+    if not entry.get("success", False):
+        return {"unstable": True, "reason": "MD simulation failed"}
+    md = entry.get("md", {})
+    if not md.get("success", False):
+        return {"unstable": True, "reason": "MD production failed"}
+    mean_rmsd = md.get("ligand_rmsd_mean_A", float("inf"))
+    hbond = md.get("hbond_occupancy", {})
+    max_contacts = max(
+        (hbond.get(r, {}).get("n_contacts", 0) for r in ("SER403_OG", "LYS406_NZ", "TYR446_OH")),
+        default=0,
+    )
+    if mean_rmsd > MD_STABILITY_MAX_RMSD:
+        return {
+            "unstable": True,
+            "reason": f"ligand RMSD {mean_rmsd:.2f} Å > {MD_STABILITY_MAX_RMSD} Å threshold",
+        }
+    if max_contacts < MD_STABILITY_MIN_HBOND:
+        return {
+            "unstable": True,
+            "reason": f"no stable H-bond contacts (max={max_contacts}) for catalytic residues",
+        }
+    return {"unstable": False, "reason": f"stable: RMSD={mean_rmsd:.2f} Å, H-bond contacts={int(max_contacts)}"}
+
+
+def _has_smarts_substruct(mol: Chem.Mol, smarts_list) -> bool:
+    """Check if *mol* matches any SMARTS pattern in *smarts_list*."""
+    for smarts in smarts_list:
+        pat = Chem.MolFromSmarts(smarts)
+        if pat and mol.HasSubstructMatch(pat):
+            return True
+    return False
+
+
+def predict_herg_risk(mol: Chem.Mol) -> dict:
+    """Predict hERG blockade risk using structural alerts + physicochemical rules.
+
+    Flags a compound as HIGH risk when:
+      - It matches a known hERG-phoric SMARTS pattern, OR
+      - MW > 350 AND logP > 3.5 AND it contains a basic nitrogen.
+
+    Returns:
+        {"risk": "High"|"Moderate"|"Low", "flags": [list of reasons]}
+    """
+    flags = []
+    if _has_smarts_substruct(mol, HERG_RISK_SMARTS):
+        flags.append("hERG-phoric substructure detected")
+    try:
+        mw = Descriptors.MolWt(mol)
+        logp = Crippen.MolLogP(mol)
+        n_basic = sum(1 for a in mol.GetAtoms()
+                      if a.GetAtomicNum() == 7 and a.GetDegree() <= 3
+                      and not a.IsInRing())
+        if mw > 350 and logp > 3.5 and n_basic >= 1:
+            flags.append(f"high MW ({mw:.0f}), high logP ({logp:.1f}), basic N={n_basic}")
+    except Exception:
+        pass
+    if len(flags) >= 2:
+        return {"risk": "High", "flags": flags}
+    elif len(flags) == 1:
+        return {"risk": "Moderate", "flags": flags}
+    return {"risk": "Low", "flags": []}
+
+
+def predict_cyp_inhibition(mol: Chem.Mol) -> dict:
+    """Predict CYP450 inhibition liability using structural alerts.
+
+    Returns:
+        {"risk": "High"|"Moderate"|"Low", "flags": [list of CYP isoforms]}
+    """
+    if _has_smarts_substruct(mol, CYP450_INHIBITOR_SMARTS):
+        return {"risk": "Moderate", "flags": ["CYP alert substructure detected"]}
+    return {"risk": "Low", "flags": []}
+
+
 def apply_filters(
     records: "List[CompoundRecord]",
     similarity_threshold: Optional[float] = None,

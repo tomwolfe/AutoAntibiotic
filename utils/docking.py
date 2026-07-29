@@ -340,29 +340,16 @@ def rescore_mmff94_strain(
     Returns:
         Approximate MMFF94 strain-interaction score (arbitrary units) or None.
     """
-
-
-def rescore_mmffsa(
-    record: "CompoundRecord",
-    receptor_pdb: Optional[str] = None,
-) -> Optional[float]:
-    """Deprecated alias for :func:`rescore_mmff94_strain`."""
-    import warnings
-    warnings.warn(
-        "rescore_mmffsa is deprecated; use rescore_mmff94_strain instead.",
-        DeprecationWarning, stacklevel=2,
-    )
-    return rescore_mmff94_strain(record, receptor_pdb=receptor_pdb)
+    if record is None:
+        return None
     mol = record.mol if record.mol is not None else Chem.MolFromSmiles(record.smiles)
     if mol is None:
         return None
 
     from rdkit.Chem import AllChem, rdMolDescriptors
-    from io import StringIO
 
     try:
-        # --- Compute ligand energy in its docked (bound) conformation ---
-        pose_path = getattr(record, "active_docked_pdbqt", None) if record is not None else None
+        pose_path = getattr(record, "active_docked_pdbqt", None)
         docked_coords = None
 
         if pose_path and os.path.exists(pose_path):
@@ -387,7 +374,6 @@ def rescore_mmffsa(
         except Exception:
             return None
 
-        # Compute ligand energy in its docked (bound) conformation
         e_lig_bound = None
         if docked_coords is not None:
             n_heavy_mol = mol_h.GetNumHeavyAtoms()
@@ -411,24 +397,20 @@ def rescore_mmffsa(
                 except Exception:
                     e_lig_bound = None
 
-        # Compute ligand energy in its minimised (relaxed) conformation
         ff_min = AllChem.MMFFGetMoleculeForceField(mol_h, mmff_props)
         if ff_min is None:
             return None
         ff_min.Minimize(maxIts=500)
         e_lig_min = ff_min.CalcEnergy()
 
-        # Ligand strain energy (docked vs minimised)
         if e_lig_bound is not None and abs(e_lig_bound) < 1e6:
             e_strain = e_lig_bound - e_lig_min
         else:
             e_strain = 0.0
 
-        # --- Non-polar solvation ---
         tpsa = rdMolDescriptors.CalcTPSA(mol_h)
         e_np = 0.01 * tpsa
 
-        # --- Compute Gasteiger charges ---
         AllChem.ComputeGasteigerCharges(mol_h)
         n_heavy = mol_h.GetNumHeavyAtoms()
         lig_charges = []
@@ -443,7 +425,6 @@ def rescore_mmffsa(
             except (ValueError, KeyError):
                 lig_charges.append(0.0)
 
-        # --- Distance-dependent dielectric solvation (ligand self) ---
         e_solv = 0.0
         conf = mol_h.GetConformer()
         for i in range(n_heavy):
@@ -459,7 +440,6 @@ def rescore_mmffsa(
                     continue
                 e_solv += 332.0 * qi * qj / (80.0 * r)
 
-        # --- Protein-ligand interaction (when receptor PDB is available) ---
         e_receptor_interaction = 0.0
         if receptor_pdb and os.path.exists(receptor_pdb) and docked_coords is not None:
             try:
@@ -483,9 +463,6 @@ def rescore_mmffsa(
                                     pass
                 if receptor_atoms:
                     rec_coords = np.array(receptor_atoms)
-                    # Compute distance-dependent dielectric interaction
-                    # Use vectorized calculation with strict distance clipping
-                    # to prevent numerical blow-up from near-zero distances.
                     for li in range(len(docked_coords)):
                         if li >= len(lig_charges):
                             break
@@ -503,20 +480,28 @@ def rescore_mmffsa(
             except Exception:
                 e_receptor_interaction = 0.0
 
-        # --- Composite score ---
-        # ΔG ≈ e_strain + e_receptor_interaction + e_np
-        # Returns a relative ranking score (strain penalty + interaction + solvation).
-        # Lower (more negative) suggests a more favourable binding pose.
         if e_lig_bound is None:
             return None
         score = e_strain + e_receptor_interaction + e_np
-        # Sanity bound: discard any pathological score beyond ±700 a.u.
         if abs(score) > 700:
             return None
         return float(score)
 
     except Exception:
         return None
+
+
+def rescore_mmffsa(
+    record: "CompoundRecord",
+    receptor_pdb: Optional[str] = None,
+) -> Optional[float]:
+    """Deprecated alias for :func:`rescore_mmff94_strain`."""
+    import warnings
+    warnings.warn(
+        "rescore_mmffsa is deprecated; use rescore_mmff94_strain instead.",
+        DeprecationWarning, stacklevel=2,
+    )
+    return rescore_mmff94_strain(record, receptor_pdb=receptor_pdb)
 
 
 def _get_heavy_atom_index(mol: Chem.Mol, heavy_idx: int) -> Optional[int]:
@@ -566,6 +551,154 @@ def _parse_pdbqt_heavy_coords(pdbqt_path: str) -> List[np.ndarray]:
     except OSError:
         pass
     return coords
+
+
+def _prepare_flexible_pdbqt(
+    receptor_pdb: str,
+    flex_residues: List[Tuple[str, int]],
+    work_dir: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Prepare rigid and flexible PDBQT files for Vina flexible docking.
+
+    Extracts the specified residues from *receptor_pdb* into a separate flexible
+    side-chain PDBQT, and writes the remaining (rigid) receptor as a second
+    PDBQT. Returns ``(rigid_pdbqt, flex_pdbqt)``.
+
+    Args:
+        receptor_pdb: Cleaned receptor PDB file.
+        flex_residues: List of ``(resname, resnum)`` tuples for flexible residues.
+        work_dir: Scratch directory for intermediate files.
+
+    Returns:
+        ``(rigid_pdbqt_path, flex_pdbqt_path)`` or ``(None, None)`` on failure.
+    """
+    rigid_pdb = os.path.join(work_dir, "rigid_receptor.pdb")
+    flex_pdb = os.path.join(work_dir, "flex_sidechains.pdb")
+    rigid_pdbqt_path = os.path.join(work_dir, "rigid_receptor.pdbqt")
+    flex_pdbqt_path = os.path.join(work_dir, "flex_sidechains.pdbqt")
+    try:
+        from Bio.PDB import PDBParser, PDBIO, Select
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("receptor", receptor_pdb)
+
+        class FlexSelect(Select):
+            def accept_residue(self, residue):
+                rid = residue.get_id()
+                for rname, rnum in flex_residues:
+                    if residue.get_resname().strip().upper() == rname.upper() and rid[1] == rnum:
+                        return True
+                return False
+
+        class RigidSelect(Select):
+            def accept_residue(self, residue):
+                rid = residue.get_id()
+                for rname, rnum in flex_residues:
+                    if residue.get_resname().strip().upper() == rname.upper() and rid[1] == rnum:
+                        return False
+                return True
+
+        io = PDBIO()
+        io.set_structure(struct)
+        io.save(flex_pdb, FlexSelect())
+        io.save(rigid_pdb, RigidSelect())
+
+        # Convert to PDBQT using obabel
+        subprocess.run(
+            ["obabel", rigid_pdb, "-O", rigid_pdbqt_path, "-xr"],
+            capture_output=True, timeout=300,
+        )
+        subprocess.run(
+            ["obabel", flex_pdb, "-O", flex_pdbqt_path, "-xr"],
+            capture_output=True, timeout=300,
+        )
+        if os.path.exists(rigid_pdbqt_path) and os.path.exists(flex_pdbqt_path):
+            return rigid_pdbqt_path, flex_pdbqt_path
+    except Exception as exc:
+        log.warning(f"  Could not prepare flexible PDBQT: {exc}")
+    return None, None
+
+
+def dock_compound_flexible(
+    record: "CompoundRecord",
+    rigid_receptor_pdbqt: str,
+    flex_receptor_pdbqt: str,
+    center: np.ndarray,
+    box_size: Tuple[float, float, float],
+    work_dir: str,
+    tag: str = "flex",
+    timeout: Optional[int] = None,
+    exhaustiveness: int = 16,
+    num_modes: int = 5,
+) -> Optional[float]:
+    """Flexible-side-chain docking wrapper for Vina (``--flex``).
+
+    Uses the rigid receptor PDBQT and a flexible side-chain PDBQT to allow
+    specified receptor residues to move during docking. All other parameters
+    mirror :func:`dock_compound`.
+
+    Returns:
+        Best binding energy (kcal/mol) or None on failure.
+    """
+    if record.mol is None:
+        mol = Chem.MolFromSmiles(record.smiles)
+        if mol is None:
+            return None
+        record.mol = mol
+
+    safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
+    lig_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_lig.pdbqt")
+    out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_out.pdbqt")
+
+    mol_for_prep = Chem.AddHs(record.mol)
+    if not mol_for_prep.GetNumConformers():
+        params = AllChem.ETKDGv3()
+        params.randomSeed = RANDOM_SEED
+        try:
+            AllChem.EmbedMolecule(mol_for_prep, params)
+        except Exception:
+            pass
+    if not prepare_ligand_pdbqt(mol_for_prep, lig_pdbqt):
+        raise RuntimeError(f"PDBQT prep failed for {record.compound_id}")
+
+    cmd = [
+        "vina",
+        "--receptor", rigid_receptor_pdbqt,
+        "--flex", flex_receptor_pdbqt,
+        "--ligand", lig_pdbqt,
+        "--out", out_pdbqt,
+        "--center_x", f"{center[0]:.3f}",
+        "--center_y", f"{center[1]:.3f}",
+        "--center_z", f"{center[2]:.3f}",
+        "--size_x", f"{box_size[0]:.1f}",
+        "--size_y", f"{box_size[1]:.1f}",
+        "--size_z", f"{box_size[2]:.1f}",
+        "--exhaustiveness", str(exhaustiveness),
+        "--num_modes", str(num_modes),
+    ]
+    if timeout is None:
+        timeout = VINA_TIMEOUT_S
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("1") and " " in stripped:
+                parts = stripped.split()
+                try:
+                    energy = float(parts[1])
+                    if energy > 0:
+                        return None
+                    return energy
+                except (ValueError, IndexError):
+                    continue
+        return None
+    except subprocess.TimeoutExpired:
+        log.warning(f"  Vina flexible timeout ({timeout}s) for {record.compound_id}.")
+        return None
+    except Exception as exc:
+        log.warning(f"  Vina flexible exception: {exc}")
+        return None
 
 
 def _dock_worker(
