@@ -1,0 +1,52 @@
+[
+  {
+    "compound_id": "ALL_QU05",
+    "smiles": "O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1",
+    "initial_energy": 141827.83,
+    "final_energy": -34952.32,
+    "delta_energy": -176780.15,
+    "rmsd": 1.32,
+    "success": true,
+    "error": null
+  },
+  {
+    "compound_id": "BRICS_01163",
+    "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)c2ccccc12",
+    "initial_energy": 120542.02,
+    "final_energy": -34824.71,
+    "delta_energy": -155366.72,
+    "rmsd": 1.31,
+    "success": true,
+    "error": null
+  },
+  {
+    "compound_id": "BRICS_0022",
+    "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
+    "initial_energy": 136572.89,
+    "final_energy": -34775.64,
+    "delta_energy": -171348.54,
+    "rmsd": 1.282,
+    "success": true,
+    "error": null
+  },
+  {
+    "compound_id": "ALL_QU04",
+    "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
+    "initial_energy": 131338.94,
+    "final_energy": -34826.8,
+    "delta_energy": -166165.74,
+    "rmsd": 1.301,
+    "success": true,
+    "error": null
+  },
+  {
+    "compound_id": "SEED_01150",
+    "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
+    "initial_energy": 127838.1,
+    "final_energy": -34923.34,
+    "delta_energy": -162761.44,
+    "rmsd": 1.321,
+    "success": true,
+    "error": null
+  }
+]
