@@ -19,9 +19,6 @@ dependencies = [
     "pyyaml",
     "pytest",
     "scipy",
-    "openmm",
-    "openmmforcefields",
-    "openff-toolkit",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +30,13 @@ docking = [
     "meeko",
     "gemmi",
     "openbabel-wheel",
+]
+# Molecular-dynamics / MM-GBSA extras (scripts/ directory).
+# openff-toolkit requires Python >= 3.11 on recent releases.
+md = [
+    "openmm",
+    "openmmforcefields",
+    "openff-toolkit",
 ]
 
 [project.scripts]
