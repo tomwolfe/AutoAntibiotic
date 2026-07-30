@@ -158,6 +158,8 @@ A third scaffold, ALL\_QU05 ($-9.77$~\si{\kcal\per\mol}, SI~=~1.23), is reported
     5 & BRICS\_01163 & $-$10.24 & 1.30${}^\dagger$ & Low & Yes & Yes & No & 2.23 \\
     \bottomrule
   \end{tabular}
+  \vspace{2mm}
+  \raggedright\parbox{0.95\textwidth}{\footnotesize Note: Table~3 is ordered by Selectivity Index tier (Strong~$\ge$~2.0, Promising~$\ge$~1.5, then Below gate/Low), then by PBP2a binding energy within each tier. The raw pipeline output (\texttt{output/top\_candidates.csv}) lists compounds in pipeline processing order and is not tier-sorted.${}^\dagger$ SI flagged as low-confidence due to elevated MMFF94 strain score ($>$700~a.u.).}
 \end{table}
 
 \subsection{Binding-mode analysis of primary leads}
@@ -216,12 +218,12 @@ The 2D interaction diagrams for the primary leads BRICS\_0022 and ALL\_QU04 (Fig
 \end{figure}
 
 \subsection{MD RMSD time series}
-The ligand RMSD over the explicit-solvent MD trajectory (Figure~\ref{fig:md_rmsd}) shows that all five candidates drift progressively from their initial docked poses, with none reaching a stable plateau within 100~ps. This reinforces the conclusion that the rigid-docked poses are not stable binding modes on the MD timescale.
+The ligand RMSD over the gas-phase NVT MD trajectory (Figure~\ref{fig:md_rmsd}) shows that all five candidates drift progressively from their initial docked poses, with none reaching a stable plateau within 20~ps. This reinforces the conclusion that the rigid-docked poses are not stable binding modes on the MD timescale. Explicit-solvent NPT MD (100~ps, TIP3P, 150~mM NaCl) similarly showed high ligand RMSD (Table~\ref{tab:openmm}) with no stable plateau.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=0.65\textwidth]{output/figures/publication/figure6_md_rmsd.png}
-  \caption{Ligand RMSD over explicit-solvent MD (100~ps NPT, TIP3P, 150~mM NaCl) for the top five candidates. None of the candidates reach a stable plateau within the simulation timescale.}
+  \caption{Ligand RMSD over gas-phase NVT MD (20~ps, 300~K) for the top five candidates. None of the candidates reach a stable plateau within the simulation timescale.}
   \label{fig:md_rmsd}
 \end{figure}
 

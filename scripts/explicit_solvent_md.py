@@ -54,9 +54,9 @@ MD_OUT = OUT / "md_explicit"
 N_CANDIDATES = 5
 
 H_BOND_RESIDUES = {
-    "SER403": ("SER", 403, "OG"),
-    "LYS406": ("LYS", 406, "NZ"),
-    "TYR446": ("TYR", 446, "OH"),
+    "SER403_OG": ("SER", 403, "OG"),
+    "LYS406_NZ": ("LYS", 406, "NZ"),
+    "TYR446_OH": ("TYR", 446, "OH"),
 }
 
 H_BOND_DIST_CUTOFF = 3.5  # Å
