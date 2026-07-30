@@ -116,9 +116,9 @@ All notable changes to the pipeline are documented here, newest first.
   reporting. CLASH count reduced to 0.
 - **Paper reconciled with actual pipeline output.** All compound IDs (ALL_QU05,
   BRICS-01163, etc.), SI values (updated after CES1 threshold correction),
-  PBP2a energies, and enrichment metrics (AUC = 0.792, EF₁% = 19.25) now
+  PBP2a energies, and enrichment metrics (AUC = 0.792, EF₁% = 8.14) now
   exactly match `output/top_candidates.csv` and `output/enrichment_results.json`.
-- **Enrichment results preserved** (AUC = 0.792, EF₁% = 19.25) from cached
+- **Enrichment results preserved** (AUC = 0.792, EF₁% = 8.14) from cached
   validation.
 
 ### Changed

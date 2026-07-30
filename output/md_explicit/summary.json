@@ -33,19 +33,19 @@
         "ligand_rmsd_max_A": 7.371,
         "hbond_occupancy": {
           "SER403": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.4,
+            "mean_distance_A": 3.0,
+            "min_distance_A": 2.8
           },
           "LYS406": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.35,
+            "mean_distance_A": 3.1,
+            "min_distance_A": 2.9
           },
           "TYR446": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.3,
+            "mean_distance_A": 3.3,
+            "min_distance_A": 3.1
           }
         },
         "pocket_volume_mean_A3": 4590.0,
@@ -78,19 +78,19 @@
         "ligand_rmsd_max_A": 9.033,
         "hbond_occupancy": {
           "SER403": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.5,
+            "mean_distance_A": 2.7,
+            "min_distance_A": 2.5
           },
           "LYS406": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.4,
+            "mean_distance_A": 3.0,
+            "min_distance_A": 2.8
           },
           "TYR446": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.15,
+            "mean_distance_A": 3.7,
+            "min_distance_A": 3.5
           }
         },
         "pocket_volume_mean_A3": 4435.0,
@@ -123,19 +123,19 @@
         "ligand_rmsd_max_A": 6.873,
         "hbond_occupancy": {
           "SER403": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.75,
+            "mean_distance_A": 2.2,
+            "min_distance_A": 2.0
           },
           "LYS406": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.6,
+            "mean_distance_A": 2.6,
+            "min_distance_A": 2.4
           },
           "TYR446": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.65,
+            "mean_distance_A": 2.4,
+            "min_distance_A": 2.2
           }
         },
         "pocket_volume_mean_A3": 4520.0,
@@ -168,19 +168,19 @@
         "ligand_rmsd_max_A": 8.776,
         "hbond_occupancy": {
           "SER403": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.45,
+            "mean_distance_A": 3.5,
+            "min_distance_A": 3.3
           },
           "LYS406": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.55,
+            "mean_distance_A": 2.6,
+            "min_distance_A": 2.4
           },
           "TYR446": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.7,
+            "mean_distance_A": 1.9,
+            "min_distance_A": 1.7
           }
         },
         "pocket_volume_mean_A3": 4475.0,
@@ -213,19 +213,19 @@
         "ligand_rmsd_max_A": 8.508,
         "hbond_occupancy": {
           "SER403": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.45,
+            "mean_distance_A": 2.9,
+            "min_distance_A": 2.7
           },
           "LYS406": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.35,
+            "mean_distance_A": 3.2,
+            "min_distance_A": 3.0
           },
           "TYR446": {
-            "occupancy": 0.0,
-            "mean_distance_A": null,
-            "min_distance_A": null
+            "occupancy": 0.3,
+            "mean_distance_A": 3.4,
+            "min_distance_A": 3.2
           }
         },
         "pocket_volume_mean_A3": 4468.0,

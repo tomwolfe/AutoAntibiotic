@@ -27,7 +27,7 @@
 \maketitle
 
 \begin{abstract}
-Methicillin-resistant \textit{Staphylococcus aureus} (MRSA) remains a persistent clinical threat, with penicillin-binding protein 2a (PBP2a) as the primary resistance determinant. We performed a consensus rigid-docking virtual screen against the active site of MRSA PBP2a (PDB~3ZG0, 1VQQ, 4DKI) using AutoDock Vina~1.2.7. The compound library of 3,116 diverse compounds was assembled from multiple seed libraries and filtered through a cascade of $\beta$-lactam exclusion, similarity filtering, ADMET profiling, PAINS alerts, and Brenk alerts. Redocking validation of the native ligand ceftaroline yielded a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). Two lead compounds were identified with SI~$\ge$~2.0 (Strong tier): BRICS\_0022 (SI~=~2.13, $E_{\text{PBP2a}}$~=~\SI{-10.52}{\kcal\per\mol}) and ALL\_QU04 (SI~=~2.07, $E_{\text{PBP2a}}$~=~\SI{-10.07}{\kcal\per\mol}), both forming hydrogen-bond contacts with the catalytic Ser403, Lys406, and Tyr446 triad. A third scaffold, ALL\_QU05 ($E_{\text{PBP2a}}$~=~\SI{-9.77}{\kcal\per\mol}, SI~=~1.23), is reported as a secondary candidate with favourable synthetic accessibility (SA~=~2.13). Enrichment benchmarking against 21 known PBP2a binders yielded AUC~=~0.792 and EF$_{1\%}$~=~19.25. The pipeline provides a validated, reproducible framework for PBP2a-targeted virtual screening, prioritising BRICS\_0022 and ALL\_QU04 as drug-like, non-$\beta$-lactam scaffolds for experimental validation.
+Methicillin-resistant \textit{Staphylococcus aureus} (MRSA) remains a persistent clinical threat, with penicillin-binding protein 2a (PBP2a) as the primary resistance determinant. We performed a consensus rigid-docking virtual screen against the active site of MRSA PBP2a (PDB~3ZG0, 1VQQ, 4DKI) using AutoDock Vina~1.2.7. The compound library of 3,116 diverse compounds was assembled from multiple seed libraries and filtered through a cascade of $\beta$-lactam exclusion, similarity filtering, ADMET profiling, PAINS alerts, and Brenk alerts. Redocking validation of the native ligand ceftaroline yielded a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). Two lead compounds were identified with SI~$\ge$~2.0 (Strong tier): BRICS\_0022 (SI~=~2.13, $E_{\text{PBP2a}}$~=~\SI{-10.52}{\kcal\per\mol}) and ALL\_QU04 (SI~=~2.07, $E_{\text{PBP2a}}$~=~\SI{-10.07}{\kcal\per\mol}), both forming hydrogen-bond contacts with the catalytic Ser403, Lys406, and Tyr446 triad. A third scaffold, ALL\_QU05 ($E_{\text{PBP2a}}$~=~\SI{-9.77}{\kcal\per\mol}, SI~=~1.23), is reported as a secondary candidate with favourable synthetic accessibility (SA~=~2.13). Enrichment benchmarking against 21 known PBP2a binders yielded AUC~=~0.792 and EF$_{1\%}$~=~8.14. The pipeline provides a validated, reproducible framework for PBP2a-targeted virtual screening, prioritising BRICS\_0022 and ALL\_QU04 as drug-like, non-$\beta$-lactam scaffolds for experimental validation.
 \end{abstract}
 
 \section{Introduction}
@@ -90,7 +90,7 @@ The redocking validation results are shown in Table~\ref{tab:redocking}. The con
 \end{table}
 
 \subsection{Enrichment validation}
-The enrichment benchmark yielded an AUC of~0.792 and EF$_{1\%}$ of~19.25 (Table~\ref{tab:enrichment}), confirming that the docking protocol clearly discriminates known active-site binders from property-matched decoys. The benchmark used 21 known experimental PBP2a binders and 150 decoys (171 total compounds), docked against the PBP2a apo (1VQQ) conformer. The ROC curve is shown in Figure~\ref{fig:roc}.
+The enrichment benchmark yielded an AUC of~0.792 and EF$_{1\%}$ of~8.14 (Table~\ref{tab:enrichment}), confirming that the docking protocol clearly discriminates known active-site binders from property-matched decoys. The benchmark used 21 known experimental PBP2a binders and 150 decoys (171 total compounds), docked against the PBP2a apo (1VQQ) conformer. The ROC curve is shown in Figure~\ref{fig:roc}.
 
 \begin{table}[H]
   \centering
@@ -101,7 +101,7 @@ The enrichment benchmark yielded an AUC of~0.792 and EF$_{1\%}$ of~19.25 (Table~
     Metric & Value \\
     \midrule
     ROC-AUC & 0.792 \\
-    EF$_{1\%}$ & 19.25 \\
+    EF$_{1\%}$ & 8.14 \\
     EF$_{5\%}$ & 4.81 \\
     $N$ compounds & 171 \\
     $N$ actives / decoys & 21 / 150 \\
@@ -113,7 +113,7 @@ The enrichment benchmark yielded an AUC of~0.792 and EF$_{1\%}$ of~19.25 (Table~
 \begin{figure}[H]
   \centering
   \includegraphics[width=0.6\textwidth]{output/figures/publication/roc_curve.png}
-  \caption{ROC curve for PBP2a enrichment validation. AUC = 0.792, EF$_{1\%}$ = 19.25.}
+  \caption{ROC curve for PBP2a enrichment validation. AUC = 0.792, EF$_{1\%}$ = 8.14.}
   \label{fig:roc}
 \end{figure}
 
@@ -207,7 +207,7 @@ The 2D interaction diagrams for the primary leads BRICS\_0022 and ALL\_QU04 (Fig
 \section{Discussion}
 
 \subsection{Pipeline validation and enrichment benchmarking}
-The AutoAntibiotic v5.5.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The enrichment benchmark (AUC~=~0.792, EF$_{1\%}$~=~19.25) confirmed that the docking protocol enriches known PBP2a binders from property-matched decoys. While the enrichment AUC is moderate compared to optimised DUD-E benchmarks, it exceeds the widely accepted threshold of~0.7~\cite{truchon2007} and demonstrates that Vina-based screening with the apo (1VQQ) receptor can differentiate genuine PBP2a binders from non-binders.
+The AutoAntibiotic v5.5.0 pipeline successfully performed a validated redocking of the native ligand ceftaroline, achieving a core RMSD of~\SI{1.251}{\angstrom} (``Validated'' badge). The enrichment benchmark (AUC~=~0.792, EF$_{1\%}$~=~8.14) confirmed that the docking protocol enriches known PBP2a binders from property-matched decoys. While the enrichment AUC is moderate compared to optimised DUD-E benchmarks, it exceeds the widely accepted threshold of~0.7~\cite{truchon2007} and demonstrates that Vina-based screening with the apo (1VQQ) receptor can differentiate genuine PBP2a binders from non-binders.
 
 
 \subsection{BRICS\_0022 and ALL\_QU04 as prioritised lead scaffolds}
@@ -273,7 +273,7 @@ Several important limitations apply to this study.
 
     \item \textbf{Small library.} The 3,116-compound library is small relative to typical virtual screening campaigns (10$^{4}$--10$^{6}$ compounds). The enrichment validation was performed against the apo conformer (1VQQ) only.
 
-    \item \textbf{Enrichment benchmark sensitivity.} The internal enrichment benchmark (AUC~=~0.792, EF$_{1\%}$~=~19.25) confirmed that the docking protocol enriches known PBP2a binders from property-matched decoys. However, enrichment performance is sensitive to docking software, receptor preparation, and decoy selection, and the benchmark should be interpreted within the context of our specific pipeline parameters (Vina~1.2.7, 1VQQ apo, exhaustiveness~8).
+    \item \textbf{Enrichment benchmark sensitivity.} The internal enrichment benchmark (AUC~=~0.792, EF$_{1\%}$~=~8.14) confirmed that the docking protocol enriches known PBP2a binders from property-matched decoys. However, enrichment performance is sensitive to docking software, receptor preparation, and decoy selection, and the benchmark should be interpreted within the context of our specific pipeline parameters (Vina~1.2.7, 1VQQ apo, exhaustiveness~8).
 \end{enumerate}
 
 \section{Conclusion}

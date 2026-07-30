@@ -3,7 +3,7 @@
   "n_actives": 21,
   "n_decoys": 150,
   "auc": 0.7917,
-  "ef_1pct": 19.25,
+  "ef_1pct": 8.14,
   "ef_5pct": 4.812,
   "active_box": [
     20.0,
