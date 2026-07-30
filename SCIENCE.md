@@ -60,11 +60,9 @@ Treat any result whose `protocol_trust` is not `Validated` as preliminary.
 > The canonical logic for these exact trust strings lives in
 > `config/constants.py` (`protocol_trust`).
 
-## Improving experimental-validation odds (v4.0 — simplified)
+## Features and caveats (v5.6.0)
 
-To raise the likelihood that the top-ranked candidates are genuine PBP2a
-inhibitors — without adding deep learning, FEP, or new external services —
-the pipeline keeps only the measures that change *which* molecules are reported.
+### Docking pipeline
 **Consensus rigid docking** docks every compound against a set of PBP2a
 conformer PDBQTs (apo 1VQQ, holo 3ZG0, 4DKI) and keeps the best (most negative)
 energy; redocking validation reports the lowest RMSD across those conformers,
@@ -78,18 +76,57 @@ grid radius from *only* the catalytic-site residues (trypsin His57/Asp102/Ser195
 CES1 Ser221/His468/Glu354), capped at 15 Å, instead of from every receptor atom,
 so ligands can no longer dock on distant surface patches and inflate off-target
 scores. PBP2a active/allosteric boxes are similarly anchored and capped at
-20/18 Å. This is the second half of the selectivity fix. **Diversity clustering**
-keeps a maximally dissimilar final set (Morgan Tanimoto ≤ 0.4). All residue lists
-and PDB IDs are configurable in `config/targets.yaml` / `config/constants.py`.
+20/18 Å. **Diversity clustering** keeps a maximally dissimilar final set
+(Morgan Tanimoto ≤ 0.4). All residue lists and PDB IDs are configurable in
+`config/targets.yaml` / `config/constants.py`.
 
-## Removed features (v4.0)
+### Exhaustiveness caveat
+The primary screen uses Vina exhaustiveness=8 (default for `dock_compound`).
+This is lower than the VS-recommended 32+ and introduces ~±2 kcal/mol noise.
+The energy spread among top hits (typically 1--2 kcal/mol) is within this noise
+window; treat the top cluster as equipotent rather than strictly ranked.
 
+### MMFF94 strain-interaction rescoring
+`rescore_mmff94_strain()` in `utils/docking.py` computes an MMFF94 strain
+penalty + distance-dependent dielectric interaction + TPSA solvation correction
+in arbitrary units. **This is NOT an MM-GBSA score.** It is an approximate
+rescoring filter that flags ligands with excessive conformational strain
+(e.g., BRICS_0022 at 738 a.u. vs ~366 a.u. for ALL_QU04).
+
+### Flexible side-chain docking (v5.6.0)
+`dock_compound_flexible()` in `utils/docking.py` enables Vina `--flex` docking
+for catalytic residues (Tyr446, Ser403). This is not used in the primary screen
+(which uses rigid consensus docking for throughput) but is available for
+follow-up refinement of top candidates.
+
+### MD stability filter (v5.6.0)
+`filter_by_md_stability()` in `utils/filtering.py` flags candidates with
+mean ligand RMSD > 3.0 Å or zero H-bond contacts to catalytic residues during
+explicit-solvent MD. The threshold is strict: in the current study, all top
+candidates would be flagged by the RMSD criterion alone. This filter is
+available as an automated triage gate for future runs.
+
+### OpenMM MD results — honest assessment
+Gas-phase minimisation (1000-step L-BFGS) converges all top candidates with
+ligand RMSD < 0.10 Å, confirming they are local minima. However, subsequent
+short MD (20 ps NVT, gas-phase; 100 ps NPT, explicit-solvent) shows
+significant ligand drift for all candidates (mean RMSD 5--8 Å). This means:
+- The rigid docked poses are **not** stable on the MD timescale.
+- H-bond contacts are partially maintained (occupancy 0.3--0.75) in explicit
+  solvent, but the overall binding mode is not preserved.
+- Results should be interpreted as preliminary; nano-second MD with
+  unrestrained receptor dynamics is recommended for genuine binding-mode
+  validation.
+
+## Removed and restored features
+
+### Removed (v4.0)
 The following were removed because they did not change which molecules appear
 in the report, and they slowed the run:
 - **Flexible (`--flex`) docking** of the active-site step — rigid consensus
-  docking is now the authoritative active-site ranking.
+  docking was made the authoritative active-site ranking in v4.0.
 - **MMFF94 strain-interaction rescoring** (`MMFF94_Strain_Score`, `rerank_mmff`) — final ranking is by
-  PBP2a active-site consensus energy.
+  PBP2a active-site consensus energy. (Restored in v5.2.0 as a complementary filter; renamed from MM-GBSA in v5.4.0.)
 - **Mutation scan** (`Mutant_Energy_Delta`) — resistance is now reported from
   pose-based interaction analysis only.
 - **Liability-panel docking** (albumin/CYP3A4/hERG/CYP2D6) and the **negative
@@ -130,3 +167,13 @@ weakened.
 
 > Structure note: the repo screens **3ZG0** (holo, ceftaroline ligand
 > **AI8**) and **1VQQ** (apo), *not* 6TKO/CEF as earlier docs claimed.
+
+### Restored (v5.6.0)
+- **Flexible (`--flex`) docking** was restored in v5.6.0 via
+  `utils/docking.py:dock_compound_flexible()` and
+  `_prepare_flexible_pdbqt()`. It is available for targeted refinement of
+  top candidates but is not part of the primary screening pipeline.
+- **MMFF94 strain-interaction rescoring** is available as
+  `rescore_mmff94_strain()` for complementary ranking.
+- **MD stability filtering** (`filter_by_md_stability()`) is new in v5.6.0
+  as a post-MD triage gate.

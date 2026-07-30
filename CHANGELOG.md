@@ -2,7 +2,23 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
-## [5.6.0] — MMFF94 rescoring fix; CSV ranking; ADMET filters; flexible docking; MD stability gate
+## [5.6.0] — MMFF94 rescoring fix; CSV ranking; ADMET filters; flexible docking; MD stability gate; paper revision
+
+### Paper revised
+- **Title reframed** from "Computational Identification..." to "AutoAntibiotic: A Validated Computational Pipeline..."
+  to reflect scope as a pipeline framework paper rather than a pure drug discovery study.
+- **Lead re-evaluated:** ALL_QU04 promoted to primary lead over BRICS_0022, citing lower MMFF94 strain
+  (366 vs 738 a.u.) and superior synthetic accessibility (SA 1.78 vs 3.48).
+- **MD narrative rewritten:** Honestly reports significant ligand drift (RMSD 5--8 Å) during both gas-phase
+  and explicit-solvent MD. Explicit-solvent H-bond occupancy (0.30--0.75) documented transparently.
+  Paper no longer claims MD "confirms" binding modes beyond minimisation-level local minima.
+- **Docking undersampling acknowledged:** Exhaustiveness=8 noise (~±2 kcal/mol) and 1.16 kcal/mol
+  spread among top hits explicitly discussed. Top hits reframed as equipotent cluster.
+- **Limitations updated:** Added exhaustiveness noise as explicit limitation; noted that
+  `filter_by_md_stability` would flag all top candidates; documented flexible docking as
+  available feature not used in primary screen.
+- **v5.6.0 features referenced** in Methods and Limitations (flexible docking, MD stability filter).
+- **Cover letter updated** to match. All references to v5.5.0 bumped to v5.6.0.
 
 ### Added
 - **ADMET liability filters (`utils/filtering.py`)** — `predict_herg_risk()` and
