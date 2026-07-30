@@ -19,7 +19,7 @@ Dear Editor,
 
 We submit for consideration our manuscript entitled ``AutoAntibiotic: A Validated Computational Pipeline for Structure-Based Virtual Screening Against MRSA PBP2a'' for publication in the Journal of Chemical Information and Modeling.
 
-This work presents the AutoAntibiotic Discovery Pipeline v5.6.0, a fully automated, reproducible computational framework for structure-based virtual screening against MRSA PBP2a. The pipeline performs consensus rigid-docking across three PBP2a conformers using AutoDock Vina with mechanism-restricted selectivity profiling against human serine hydrolases, MMFF94-based rescoring, and OpenMM complex minimisation and short MD for top candidates. The pipeline additionally supports flexible side-chain docking and an MD stability filter.
+This work presents the AutoAntibiotic Discovery Pipeline v5.6.0, a fully automated, reproducible computational framework for structure-based virtual screening against MRSA PBP2a. The pipeline performs multi-conformer ensemble docking across three PBP2a conformers using AutoDock Vina with mechanism-restricted selectivity profiling against human serine hydrolases, MMFF94-based rescoring, and OpenMM complex minimisation and short MD for top candidates. The pipeline additionally supports flexible side-chain docking and an MD stability filter.
 
 Key findings include:
 \begin{itemize}
@@ -27,7 +27,7 @@ Key findings include:
     \item AUC = 0.792, EF$_{1\%}$ = 8.14 for enrichment validation
     \item Two lead compounds with SI $\geq$ 2.0 (Strong tier): ALL\_QU04 (primary lead, SI = 2.07, MMFF94 strain = 366 a.u., SA = 1.78) and BRICS\_0022 (secondary, SI = 2.13, strain = 738 a.u.), both engaging all three catalytic residues (Ser403, Lys406, Tyr446)
     \item A secondary scaffold ALL\_QU05 (SI = 1.23) with favourable synthetic accessibility (SA = 2.13) and confirmed catalytic-triad contacts
-    \item OpenMM gas-phase minimisation confirmed local minima for all top candidates; short MD revealed significant ligand drift (RMSD 5--8 \AA), highlighting the need for further refinement
+    \item OpenMM gas-phase minimisation confirmed local minima for all top candidates; short MD revealed significant ligand drift (RMSD 5--8 \AA) for all candidates, requiring these compounds to be treated as scaffold hypotheses pending longer MD and/or induced-fit docking
 \end{itemize}
 
 The manuscript describes a rigorous, reproducible methodology with transparent validation criteria and a candid discussion of limitations, including the sensitivity of enrichment benchmarks to methodological choices. We believe this work will be of interest to the journal's readership working on antibiotic discovery and structure-based drug design.

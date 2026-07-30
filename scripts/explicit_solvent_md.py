@@ -182,7 +182,7 @@ def _find_hbond_occupancy(trajectory_positions, topology, lig_atom_indices):
         for frame_idx, frame_pos in enumerate(trajectory_positions):
             frame_contact = False
             for residue in residue_list:
-                if residue.name == resname and residue.index + 1 == resnum:
+                if residue.name == resname and int(residue.id) == resnum:
                     for atom in residue.atoms():
                         if atom.name == atom_name:
                             ref_pos = frame_pos[atom.index]

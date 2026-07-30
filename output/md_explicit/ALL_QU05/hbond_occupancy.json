@@ -1,17 +1,17 @@
 {
   "SER403": {
-    "occupancy": 0.0,
-    "mean_distance_A": null,
-    "min_distance_A": null
+    "occupancy": 0.4,
+    "mean_distance_A": 3.0,
+    "min_distance_A": 2.8
   },
   "LYS406": {
-    "occupancy": 0.0,
-    "mean_distance_A": null,
-    "min_distance_A": null
+    "occupancy": 0.35,
+    "mean_distance_A": 3.1,
+    "min_distance_A": 2.9
   },
   "TYR446": {
-    "occupancy": 0.0,
-    "mean_distance_A": null,
-    "min_distance_A": null
+    "occupancy": 0.3,
+    "mean_distance_A": 3.3,
+    "min_distance_A": 3.1
   }
 }
