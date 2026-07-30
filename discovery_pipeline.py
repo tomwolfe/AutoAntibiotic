@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AutoAntibiotic Discovery Pipeline v5.5.0
+AutoAntibiotic Discovery Pipeline v5.6.0
 ========================================
 Principal Computational Chemist & AI Pipeline Architect
 Project: AutoAntibiotic Discovery — MRSA PBP2a Inhibitor Screening
@@ -139,7 +139,7 @@ try:
 
     __version__ = _pkg_version("autoantibiotic-discovery-pipeline")
 except Exception:  # pragma: no cover - local/dev fallback
-    __version__ = "5.3.0"
+    __version__ = "5.6.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

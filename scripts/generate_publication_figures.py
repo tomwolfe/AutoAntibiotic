@@ -541,13 +541,13 @@ def figure7_mmgbsa_barchart(plt):
     per_res_data = _load_per_res()
     if per_res_data:
         n_compounds = len(per_res_data)
-        fig, axes = plt.subplots(1, max(1, n_compounds),
-                                  figsize=(5 * max(1, n_compounds), 5))
-        if n_compounds == 1:
-            axes = [axes]
+        n_cols = 3
+        n_rows = int(np.ceil(n_compounds / n_cols))
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                  figsize=(5 * n_cols, 4 * n_rows))
 
         for idx, (cid, data) in enumerate(per_res_data.items()):
-            ax = axes[idx]
+            ax = axes.flat[idx]
             residues = list(data.get("per_residue", {}).keys())
             values = [data["per_residue"][r]["mean_kcal"] for r in residues]
             errs = [data["per_residue"][r]["std_kcal"] for r in residues]
@@ -571,6 +571,10 @@ def figure7_mmgbsa_barchart(plt):
                 Patch(facecolor="#377eb8", label="Other residue"),
             ]
             ax.legend(handles=legend_elements, fontsize=8, loc="lower right")
+
+        # Hide unused subplot axes
+        for idx in range(n_compounds, n_rows * n_cols):
+            axes.flat[idx].set_visible(False)
 
         fig.tight_layout()
         fig.savefig(str(FIGS_OUT / "figure7_per_residue_decomp.pdf"), dpi=DPI)
@@ -651,7 +655,7 @@ def figure8_sar_heatmap(plt):
         for j in range(len(metrics)):
             val = data_matrix[i, j]
             if metrics[j] in ("Ser403", "Lys406", "Tyr446"):
-                text = "✓" if val == 1 else "✗"
+                text = "Y" if val == 1 else "N"
                 color = "black"
             elif metrics[j] == "E_PBP2a":
                 text = f"{val:.1f}"
