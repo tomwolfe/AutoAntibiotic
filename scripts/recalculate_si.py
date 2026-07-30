@@ -78,6 +78,15 @@ def recalculate_si_row(row):
     return selectivity_index, selectivity_confidence, si_provisional, si_vs_ceft
 
 
+def _parse_si(si_str):
+    if si_str in ("N/A", "N/A (low-conf)", ""):
+        return None
+    try:
+        return float(si_str.split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def main():
     csv_path = Path(CSV_REPORT)
     if not csv_path.exists():
@@ -115,6 +124,17 @@ def main():
         )
 
         updated.append(row)
+
+    # Sort: passing (SI >= 1.5) compounds first by SI descending,
+    # then below-gate compounds by PBP2a best energy (most negative first).
+    passing = [r for r in updated if r.get("Selectivity_Index", "N/A") != "N/A (low-conf)"
+               and r.get("Selectivity_Index", "N/A") != "N/A"]
+    passing = [r for r in passing if _parse_si(r.get("Selectivity_Index", "N/A")) is not None
+               and _parse_si(r.get("Selectivity_Index", "N/A")) >= SI_PROMISING_THRESHOLD]
+    passing.sort(key=lambda r: _parse_si(r.get("Selectivity_Index", "N/A")) or 0.0, reverse=True)
+    below = [r for r in updated if r not in passing]
+    below.sort(key=lambda r: float(r.get("PBP2a_Best_Energy", "0")) if r.get("PBP2a_Best_Energy", "N/A") not in ("N/A", "") else float("inf"))
+    updated = passing + below
 
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())

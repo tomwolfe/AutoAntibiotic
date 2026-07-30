@@ -1,41 +1,5 @@
 [
   {
-    "compound_id": "ALL_QU05",
-    "smiles": "O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1",
-    "pbp2a_energy": -9.77,
-    "h_bond_ser403": true,
-    "h_bond_lys406": true,
-    "h_bond_tyr446": true,
-    "si": "1.23",
-    "si_tier": "Below gate",
-    "mmff94_strain": 472.5,
-    "sa_score": 2.127,
-    "qed": 0.517,
-    "md_lig_rmsd_mean": 6.645,
-    "md_lig_rmsd_max": 11.101,
-    "md_hbond_S403_OG": null,
-    "md_hbond_K406_NZ": null,
-    "md_hbond_Y446_OH": null
-  },
-  {
-    "compound_id": "BRICS_01163",
-    "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)c2ccccc12",
-    "pbp2a_energy": -10.24,
-    "h_bond_ser403": true,
-    "h_bond_lys406": true,
-    "h_bond_tyr446": false,
-    "si": "N/A (low-conf)",
-    "si_tier": "N/A",
-    "mmff94_strain": 445.51,
-    "sa_score": 2.225,
-    "qed": 0.5,
-    "md_lig_rmsd_mean": 5.217,
-    "md_lig_rmsd_max": 7.46,
-    "md_hbond_S403_OG": null,
-    "md_hbond_K406_NZ": null,
-    "md_hbond_Y446_OH": null
-  },
-  {
     "compound_id": "BRICS_0022",
     "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
     "pbp2a_energy": -10.52,
@@ -49,9 +13,9 @@
     "qed": 0.522,
     "md_lig_rmsd_mean": 7.739,
     "md_lig_rmsd_max": 13.698,
-    "md_hbond_S403_OG": null,
-    "md_hbond_K406_NZ": null,
-    "md_hbond_Y446_OH": null
+    "md_hbond_S403_OG": 2.0,
+    "md_hbond_K406_NZ": 2.4,
+    "md_hbond_Y446_OH": 2.2
   },
   {
     "compound_id": "ALL_QU04",
@@ -67,9 +31,9 @@
     "qed": 0.574,
     "md_lig_rmsd_mean": 5.846,
     "md_lig_rmsd_max": 9.187,
-    "md_hbond_S403_OG": null,
-    "md_hbond_K406_NZ": null,
-    "md_hbond_Y446_OH": null
+    "md_hbond_S403_OG": 3.3,
+    "md_hbond_K406_NZ": 2.4,
+    "md_hbond_Y446_OH": 1.7
   },
   {
     "compound_id": "SEED_01150",
@@ -85,8 +49,34 @@
     "qed": 0.626,
     "md_lig_rmsd_mean": 6.95,
     "md_lig_rmsd_max": 11.008,
-    "md_hbond_S403_OG": null,
-    "md_hbond_K406_NZ": null,
-    "md_hbond_Y446_OH": null
+    "md_hbond_S403_OG": 2.7,
+    "md_hbond_K406_NZ": 3.0,
+    "md_hbond_Y446_OH": 3.2
+  },
+  {
+    "compound_id": "ALL_SP03",
+    "smiles": "O=S(=O)(NC12CC3CC(CC(C3)C1)C2)c1ccc(-c2ccccc2)cc1",
+    "pbp2a_energy": -9.47,
+    "h_bond_ser403": true,
+    "h_bond_lys406": true,
+    "h_bond_tyr446": true,
+    "si": "1.93",
+    "si_tier": "Promising",
+    "mmff94_strain": 415.8,
+    "sa_score": 3.274,
+    "qed": 0.858
+  },
+  {
+    "compound_id": "ALL_SU08",
+    "smiles": "O=S(=O)(Nc1ccc(-c2ccc(F)cc2)cc1)c1ccc(C(F)(F)F)cc1",
+    "pbp2a_energy": -9.95,
+    "h_bond_ser403": true,
+    "h_bond_lys406": true,
+    "h_bond_tyr446": true,
+    "si": "1.91",
+    "si_tier": "Promising",
+    "mmff94_strain": 352.68,
+    "sa_score": 1.814,
+    "qed": 0.609
   }
 ]

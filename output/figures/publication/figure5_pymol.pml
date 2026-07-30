@@ -19,32 +19,6 @@ label catalytic_triad, ""
 
 # Load docked poses
 
-# Load ALL_QU05
-# To load the docked pose, convert SMILES to 3D and align:
-#   from rdkit import Chem
-#   from rdkit.Chem import AllChem
-#   mol = Chem.MolFromSmiles('O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1')
-#   mol = Chem.AddHs(mol)
-#   AllChem.EmbedMolecule(mol)
-#   Chem.MolToPDBFile(mol, 'ALL_QU05_pose.pdb')
-cd output/pdb/
-load ALL_QU05_pose.pdb, ALL_QU05
-show sticks, ALL_QU05
-color marine, ALL_QU05
-
-# Load BRICS_01163
-# To load the docked pose, convert SMILES to 3D and align:
-#   from rdkit import Chem
-#   from rdkit.Chem import AllChem
-#   mol = Chem.MolFromSmiles('O=c1[nH]c(=O)n(Cc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)c2ccccc12')
-#   mol = Chem.AddHs(mol)
-#   AllChem.EmbedMolecule(mol)
-#   Chem.MolToPDBFile(mol, 'BRICS_01163_pose.pdb')
-cd output/pdb/
-load BRICS_01163_pose.pdb, BRICS_01163
-show sticks, BRICS_01163
-color marine, BRICS_01163
-
 # Load BRICS_0022
 # To load the docked pose, convert SMILES to 3D and align:
 #   from rdkit import Chem
@@ -57,6 +31,32 @@ cd output/pdb/
 load BRICS_0022_pose.pdb, BRICS_0022
 show sticks, BRICS_0022
 color marine, BRICS_0022
+
+# Load ALL_QU04
+# To load the docked pose, convert SMILES to 3D and align:
+#   from rdkit import Chem
+#   from rdkit.Chem import AllChem
+#   mol = Chem.MolFromSmiles('O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1')
+#   mol = Chem.AddHs(mol)
+#   AllChem.EmbedMolecule(mol)
+#   Chem.MolToPDBFile(mol, 'ALL_QU04_pose.pdb')
+cd output/pdb/
+load ALL_QU04_pose.pdb, ALL_QU04
+show sticks, ALL_QU04
+color marine, ALL_QU04
+
+# Load SEED_01150
+# To load the docked pose, convert SMILES to 3D and align:
+#   from rdkit import Chem
+#   from rdkit.Chem import AllChem
+#   mol = Chem.MolFromSmiles('O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12')
+#   mol = Chem.AddHs(mol)
+#   AllChem.EmbedMolecule(mol)
+#   Chem.MolToPDBFile(mol, 'SEED_01150_pose.pdb')
+cd output/pdb/
+load SEED_01150_pose.pdb, SEED_01150
+show sticks, SEED_01150
+color marine, SEED_01150
 
 # Render settings
 set ray_trace_frames, 1

@@ -58,9 +58,10 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # implementation details for ligand prep, docking, and filtering.
 from utils.docking import (
     dock_compound,
+    dock_compound_flexible,
     _dock_compounds_parallel,
 )
-from utils.filtering import apply_filters
+from utils.filtering import apply_filters, filter_by_md_stability
 
 # Structural helpers (native-ligand extraction, RMSD, centroids) live in their
 # own module to keep this orchestrator focused on flow control.
@@ -2421,7 +2422,9 @@ def _run_enrichment_validation(
 
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
           config: Optional[dict] = None, smiles: Optional[str] = None,
-          refine: bool = False):
+          refine: bool = False,
+          flex_dock: bool = False,
+          filter_md_stability: bool = False):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -2825,6 +2828,56 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     except Exception as exc:
         log.warning(f"  Could not generate figures: {exc}")
 
+    # ── Post-processing: flexible side-chain docking (--flex-dock) ──
+    if flex_dock and deps.get("USE_VINA"):
+        log.info("─── Post-processing: Flexible Side-Chain Docking (--flex-dock) ───")
+        pb2pa = targets.get("PBP2a", {})
+        flex_pdbqt = pb2pa.get("pdbqt", "").replace(".pdbqt", "_flex.pdbqt")
+        if not os.path.exists(flex_pdbqt):
+            log.warning(f"  Flexible receptor PDBQT not found: {flex_pdbqt}. Skipping.")
+        else:
+            flex_top5 = top10[:5]
+            for rec in flex_top5:
+                energy = dock_compound_flexible(
+                    rec,
+                    rigid_receptor_pdbqt=pb2pa["pdbqt"],
+                    flex_receptor_pdbqt=flex_pdbqt,
+                    center=pb2pa["active_center"],
+                    box_size=ACTIVE_BOX_SIZE,
+                    work_dir=str(OUTPUT_DIR / "workdir"),
+                    tag=f"flex_{rec.compound_id}",
+                )
+                if energy is not None:
+                    log.info(f"  {rec.compound_id}: flexible docking energy = {energy:.2f} kcal/mol")
+                else:
+                    log.warning(f"  {rec.compound_id}: flexible docking failed.")
+        log.info("─── Flexible docking complete ───")
+
+    # ── Post-processing: MD stability filter (--filter-md-stability) ──
+    if filter_md_stability:
+        log.info("─── Post-processing: MD Stability Filter (--filter-md-stability) ───")
+        md_source = None
+        for candidate_path in [
+            OUTPUT_DIR / "openmm_minimization_results.json",
+            OUTPUT_DIR / "md_explicit" / "summary.json",
+        ]:
+            if candidate_path.exists():
+                try:
+                    with open(candidate_path) as fh:
+                        md_source = json.load(fh)
+                    log.info(f"  Loaded MD results from {candidate_path}")
+                    break
+                except Exception as exc:
+                    log.warning(f"  Could not read {candidate_path}: {exc}")
+        if md_source is None:
+            log.warning("  No MD results found. Run OpenMM minimisation first.")
+        else:
+            for rec in top10:
+                result = filter_by_md_stability(rec, md_results=md_source)
+                status = "UNSTABLE" if result.get("unstable") else "STABLE"
+                log.info(f"  {rec.compound_id}: {status} — {result.get('reason', '')}")
+        log.info("─── MD stability filter complete ───")
+
     print_summary(
         n_total, n_filtered, top10,
         validation_ok, redock_rmsd, deps,
@@ -2888,6 +2941,23 @@ def cli():
         version=f"AutoAntibiotic Discovery Pipeline v{__version__}",
         help="Print the pipeline version and exit.",
     )
+    parser.add_argument(
+        "--flex-dock", action="store_true",
+        help=(
+            "Enable flexible side-chain docking (Vina --flex) for catalytic "
+            "residues on the top-5 candidates as a post-processing step. "
+            "Requires a flexible receptor PDBQT."
+        ),
+    )
+    parser.add_argument(
+        "--filter-md-stability", action="store_true",
+        help=(
+            "Enable post-MD stability filtering. Reads MD results from "
+            "output/openmm_minimization_results.json or "
+            "output/md_explicit/summary.json and flags candidates with "
+            "mean ligand RMSD > 3.0 Å or zero catalytic H-bond contacts."
+        ),
+    )
     args = parser.parse_args()
 
     if args.check:
@@ -2897,7 +2967,8 @@ def cli():
 
     log.info(f"AutoAntibiotic Discovery Pipeline v{__version__}")
     main(target_count=args.count, force=args.force, library=args.library,
-         smiles=args.smiles, refine=args.refine)
+         smiles=args.smiles, refine=args.refine,
+         flex_dock=args.flex_dock, filter_md_stability=args.filter_md_stability)
 
 
 if __name__ == "__main__":
