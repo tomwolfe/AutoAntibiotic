@@ -701,6 +701,318 @@ def dock_compound_flexible(
         return None
 
 
+def _find_flexible_residues(
+    receptor_pdb: str,
+    ligand_coords: List[np.ndarray],
+    distance_cutoff: float = 5.0,
+) -> List[Tuple[str, int]]:
+    """Find all receptor residues within *distance_cutoff* Å of the ligand.
+
+    Args:
+        receptor_pdb: Path to receptor PDB file.
+        ligand_coords: List of ligand heavy-atom coordinates as numpy arrays.
+        distance_cutoff: Distance threshold in Å.
+
+    Returns:
+        List of ``(resname, resnum)`` tuples for flexible residues.
+    """
+    if not ligand_coords:
+        return []
+    lig_positions = np.array([c for c in ligand_coords])
+    if lig_positions.ndim != 2 or lig_positions.shape[0] == 0:
+        return []
+    try:
+        from Bio.PDB import PDBParser
+        parser = PDBParser(QUIET=True)
+        struct = parser.get_structure("receptor", receptor_pdb)
+        flex_residues = []
+        for model in struct:
+            for chain in model:
+                for residue in chain:
+                    rid = residue.get_id()
+                    if rid[0] != " ":
+                        continue
+                    for atom in residue:
+                        if atom.element and atom.element.upper() == "H":
+                            continue
+                        try:
+                            pos = atom.get_vector().get_array()
+                        except Exception:
+                            continue
+                        dists = np.linalg.norm(lig_positions - pos, axis=1)
+                        if np.any(dists <= distance_cutoff):
+                            flex_residues.append(
+                                (residue.get_resname().strip(), rid[1])
+                            )
+                            break
+        return flex_residues
+    except Exception as exc:
+        log.warning(f"  Could not find flexible residues: {exc}")
+        return []
+
+
+def dock_compound_induced_fit(
+    record: "CompoundRecord",
+    receptor_pdb: str,
+    center: np.ndarray,
+    box_size: Tuple[float, float, float],
+    work_dir: str,
+    rigid_pose_pdbqt: Optional[str] = None,
+    tag: str = "ifd",
+    n_iterations: int = 3,
+    timeout: Optional[int] = None,
+) -> Tuple[Optional[float], Optional[str]]:
+    """Iterative induced-fit docking with OpenMM minimization + Vina redocking.
+
+    Algorithm (3 iterations):
+      i.   Take the current best pose.
+      ii.  Build an OpenMM system with the ligand + flexible residues
+           unrestrained, all other protein atoms restrained
+           (10 kcal/mol/Å² on backbone CA).
+      iii. Minimize for 2000 steps (L-BFGS).
+      iv.  Extract the minimized pocket coordinates.
+      v.   Write a new receptor PDBQT from the minimized structure.
+      vi.  Re-dock the ligand into the minimized pocket with Vina
+           (exhaustiveness=32, num_modes=9).
+      vii. Take the best pose. Repeat from (ii).
+
+    Args:
+        record: Compound record.
+        receptor_pdb: Path to receptor PDB file (not PDBQT).
+        center: Grid box centre for docking.
+        box_size: Grid box dimensions.
+        work_dir: Scratch directory.
+        rigid_pose_pdbqt: Initial docked pose PDBQT. If None, uses
+            ``record.active_docked_pdbqt``.
+        tag: Label for temp files.
+        n_iterations: Number of IFD iterations (default 3).
+        timeout: Per-call Vina timeout override.
+
+    Returns:
+        ``(best_energy, final_pose_pdbqt)`` or ``(None, None)`` on failure.
+    """
+    import openmm
+    from openmm import app, unit
+    from openmmforcefields.generators import SMIRNOFFTemplateGenerator
+    from openff.toolkit import Molecule as OffMolecule
+    from rdkit import Chem
+    from utils.structure_prep import assign_protonation_states, build_openmm_variant_list
+
+    ligand_pdbqt = rigid_pose_pdbqt or getattr(record, "active_docked_pdbqt", None)
+    if ligand_pdbqt is None or not os.path.exists(ligand_pdbqt):
+        log.warning(f"  No initial pose for {record.compound_id}; skipping IFD")
+        return None, None
+
+    # Parse initial pose coordinates
+    current_coords = _parse_pdbqt_heavy_coords(ligand_pdbqt)
+    if not current_coords:
+        log.warning(f"  Could not parse pose coordinates for {record.compound_id}")
+        return None, None
+
+    safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
+    current_pose_path = ligand_pdbqt
+    best_energy = None
+    final_pose_path = None
+
+    # Prepare ligand 3D structure for parameterization
+    mol = Chem.MolFromSmiles(record.smiles)
+    if mol is None:
+        return None, None
+    mol = Chem.AddHs(mol)
+    params = AllChem.ETKDGv3()
+    params.randomSeed = RANDOM_SEED
+    status = AllChem.EmbedMolecule(mol, params)
+    if status != 0:
+        return None, None
+    AllChem.UFFOptimizeMolecule(mol, maxIters=200)
+    # Set coordinates from pose
+    conf = mol.GetConformer()
+    for i, coord in enumerate(current_coords):
+        if i < mol.GetNumAtoms():
+            conf.SetAtomPosition(i, Chem.rdGeometry.Point3D(
+                float(coord[0]), float(coord[1]), float(coord[2])
+            ))
+
+    for iteration in range(n_iterations):
+        log.info(f"  IFD iteration {iteration + 1}/{n_iterations}")
+
+        # Find flexible residues within 5 Å of current pose
+        flex_residues = _find_flexible_residues(
+            receptor_pdb, current_coords, distance_cutoff=5.0
+        )
+        flex_set = set(flex_residues)
+        log.info(f"    Found {len(flex_residues)} flexible residues within 5 Å")
+
+        # Build OpenMM system
+        try:
+            pdb = app.PDBFile(receptor_pdb)
+            # PROPKA protonation
+            propka_variants = assign_protonation_states(receptor_pdb, pH=7.4)
+            modeller = app.Modeller(pdb.topology, pdb.positions)
+            variant_list = build_openmm_variant_list(modeller.topology, propka_variants)
+            modeller.addHydrogens(pH=7.4, variants=variant_list)
+
+            # Add ligand
+            lig_pdb_path = os.path.join(work_dir, f"{safe_id}_{tag}_lig.pdb")
+            Chem.MolToPDBFile(mol, lig_pdb_path)
+            lig_pdb = app.PDBFile(lig_pdb_path)
+            modeller.add(lig_pdb.topology, lig_pdb.positions)
+            complex_top = modeller.topology
+            complex_pos = modeller.positions
+
+            # Parameterize
+            off_mol = OffMolecule.from_rdkit(mol, allow_undefined_stereo=True)
+            off_mol.assign_partial_charges(partial_charge_method="gasteiger")
+            tg = SMIRNOFFTemplateGenerator(molecules=off_mol, forcefield="openff-2.0.0")
+            ff = app.ForceField("amber14-all.xml")
+            ff.registerTemplateGenerator(tg.generator)
+            system = ff.createSystem(
+                complex_top,
+                nonbondedMethod=app.NoCutoff,
+                constraints=app.HBonds,
+            )
+
+            # Apply restraints: 10 kcal/mol/Å² on backbone CA of non-flexible residues
+            RESTRAINT_FORCE = 10.0  # kcal/mol/Å²
+            n_rec_atoms = pdb.topology.getNumAtoms()
+            restraint = openmm.CustomExternalForce("k * (x - x0)^2 + k * (y - y0)^2 + k * (z - z0)^2")
+            restraint.addPerParticleParameter("k")
+            restraint.addPerParticleParameter("x0")
+            restraint.addPerParticleParameter("y0")
+            restraint.addPerParticleParameter("z0")
+
+            n_restrained = 0
+            for res_idx in range(pdb.topology.getNumResidues()):
+                residue = pdb.topology.getResidue(res_idx)
+                res_key = (residue.name, int(residue.id))
+                if res_key in flex_set:
+                    continue  # Flexible residue — no restraint
+                for atom in residue.atoms():
+                    if atom.name == "CA":
+                        pos = complex_pos[atom.index]
+                        restraint.addParticle(
+                            atom.index,
+                            [RESTRAINT_FORCE, pos[0], pos[1], pos[2]]
+                        )
+                        n_restrained += 1
+                        break
+
+            # Add restraint for ligand (keep near initial position)
+            n_lig_atoms = mol.GetNumAtoms()
+            for i in range(n_lig_atoms):
+                idx = n_rec_atoms + i
+                pos = complex_pos[idx]
+                restraint.addParticle(
+                    idx,
+                    [RESTRAINT_FORCE, pos[0], pos[1], pos[2]]
+                )
+                n_restrained += 1
+
+            system.addForce(restraint)
+
+            # Minimize
+            integrator = openmm.LangevinIntegrator(
+                300 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds
+            )
+            simulation = app.Simulation(complex_top, system, integrator)
+            simulation.context.setPositions(complex_pos)
+            simulation.minimizeEnergy(maxIterations=2000)
+            state_min = simulation.context.getState(getPositions=True)
+            min_pos = state_min.getPositions()
+
+            # Extract minimized receptor coordinates
+            rec_min_pdb = os.path.join(work_dir, f"{safe_id}_{tag}_iter{iteration}_rec.pdb")
+            # Write minimized complex, then strip ligand
+            min_complex_pdb = os.path.join(work_dir, f"{safe_id}_{tag}_iter{iteration}_complex.pdb")
+            with open(min_complex_pdb, "w") as fh:
+                app.PDBFile.writeFile(complex_top, min_pos, fh)
+
+            # Write receptor-only PDB (first n_rec_atoms atoms)
+            rec_top = modeller.topology  # unchanged topology reference
+            rec_pos = []
+            for i in range(n_rec_atoms):
+                rec_pos.append(min_pos[i])
+            rec_top_pdb = os.path.join(work_dir, f"{safe_id}_{tag}_iter{iteration}_rec_only.pdb")
+            try:
+                app.PDBFile.writeFile(rec_top, rec_pos, open(rec_top_pdb, "w"))
+            except Exception as exc:
+                log.warning(f"    Could not write minimized receptor PDB: {exc}")
+                continue
+
+            # Update ligand coordinates from minimized pose
+            lig_min_coords = []
+            for i in range(n_lig_atoms):
+                idx = n_rec_atoms + i
+                pos = min_pos[idx]
+                lig_min_coords.append(np.array([
+                    pos.value_in_unit(unit.angstrom) for _ in range(1)
+                ]))
+            # Update mol coords
+            for i in range(n_lig_atoms):
+                if i < mol.GetNumAtoms():
+                    pos = min_pos[n_rec_atoms + i]
+                    conf.SetAtomPosition(i, Chem.rdGeometry.Point3D(
+                        float(pos[0].value_in_unit(unit.angstrom)),
+                        float(pos[1].value_in_unit(unit.angstrom)),
+                        float(pos[2].value_in_unit(unit.angstrom)),
+                    ))
+
+            # Convert minimized receptor to PDBQT via obabel
+            rec_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_iter{iteration}_rec.pdbqt")
+            try:
+                subprocess.run(
+                    ["obabel", rec_top_pdb, "-O", rec_pdbqt, "-xr"],
+                    capture_output=True, timeout=300,
+                )
+            except Exception as exc:
+                log.warning(f"    obabel conversion failed: {exc}")
+                continue
+
+            if not os.path.exists(rec_pdbqt) or os.path.getsize(rec_pdbqt) == 0:
+                log.warning(f"    Receptor PDBQT was not created for iteration {iteration}")
+                continue
+
+            # Re-dock into minimized receptor
+            lig_pdbqt_path = os.path.join(work_dir, f"{safe_id}_{tag}_iter{iteration}_lig.pdbqt")
+            if not prepare_ligand_pdbqt(mol, lig_pdbqt_path):
+                log.warning(f"    Ligand PDBQT prep failed for iteration {iteration}")
+                continue
+
+            out_pdbqt = os.path.join(work_dir, f"{safe_id}_{tag}_iter{iteration}_out.pdbqt")
+            energy = _run_vina_docking(
+                rec_pdbqt, lig_pdbqt_path, out_pdbqt,
+                center, box_size,
+                timeout=timeout,
+                exhaustiveness=32,
+                num_modes=9,
+            )
+
+            if energy is not None and (best_energy is None or energy < best_energy):
+                best_energy = energy
+                final_pose_path = out_pdbqt
+                current_pose_path = out_pdbqt
+                # Update current coords for next iteration
+                current_coords = _parse_pdbqt_heavy_coords(out_pdbqt)
+                if current_coords:
+                    for i, coord in enumerate(current_coords):
+                        if i < mol.GetNumAtoms():
+                            conf.SetAtomPosition(i, Chem.rdGeometry.Point3D(
+                                float(coord[0]), float(coord[1]), float(coord[2])
+                            ))
+                log.info(f"    Iteration {iteration + 1}: energy = {energy:.2f} kcal/mol")
+
+        except Exception as exc:
+            log.warning(f"    IFD iteration {iteration + 1} failed: {exc}")
+            continue
+
+    if best_energy is not None:
+        log.info(f"  IFD complete: best energy = {best_energy:.2f} kcal/mol")
+    else:
+        log.warning(f"  IFD failed to produce any valid pose for {record.compound_id}")
+
+    return best_energy, final_pose_path
+
+
 def _dock_worker(
     payload: Tuple[str, str],
     dock_func: Callable,

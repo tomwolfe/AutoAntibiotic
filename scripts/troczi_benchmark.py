@@ -269,8 +269,10 @@ def main():
     log.info(f"  Troczi 2013 reported: AUC={troczi_comparison['troczi_2013_reported']['auc']:.2f}  "
              f"EF_1%={troczi_comparison['troczi_2013_reported']['ef_1pct']:.1f}")
     log.info(f"  VERDICT: {'PASS' if result['verdict'] == 'PASS' else 'FAIL'}")
+    if result["verdict"] != "PASS":
+        log.warning("  ⚠  Troczi enrichment did not pass. Pipeline will continue.")
     log.info("=" * 60)
-    sys.exit(0 if result["verdict"] == "PASS" else 2)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

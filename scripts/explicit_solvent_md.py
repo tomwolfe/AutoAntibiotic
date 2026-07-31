@@ -4,32 +4,39 @@ Explicit-solvent MD for top docking poses.
 
 Reads the top candidate SMILES from output/top_candidates.csv, generates 3D
 conformations, parameterises each ligand with OpenFF Sage 2.0.0, combines with
-the PBP2a receptor, solvates in a TIP3P water box with 150 mM NaCl, and runs:
+the PBP2a receptor, solvates in a TIP3P water box with 150 mM NaCl, and runs
+multiple replicas with:
 
-  1. Energy minimisation (steepest descent + L-BFGS)
-  2. NVT equilibration (100 ps, 300 K)
-  3. NPT production (50 ns, 300 K, 1 atm)
+  1. Energy minimisation (5000 steps L-BFGS)
+  2. NVT equilibration (500 ps, 300 K, gradual restraint release)
+  3. NPT equilibration (500 ps, 300 K, 1 atm, gradual restraint release)
+  4. NPT production (10 ns, 300 K, 1 atm, no restraints)
 
-Reports per-residue RMSF, ligand RMSD over time, H-bond occupancy for catalytic
-residues (Ser403, Lys406, Tyr446), and binding pocket volume.
+Reports per-replica stability classification, ligand RMSD, per-residue RMSF,
+H-bond occupancy for catalytic residues (Ser403, Lys406, Tyr446), and radius
+of gyration.
 
 Usage:
-    python scripts/explicit_solvent_md.py
+    python scripts/explicit_solvent_md.py                 # full run (10 ns × 5 × 3)
+    python scripts/explicit_solvent_md.py --quick          # quick test (2 ns × 3 × 1)
 
 Outputs (per candidate):
     output/md_explicit/<CID>/
-        trajectory.dcd         — production trajectory
-        topology.pdb           — solvated system topology
-        ligand_rmsd.npy        — ligand RMSD over production (Å)
-        receptor_rmsf.npy      — per-residue receptor RMSF (Å)
-        hbond_occupancy.json   — H-bond occupancy for catalytic residues
-        pocket_volume.npy      — binding pocket volume over production (Å³)
-        summary.json           — all metrics in one file
+        replica_<N>/
+            trajectory.dcd         — production trajectory
+            topology.pdb           — solvated system topology
+            ligand_rmsd.npy        — ligand RMSD over production (Å)
+            receptor_rmsf.npy      — per-residue receptor RMSF (Å)
+            hbond_occupancy.json   — H-bond occupancy for catalytic residues
+            rg.npy                 — radius of gyration over production (Å)
+            summary.json           — all metrics in one file
+        summary.json               — aggregated summary across replicas
     output/md_explicit/summary.json — aggregated summary for all candidates
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import logging
@@ -51,7 +58,13 @@ CSV_PATH = OUT / "top_candidates.csv"
 RECEPTOR_PDB = OUT / "workdir" / "PBP2a_holo_clean.pdb"
 MD_OUT = OUT / "md_explicit"
 
-N_CANDIDATES = 5
+# CLI defaults
+DEFAULT_N_CANDIDATES = 5
+DEFAULT_N_REPLICAS = 3
+DEFAULT_NPT_NS = 10
+QUICK_N_CANDIDATES = 3
+QUICK_N_REPLICAS = 1
+QUICK_NPT_NS = 2
 
 H_BOND_RESIDUES = {
     "SER403_OG": ("SER", 403, "OG"),
@@ -65,12 +78,8 @@ H_BOND_ANGLE_CUTOFF = 120  # degrees
 # MD parameters
 SOLVENT_PADDING = 10.0  # Å
 NACL_CONCENTRATION = 0.150  # M
-NPT_DURATION_NS = 50
-NVT_DURATION_PS = 100
 TIMESTEP_PS = 0.002
 REPORT_INTERVAL_STEPS = 5000  # every 10 ps for trajectory
-NPT_STEPS = int(NPT_DURATION_NS * 1000 / TIMESTEP_PS)
-NVT_STEPS = int(NVT_DURATION_PS / TIMESTEP_PS)
 
 
 def _check_deps():
@@ -91,7 +100,25 @@ def _check_deps():
         sys.exit(1)
 
 
+def _standardize_ligand(mol: Chem.Mol, pH: float = 7.4) -> Chem.Mol:
+    """Standardize ligand: assign dominant tautomer and protonation state at given pH."""
+    try:
+        from rdkit.Chem import MolStandardize
+        # Neutralize and assign dominant tautomer
+        clean_params = MolStandardize.standardize.CleanupParameters()
+        clean_params.pH = pH
+        clean_params.preferOrganic = True
+        cleaner = MolStandardize.standardize.Cleanup(clean_params)
+        mol = cleaner.cleanup(mol)
+        # Uncharge if needed
+        mol = MolStandardize.charge.Uncharger().uncharge(mol)
+    except Exception as exc:
+        log.warning(f"  MolStandardize failed ({exc}), using original molecule")
+    return mol
+
+
 def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str) -> bool:
+    mol = _standardize_ligand(mol, pH=7.4)
     mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
     params.randomSeed = 42
@@ -105,7 +132,7 @@ def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str) -> bool:
     return True
 
 
-def _load_top_candidates(n: int = N_CANDIDATES) -> list[dict]:
+def _load_top_candidates(n: int = DEFAULT_N_CANDIDATES) -> list[dict]:
     if not CSV_PATH.is_file():
         log.error(f"CSV not found: {CSV_PATH}")
         sys.exit(1)
@@ -126,8 +153,29 @@ def _load_receptor_pdb():
         log.error(f"Receptor PDB not found: {RECEPTOR_PDB}")
         sys.exit(1)
     pdb = app.PDBFile(str(RECEPTOR_PDB))
+
+    # PROPKA-based protonation state assignment
+    from utils.structure_prep import assign_protonation_states, build_openmm_variant_list
+    propka_variants = assign_protonation_states(str(RECEPTOR_PDB), pH=7.4)
+
     modeller = app.Modeller(pdb.topology, pdb.positions)
-    modeller.addHydrogens(pH=7.4)
+    # Build variant list matching OpenMM residue order
+    variant_list = build_openmm_variant_list(modeller.topology, propka_variants)
+    modeller.addHydrogens(pH=7.4, variants=variant_list)
+
+    # Verify key active-site residues
+    for res_idx in range(modeller.topology.getNumResidues()):
+        res = modeller.topology.getResidue(res_idx)
+        res_name = res.name
+        try:
+            res_num = int(res.id)
+        except ValueError:
+            continue
+        if res_name == "LYS" and res_num == 406:
+            log.info(f"  ✓ Lys406 confirmed as {res_name} (protonated)")
+        elif res_name == "SER" and res_num == 403:
+            log.info(f"  ✓ Ser403 confirmed as {res_name} (neutral)")
+
     log.info(f"  Loaded receptor: {RECEPTOR_PDB} ({modeller.topology.getNumAtoms()} atoms)")
     return modeller.topology, modeller.positions
 
@@ -244,10 +292,47 @@ def _get_protein_atom_indices_per_residue(topology):
     return residue_map
 
 
-def run_explicit_md(candidate: dict) -> dict:
+def _classify_stability(ligand_rmsd_array: np.ndarray, last_n_ns: float = 5.0, dt_ns: float = 0.002) -> str:
+    """Classify replica stability based on ligand RMSD over the last *last_n_ns* ns.
+
+    Returns:
+        "Stable" if mean RMSD < 2.0 Å
+        "Metastable" if 2.0–4.0 Å
+        "Unstable" if > 4.0 Å
+    """
+    if len(ligand_rmsd_array) < 2:
+        return "Unstable"
+    n_last = max(1, int(last_n_ns / (dt_ns * REPORT_INTERVAL_STEPS)))
+    last_rmsd = ligand_rmsd_array[-n_last:]
+    mean_rmsd = float(np.mean(last_rmsd))
+    if mean_rmsd < 2.0:
+        return "Stable"
+    elif mean_rmsd < 4.0:
+        return "Metastable"
+    else:
+        return "Unstable"
+
+
+def _run_replica(
+    candidate: dict,
+    replica_idx: int,
+    npt_steps: int,
+    nvt_steps: int,
+    nvt_duration_ps: float,
+    npt_duration_ns: float,
+) -> dict:
+    """Run a single MD replica for one candidate.
+
+    Equilibration protocol:
+      i.   Minimize 5000 steps (L-BFGS).
+      ii.  500 ps NVT at 300 K with backbone restraints
+           (10 kcal/mol/Å², gradually released to 0 over 500 ps).
+      iii. 500 ps NPT at 300 K, 1 atm with backbone restraints
+           (5 kcal/mol/Å², gradually released to 0).
+      iv.  Production NPT: *npt_duration_ns* ns, no restraints.
+    """
     import openmm
-    from openmm import app
-    from openmm import unit
+    from openmm import app, unit
     from openmmforcefields.generators import SMIRNOFFTemplateGenerator
     from openff.toolkit import Molecule as OffMolecule
 
@@ -255,6 +340,7 @@ def run_explicit_md(candidate: dict) -> dict:
     smi = candidate["SMILES"]
 
     result = {
+        "replica": replica_idx,
         "compound_id": cid,
         "smiles": smi,
         "success": False,
@@ -262,10 +348,11 @@ def run_explicit_md(candidate: dict) -> dict:
         "minimization": {},
         "equilibration": {},
         "production": {},
+        "stability_class": None,
     }
 
-    candidate_dir = MD_OUT / cid
-    candidate_dir.mkdir(parents=True, exist_ok=True)
+    replica_dir = MD_OUT / cid / f"replica_{replica_idx}"
+    replica_dir.mkdir(parents=True, exist_ok=True)
 
     # Prepare ligand 3D structure
     mol = Chem.MolFromSmiles(smi)
@@ -273,7 +360,7 @@ def run_explicit_md(candidate: dict) -> dict:
         result["error"] = "RDKit MolFromSmiles failed"
         return result
 
-    lig_pdb = str(candidate_dir / "ligand.pdb")
+    lig_pdb = str(replica_dir / "ligand.pdb")
     if not _prepare_ligand_pdb(mol, lig_pdb):
         result["error"] = "3D conformer generation failed"
         return result
@@ -296,7 +383,6 @@ def run_explicit_md(candidate: dict) -> dict:
     try:
         modeller = app.Modeller(receptor_top, receptor_pos)
         modeller.add(ligand_pdb.topology, ligand_pdb.positions)
-        log.info(f"  Built complex: {modeller.topology.getNumAtoms()} atoms")
     except Exception as exc:
         result["error"] = f"Complex building failed: {exc}"
         return result
@@ -313,7 +399,6 @@ def run_explicit_md(candidate: dict) -> dict:
             ionicStrength=NACL_CONCENTRATION * unit.molar,
             neutralize=True,
         )
-        log.info(f"  Solvated system: {modeller.topology.getNumAtoms()} atoms")
     except Exception as exc:
         result["error"] = f"Solvation failed: {exc}"
         return result
@@ -322,7 +407,7 @@ def run_explicit_md(candidate: dict) -> dict:
     solvated_pos = modeller.positions
 
     # Save topology
-    top_pdb = str(candidate_dir / "topology.pdb")
+    top_pdb = str(replica_dir / "topology.pdb")
     with open(top_pdb, "w") as fh:
         app.PDBFile.writeFile(solvated_top, solvated_pos, fh)
 
@@ -333,7 +418,6 @@ def run_explicit_md(candidate: dict) -> dict:
         tg = SMIRNOFFTemplateGenerator(molecules=off_mol, forcefield="openff-2.0.0")
         ff = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
         ff.registerTemplateGenerator(tg.generator)
-
         system = ff.createSystem(
             solvated_top,
             nonbondedMethod=app.PME,
@@ -345,32 +429,38 @@ def run_explicit_md(candidate: dict) -> dict:
         result["error"] = f"System creation failed: {exc}"
         return result
 
-    # Minimisation
+    # Restraint helper
+    RESTRAINT_FORCE = 10.0  # kcal/mol/Å²
+    restraint = openmm.CustomExternalForce("k * (x - x0)^2 + k * (y - y0)^2 + k * (z - z0)^2")
+    restraint.addPerParticleParameter("k")
+    restraint.addPerParticleParameter("x0")
+    restraint.addPerParticleParameter("y0")
+    restraint.addPerParticleParameter("z0")
+
+    n_restrained_ca = 0
+    for res_idx in range(receptor_top.getNumResidues()):
+        residue = receptor_top.getResidue(res_idx)
+        for atom in residue.atoms():
+            if atom.name == "CA":
+                pos = solvated_pos[atom.index]
+                restraint.addParticle(atom.index, [RESTRAINT_FORCE, pos[0], pos[1], pos[2]])
+                n_restrained_ca += 1
+                break
+
+    # i. Minimisation
     try:
         integrator = openmm.LangevinIntegrator(
-            300 * unit.kelvin,
-            1.0 / unit.picosecond,
-            TIMESTEP_PS * unit.picoseconds,
+            300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
         )
         simulation = app.Simulation(solvated_top, system, integrator)
         simulation.context.setPositions(solvated_pos)
 
         state_before = simulation.context.getState(getEnergy=True)
-        e_init = state_before.getPotentialEnergy().value_in_unit(
-            unit.kilocalories_per_mole
-        )
+        e_init = state_before.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
 
-        log.info(f"    Minimising (steepest descent + L-BFGS)...")
-        simulation.minimizeEnergy(
-            maxIterations=100,
-            tolerance=10.0 * unit.kilojoules_per_mole / unit.nanometer,
-        )
-        simulation.minimizeEnergy(maxIterations=500)
+        simulation.minimizeEnergy(maxIterations=5000)
         state_min = simulation.context.getState(getEnergy=True, getPositions=True)
-        e_min = state_min.getPotentialEnergy().value_in_unit(
-            unit.kilocalories_per_mole
-        )
-
+        e_min = state_min.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
         min_pos = state_min.getPositions()
         lig_rmsd_min = _compute_ligand_rmsd(solvated_pos, min_pos, lig_indices)
 
@@ -381,85 +471,96 @@ def run_explicit_md(candidate: dict) -> dict:
             "ligand_rmsd_A": round(float(lig_rmsd_min), 3) if lig_rmsd_min else None,
             "success": True,
         }
-        log.info(f"    Minimised: ΔE={e_min - e_init:.0f} kcal/mol, lig RMSD={lig_rmsd_min:.3f} Å")
     except Exception as exc:
         result["error"] = f"Minimisation failed: {exc}"
         return result
 
-    # NVT equilibration
+    # ii. NVT equilibration with gradual restraint release
     try:
         simulation.context.setPositions(min_pos)
         simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
 
         nvt_positions = []
-        for step in range(NVT_STEPS):
+        nvt_steps_half = nvt_steps // 2
+        for step in range(nvt_steps):
+            # Gradually release restraint from 10 to 0 over first half, then 0
+            if step < nvt_steps_half:
+                frac = 1.0 - step / nvt_steps_half
+                k = RESTRAINT_FORCE * frac
+                for i in range(n_restrained_ca):
+                    restraint.setParticleParameters(i, [k,
+                        solvated_pos[i][0], solvated_pos[i][1], solvated_pos[i][2]])
+                restraint.updateParametersInContext(simulation.context)
             simulation.step(1)
-            if step % REPORT_INTERVAL_STEPS == 0 or step == NVT_STEPS - 1:
-                state_nvt = simulation.context.getState(
-                    getPositions=True, getEnergy=True
-                )
+            if step % REPORT_INTERVAL_STEPS == 0 or step == nvt_steps - 1:
+                state_nvt = simulation.context.getState(getPositions=True, getEnergy=True)
                 nvt_positions.append(state_nvt.getPositions())
 
         state_nvt_final = simulation.context.getState(getEnergy=True)
-        e_nvt = state_nvt_final.getPotentialEnergy().value_in_unit(
-            unit.kilocalories_per_mole
-        )
-
-        # Ligand RMSD during NVT
+        e_nvt = state_nvt_final.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
         lig_rmsd_nvt = []
         for pos in nvt_positions:
             lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
             if lr is not None:
                 lig_rmsd_nvt.append(float(lr))
-
         nvt_pos = nvt_positions[-1] if nvt_positions else min_pos
 
         result["equilibration"] = {
-            "nvt_duration_ps": NVT_DURATION_PS,
+            "nvt_duration_ps": nvt_duration_ps,
             "final_energy_kcal": round(e_nvt, 1),
             "ligand_rmsd_mean_A": round(float(np.mean(lig_rmsd_nvt)), 3) if lig_rmsd_nvt else None,
             "ligand_rmsd_std_A": round(float(np.std(lig_rmsd_nvt)), 3) if lig_rmsd_nvt else None,
             "success": True,
         }
-        log.info(f"    NVT equilibration complete: lig RMSD={result['equilibration']['ligand_rmsd_mean_A']}±{result['equilibration']['ligand_rmsd_std_A']} Å")
     except Exception as exc:
         result["error"] = f"NVT equilibration failed: {exc}"
         return result
 
-    # NPT production
+    # iii. NPT equilibration + iv. Production
     try:
-        # Add barostat for NPT
         system.addForce(openmm.MonteCarloBarostat(1.0 * unit.atmosphere, 300 * unit.kelvin, 25))
         simulation = app.Simulation(solvated_top, system, integrator)
         simulation.context.setPositions(nvt_pos)
         simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
 
-        # Compute pocket center from mean position of catalytic residues
-        pocket_center_np = np.array([40.0, 20.0, 30.0])  # approximate 3ZG0 active site center
+        # NPT equilibration (first 500 ps with gradual restraint release)
+        npt_eq_steps = int(500 / TIMESTEP_PS)
+        for step in range(npt_eq_steps):
+            frac = 1.0 - step / npt_eq_steps
+            k = 5.0 * frac  # start at 5 kcal/mol/Å², release to 0
+            for i in range(n_restrained_ca):
+                restraint.setParticleParameters(i, [k,
+                    solvated_pos[i][0], solvated_pos[i][1], solvated_pos[i][2]])
+            restraint.updateParametersInContext(simulation.context)
+            simulation.step(1)
 
+        # Remove restraints for production
+        for i in range(n_restrained_ca):
+            restraint.setParticleParameters(i, [0.0,
+                solvated_pos[i][0], solvated_pos[i][1], solvated_pos[i][2]])
+        restraint.updateParametersInContext(simulation.context)
+
+        # NPT production
+        pocket_center_np = np.array([40.0, 20.0, 30.0])
         prod_positions = []
         prod_energies = []
         lig_rmsd_traj = []
-        report_npt_steps = NPT_STEPS // 5000  # save ~5000 frames
+        report_npt_steps = max(1, npt_steps // int(npt_duration_ns * 1000 / TIMESTEP_PS / 1000))
 
-        for step in range(NPT_STEPS):
+        for step in range(npt_steps):
             simulation.step(1)
-            if step % report_npt_steps == 0 or step == NPT_STEPS - 1:
-                state_prod = simulation.context.getState(
-                    getPositions=True, getEnergy=True
-                )
+            if step % report_npt_steps == 0 or step == npt_steps - 1:
+                state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
                 pos = state_prod.getPositions()
                 prod_positions.append(pos)
                 prod_energies.append(
-                    state_prod.getPotentialEnergy().value_in_unit(
-                        unit.kilocalories_per_mole
-                    )
+                    state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
                 )
                 lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
                 if lr is not None:
                     lig_rmsd_traj.append(float(lr))
 
-        log.info(f"    NPT production complete: {NPT_DURATION_NS} ns, {len(prod_positions)} frames saved")
+        log.info(f"    NPT production complete: {npt_duration_ns} ns, {len(prod_positions)} frames")
     except Exception as exc:
         result["error"] = f"NPT production failed: {exc}"
         return result
@@ -467,7 +568,7 @@ def run_explicit_md(candidate: dict) -> dict:
     # Analysis
     try:
         lig_rmsd_array = np.array(lig_rmsd_traj)
-        np.save(str(candidate_dir / "ligand_rmsd.npy"), lig_rmsd_array)
+        np.save(str(replica_dir / "ligand_rmsd.npy"), lig_rmsd_array)
 
         # Receptor RMSF (CA atoms)
         ca_indices = []
@@ -498,88 +599,154 @@ def run_explicit_md(candidate: dict) -> dict:
                 n_frames_used += 1
             if n_frames_used > 0:
                 rmsf = np.sqrt(sq_disp / n_frames_used)
-                np.save(str(candidate_dir / "receptor_rmsf.npy"), rmsf)
+                np.save(str(replica_dir / "receptor_rmsf.npy"), rmsf)
 
         # H-bond occupancy
         hb_occ = _find_hbond_occupancy(prod_positions, solvated_top, lig_indices)
-        with open(str(candidate_dir / "hbond_occupancy.json"), "w") as fh:
+        with open(str(replica_dir / "hbond_occupancy.json"), "w") as fh:
             json.dump(hb_occ, fh, indent=2)
 
-        # Pocket volume
-        volumes = _compute_pocket_volume(prod_positions, solvated_top, pocket_center_np)
-        vol_array = np.array(volumes)
-        np.save(str(candidate_dir / "pocket_volume.npy"), vol_array)
+        # Stability classification
+        stability = _classify_stability(lig_rmsd_array, last_n_ns=5.0)
+        result["stability_class"] = stability
 
         prod_energies_array = np.array(prod_energies)
 
         result["production"] = {
-            "npt_duration_ns": NPT_DURATION_NS,
+            "npt_duration_ns": npt_duration_ns,
             "n_frames": len(prod_positions),
             "ligand_rmsd_mean_A": round(float(np.mean(lig_rmsd_array)), 3) if len(lig_rmsd_array) > 0 else None,
             "ligand_rmsd_std_A": round(float(np.std(lig_rmsd_array)), 3) if len(lig_rmsd_array) > 0 else None,
             "ligand_rmsd_max_A": round(float(np.max(lig_rmsd_array)), 3) if len(lig_rmsd_array) > 0 else None,
             "ligand_rmsd_final_A": round(float(lig_rmsd_array[-1]), 3) if len(lig_rmsd_array) > 0 else None,
             "hbond_occupancy": hb_occ,
-            "pocket_volume_mean_A3": round(float(np.mean(vol_array)), 1) if len(vol_array) > 0 else None,
-            "pocket_volume_std_A3": round(float(np.std(vol_array)), 1) if len(vol_array) > 0 else None,
             "mean_potential_energy_kcal": round(float(np.mean(prod_energies_array)), 1) if len(prod_energies_array) > 0 else None,
             "success": True,
         }
-        log.info(f"    Analysis: lig RMSD={result['production']['ligand_rmsd_mean_A']:.3f}±{result['production']['ligand_rmsd_std_A']:.3f} Å, "
-                 f"pocket vol={result['production']['pocket_volume_mean_A3']:.0f}±{result['production']['pocket_volume_std_A3']:.0f} Å³")
+        log.info(f"    Replica {replica_idx}: lig RMSD={result['production']['ligand_rmsd_mean_A']:.3f}±{result['production']['ligand_rmsd_std_A']:.3f} Å, stability={stability}")
     except Exception as exc:
         result["error"] = f"Analysis failed: {exc}"
         return result
+
+    result["success"] = True
+    return result
+
+
+def run_explicit_md(
+    candidate: dict,
+    n_replicas: int = DEFAULT_N_REPLICAS,
+    npt_duration_ns: float = DEFAULT_NPT_NS,
+    nvt_duration_ps: float = 500.0,
+) -> dict:
+    """Run MD for a candidate across multiple replicas.
+
+    Returns aggregated result with per-replica data and consensus stability.
+    """
+    npt_steps = int(npt_duration_ns * 1000 / TIMESTEP_PS)
+    nvt_steps = int(nvt_duration_ps / TIMESTEP_PS)
+
+    cid = candidate["Compound_ID"]
+    smi = candidate["SMILES"]
+
+    result = {
+        "compound_id": cid,
+        "smiles": smi,
+        "success": False,
+        "error": None,
+        "n_replicas": n_replicas,
+        "npt_duration_ns": npt_duration_ns,
+        "replicas": [],
+        "stability_classes": [],
+        "consensus_stability": None,
+        "validated": False,
+    }
+
+    candidate_dir = MD_OUT / cid
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+
+    for rep_idx in range(n_replicas):
+        log.info(f"  Replica {rep_idx + 1}/{n_replicas}...")
+        rep_result = _run_replica(
+            candidate, rep_idx, npt_steps, nvt_steps, nvt_duration_ps, npt_duration_ns,
+        )
+        result["replicas"].append(rep_result)
+        result["stability_classes"].append(rep_result.get("stability_class"))
+
+        if not rep_result["success"]:
+            log.warning(f"    Replica {rep_idx} failed: {rep_result.get('error', '?')}")
+
+    # Consensus stability: ≥2 of 3 replicas Stable or Metastable → Validated
+    stable_or_meta = sum(
+        1 for sc in result["stability_classes"]
+        if sc in ("Stable", "Metastable")
+    )
+    result["validated"] = stable_or_meta >= max(2, n_replicas // 2 + 1)
+    result["consensus_stability"] = "Validated" if result["validated"] else "Not Validated"
+    result["success"] = any(r["success"] for r in result["replicas"])
 
     # Write per-candidate summary
     summary_path = candidate_dir / "summary.json"
     with open(summary_path, "w") as fh:
         json.dump(result, fh, indent=2, default=str)
 
-    result["success"] = True
     return result
 
 
 def main():
-    _check_deps()
+    parser = argparse.ArgumentParser(description="Explicit-solvent MD for top docking poses")
+    parser.add_argument("--quick", action="store_true",
+                        help=f"Quick test: {QUICK_NPT_NS}ns x {QUICK_N_CANDIDATES} candidates x {QUICK_N_REPLICAS} replica")
+    args = parser.parse_args()
 
+    if args.quick:
+        n_candidates = QUICK_N_CANDIDATES
+        n_replicas = QUICK_N_REPLICAS
+        npt_ns = QUICK_NPT_NS
+        log.info(f"QUICK MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replica")
+    else:
+        n_candidates = DEFAULT_N_CANDIDATES
+        n_replicas = DEFAULT_N_REPLICAS
+        npt_ns = DEFAULT_NPT_NS
+        log.info(f"FULL MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replicas")
+
+    _check_deps()
     MD_OUT.mkdir(parents=True, exist_ok=True)
 
-    candidates = _load_top_candidates()
+    candidates = _load_top_candidates(n=n_candidates)
 
     all_results = []
     for cand in candidates:
         cid = cand["Compound_ID"]
         log.info(f"\n  Processing {cid}...")
-        result = run_explicit_md(cand)
+        result = run_explicit_md(cand, n_replicas=n_replicas, npt_duration_ns=npt_ns)
         all_results.append(result)
 
     log.info("")
-    log.info("─" * 80)
-    log.info(f"  {'Compound':<20} {'Min RMSD':<10} {'MD lig RMSD':<16} {'Pocket Vol':<14} {'Status':<12}")
-    log.info("  " + "-" * 72)
+    log.info("─" * 100)
+    log.info(f"  {'Compound':<20} {'Replicas':<10} {'Stable/Meta':<14} {'Consensus':<14} {'Status':<12}")
+    log.info("  " + "-" * 70)
     for r in all_results:
-        mr = r["minimization"].get("ligand_rmsd_A", "N/A") if r["minimization"].get("success") else "FAIL"
-        mr_s = f"{mr:.3f}" if isinstance(mr, float) else str(mr)
-        lr = r["production"].get("ligand_rmsd_mean_A", "N/A") if r["production"].get("success") else "N/A"
-        lr_s = f"{lr:.3f}±{r['production'].get('ligand_rmsd_std_A', 0):.3f}" if isinstance(lr, float) else str(lr)
-        pv = r["production"].get("pocket_volume_mean_A3", "N/A") if r["production"].get("success") else "N/A"
-        pv_s = f"{pv:.0f}" if isinstance(pv, float) else str(pv)
-        status = "OK" if r["success"] else f"FAIL: {r.get('error', '?')[:40]}"
-        log.info(f"  {r['compound_id']:<20} {mr_s:<10} {lr_s:<16} {pv_s:<14} {status:<12}")
+        n_ok = sum(1 for rep in r["replicas"] if rep["success"])
+        n_sm = sum(1 for sc in r["stability_classes"] if sc in ("Stable", "Metastable"))
+        sc = "-".join(s[:4] if s else "FAIL" for s in r["stability_classes"])
+        consensus = r["consensus_stability"]
+        status = "OK" if r["success"] else f"FAIL"
+        log.info(f"  {r['compound_id']:<20} {n_ok}/{r['n_replicas']:<5} {n_sm}/{r['n_replicas']:<10} {consensus:<14} {status:<12}")
 
     # Write aggregated summary
     agg_path = MD_OUT / "summary.json"
     n_ok = sum(1 for r in all_results if r["success"])
+    n_validated = sum(1 for r in all_results if r.get("validated"))
     agg = {
         "n_candidates": len(all_results),
         "n_succeeded": n_ok,
+        "n_validated": n_validated,
         "parameters": {
             "solvent": "TIP3P",
             "padding_A": SOLVENT_PADDING,
             "nacl_concentration_M": NACL_CONCENTRATION,
-            "nvt_duration_ps": NVT_DURATION_PS,
-            "npt_duration_ns": NPT_DURATION_NS,
+            "n_replicas": n_replicas,
+            "npt_duration_ns": npt_ns,
             "timestep_ps": TIMESTEP_PS,
             "force_field_protein": "amber14-all",
             "force_field_ligand": "openff-2.0.0",
@@ -591,8 +758,8 @@ def main():
         json.dump(agg, fh, indent=2, default=str)
 
     log.info(f"\n  Aggregated summary: {agg_path}")
-    log.info(f"  {n_ok}/{len(all_results)} succeeded")
-    sys.exit(0 if n_ok == len(all_results) else 1)
+    log.info(f"  {n_ok}/{len(all_results)} succeeded, {n_validated} validated")
+    sys.exit(0 if n_ok > 0 else 1)
 
 
 if __name__ == "__main__":

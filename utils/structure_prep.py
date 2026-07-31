@@ -30,6 +30,136 @@ from utils.ligand_prep import LigandPreparator
 
 log = logging.getLogger("AutoAntibiotic")
 
+# Hydrogen variant names for OpenMM Modeller.addHydrogens(variants=...)
+# Keyed by PROPKA residue type string → (protonated_form, deprotonated_form)
+_PROPKA_VARIANT_MAP = {
+    "ASP": ("ASH", "ASP"),   # ASP: neutral (protonated) / charged
+    "GLU": ("GLH", "GLU"),   # GLU: neutral / charged
+    "HIS": ("HIP", "HIE"),   # HIS: +charged / neutral (NE2-H)
+    "LYS": ("LYS", "LYN"),   # LYS: +charged (3H) / neutral (2H)
+    "CYS": ("CYS", "CYX"),   # CYS: neutral / deprotonated or disulfide
+    "TYR": ("TYR", "TYR"),   # TYR: pKa ~ 10, neutral at pH 7.4
+    "SER": ("SER", "SER"),   # SER: pKa ~ 13, neutral at pH 7.4
+    "THR": ("THR", "THR"),   # THR: neutral
+    "ARG": ("ARG", "ARG"),   # ARG: +charged (pKa ~ 12)
+}
+
+
+def assign_protonation_states(
+    pdb_path: str,
+    pH: float = 7.4,
+) -> Optional[dict]:
+    """
+    Run PROPKA on *pdb_path* to compute residue pKa values and determine
+    the correct OpenMM hydrogen variants at the given pH.
+
+    Returns a dict mapping ``(residue_name, residue_number)`` → variant string
+    for residues whose predicted protonation state differs from the default,
+    or an empty dict if all residues match default behaviour.
+    Returns ``None`` if PROPKA cannot be run.
+    """
+    try:
+        from propka.run import single as propka_single
+    except ImportError:
+        log.warning("  PROPKA not installed. Install with: pip install propka")
+        return None
+
+    if not os.path.exists(pdb_path):
+        log.warning(f"  PDB not found for PROPKA: {pdb_path}")
+        return None
+
+    try:
+        mol = propka_single(pdb_path, write_pka=False)
+    except Exception as exc:
+        log.warning(f"  PROPKA run failed: {exc}")
+        return None
+
+    # Get the first conformation
+    conf_keys = list(mol.conformations.keys())
+    if not conf_keys:
+        log.warning("  PROPKA found no conformations")
+        return None
+
+    conf = mol.conformations[conf_keys[0]]
+    variants: dict = {}
+
+    for group in conf.groups:
+        if not getattr(group, 'titratable', False):
+            continue
+
+        res_type = getattr(group, 'residue_type', None)
+        if res_type is None:
+            continue
+
+        pka = getattr(group, 'pka_value', None)
+        if pka is None:
+            continue
+
+        res_name = getattr(group.atom, 'res_name', '').strip()
+        res_num = getattr(group.atom, 'res_num', None)
+        if res_num is None:
+            continue
+
+        # Determine correct variant based on pKa vs pH
+        variant_map = _PROPKA_VARIANT_MAP.get(res_type)
+        if variant_map is None:
+            continue
+
+        protonated, deprotonated = variant_map
+
+        if pka > pH:
+            desired = protonated
+        else:
+            desired = deprotonated
+
+        # Only add if different from default at this pH
+        # Default: most basic residues are protonated, most acidic are deprotonated
+        is_basic = res_type in ("LYS", "ARG", "HIS")
+        is_acidic = res_type in ("ASP", "GLU")
+        default_protonated = is_basic  # basic residues default to protonated at pH 7.4
+
+        if (desired == protonated) != default_protonated:
+            variants[(res_name, res_num)] = desired
+            log.info(
+                f"  PROPKA: {res_name}{res_num} ({res_type}) pKa={pka:.2f} "
+                f"→ variant {desired} (non-default)"
+            )
+        elif res_type in ("LYS", "SER") and res_num in (403, 406):
+            # Always log key active-site residues for verification
+            log.info(
+                f"  PROPKA: {res_name}{res_num} ({res_type}) pKa={pka:.2f} "
+                f"→ variant {desired} (default)"
+            )
+
+    return variants
+
+
+def build_openmm_variant_list(
+    topology,
+    propka_variants: dict,
+) -> Optional[list]:
+    """
+    Convert PROPKA variants dict to a list suitable for
+    ``Modeller.addHydrogens(variants=...)``.
+
+    The list is indexed by residue index (0-based) matching the OpenMM
+    topology's residue order. Each element is either ``None`` (auto) or a
+    variant string.
+    """
+    if propka_variants is None:
+        return None
+
+    n_residues = topology.getNumResidues()
+    variant_list = [None] * n_residues
+
+    for res_idx in range(n_residues):
+        residue = topology.getResidue(res_idx)
+        key = (residue.name, int(residue.id))
+        if key in propka_variants:
+            variant_list[res_idx] = propka_variants[key]
+
+    return variant_list
+
 
 def _extract_native_ligand_from_holo(
     holo_pdb_path: str,

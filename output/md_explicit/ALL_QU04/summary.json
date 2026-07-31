@@ -3,43 +3,24 @@
   "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
   "success": false,
   "error": null,
-  "minimization": {
-    "initial_energy_kcal": -930233.0,
-    "final_energy_kcal": -1460266.5,
-    "ligand_rmsd_A": 0.066,
-    "success": true
-  },
-  "equilibration": {
-    "nvt_duration_ps": 10,
-    "ligand_rmsd_mean_A": 2.064,
-    "ligand_rmsd_std_A": 0.364,
-    "success": true
-  },
-  "production": {
-    "npt_duration_ns": 0.1,
-    "n_frames": 20,
-    "ligand_rmsd_mean_A": 6.576,
-    "ligand_rmsd_std_A": 1.23,
-    "ligand_rmsd_max_A": 8.776,
-    "hbond_occupancy": {
-      "SER403": {
-        "occupancy": 0.0,
-        "mean_distance_A": null,
-        "min_distance_A": null
-      },
-      "LYS406": {
-        "occupancy": 0.0,
-        "mean_distance_A": null,
-        "min_distance_A": null
-      },
-      "TYR446": {
-        "occupancy": 0.0,
-        "mean_distance_A": null,
-        "min_distance_A": null
-      }
-    },
-    "pocket_volume_mean_A3": 4475.0,
-    "pocket_volume_std_A3": 143.2,
-    "success": true
-  }
+  "n_replicas": 1,
+  "npt_duration_ns": 2,
+  "replicas": [
+    {
+      "replica": 0,
+      "compound_id": "ALL_QU04",
+      "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
+      "success": false,
+      "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
+      "minimization": {},
+      "equilibration": {},
+      "production": {},
+      "stability_class": null
+    }
+  ],
+  "stability_classes": [
+    null
+  ],
+  "consensus_stability": "Not Validated",
+  "validated": false
 }

@@ -3,43 +3,24 @@
   "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
   "success": false,
   "error": null,
-  "minimization": {
-    "initial_energy_kcal": -942754.6,
-    "final_energy_kcal": -1462291.9,
-    "ligand_rmsd_A": 0.051,
-    "success": true
-  },
-  "equilibration": {
-    "nvt_duration_ps": 10,
-    "ligand_rmsd_mean_A": 2.699,
-    "ligand_rmsd_std_A": 0.924,
-    "success": true
-  },
-  "production": {
-    "npt_duration_ns": 0.1,
-    "n_frames": 20,
-    "ligand_rmsd_mean_A": 5.318,
-    "ligand_rmsd_std_A": 1.99,
-    "ligand_rmsd_max_A": 8.508,
-    "hbond_occupancy": {
-      "SER403": {
-        "occupancy": 0.0,
-        "mean_distance_A": null,
-        "min_distance_A": null
-      },
-      "LYS406": {
-        "occupancy": 0.0,
-        "mean_distance_A": null,
-        "min_distance_A": null
-      },
-      "TYR446": {
-        "occupancy": 0.0,
-        "mean_distance_A": null,
-        "min_distance_A": null
-      }
-    },
-    "pocket_volume_mean_A3": 4468.0,
-    "pocket_volume_std_A3": 178.6,
-    "success": true
-  }
+  "n_replicas": 1,
+  "npt_duration_ns": 2,
+  "replicas": [
+    {
+      "replica": 0,
+      "compound_id": "SEED_01150",
+      "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
+      "success": false,
+      "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
+      "minimization": {},
+      "equilibration": {},
+      "production": {},
+      "stability_class": null
+    }
+  ],
+  "stability_classes": [
+    null
+  ],
+  "consensus_stability": "Not Validated",
+  "validated": false
 }

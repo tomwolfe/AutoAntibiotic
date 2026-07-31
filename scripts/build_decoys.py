@@ -52,7 +52,7 @@ def read_actives(path):
 
 
 def select_property_matched(candidates, active_mols, n=150):
-    tol = (0.15, 0.7, 0.20, 1, 2, 3)
+    tol = (0.10, 0.5, 0.15, 1, 1, 2)
     aprops = [_props(m) for m in active_mols]
     chosen = []
     seen = set()
@@ -150,7 +150,7 @@ def generate_diverse_pool(target_size=2000):
         return pool
 
     rng = random.Random(7)
-    max_passes = 5
+    max_passes = 10
     for _pass in range(max_passes):
         if len(pool) >= target_size:
             break
@@ -204,7 +204,7 @@ def main():
             active_mols.append(m)
     log.info(f"  Valid active mols: {len(active_mols)}")
 
-    pool = generate_diverse_pool(target_size=3000)
+    pool = generate_diverse_pool(target_size=10000)
     if len(pool) < 200:
         log.warning(f"Pool too small ({len(pool)}); cannot generate enough decoys.")
         pool = pool

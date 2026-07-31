@@ -2687,6 +2687,48 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             log.warning(f"  ⚠  Library refinement failed: {exc}")
         log.info("─── Phase 3.5 complete ───")
 
+    # ── Phase 3.6: Induced-Fit Docking (IFD) refinement for top hits ──
+    if deps.get("USE_VINA"):
+        log.info("─── Phase 3.6: Induced-Fit Docking Refinement ───")
+        try:
+            from utils.docking import dock_compound_induced_fit, _parse_pdbqt_heavy_coords
+            ifd_targets = sorted(
+                [r for r in top10 if r.pb2pa_active_energy is not None],
+                key=lambda r: r.pb2pa_active_energy,
+            )[:20]
+            pb2pa = targets.get("PBP2a", {})
+            receptor_pdb = pb2pa.get("cleaned_pdb")
+            active_center = pb2pa.get("active_center")
+            active_box = _auto_box_size(
+                receptor_pdb, active_center, ACTIVE_BOX_SIZE,
+                min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+            ) if active_center is not None else ACTIVE_BOX_SIZE
+
+            if receptor_pdb and active_center is not None:
+                n_ifd_success = 0
+                for rec in ifd_targets:
+                    pose_pdbqt = getattr(rec, "active_docked_pdbqt", None)
+                    if pose_pdbqt is None or not os.path.exists(pose_pdbqt):
+                        continue
+                    ifd_energy, ifd_pose = dock_compound_induced_fit(
+                        rec, receptor_pdb, active_center, active_box,
+                        work_dir, rigid_pose_pdbqt=pose_pdbqt, tag="ifd",
+                    )
+                    if ifd_energy is not None:
+                        rec.ifd_energy = ifd_energy
+                        rec.ifd_pose_pdbqt = ifd_pose
+                        n_ifd_success += 1
+                        log.info(f"    {rec.compound_id}: rigid={rec.pb2pa_active_energy:.2f} → IFD={ifd_energy:.2f} kcal/mol")
+                    else:
+                        rec.ifd_energy = None
+                        rec.ifd_pose_pdbqt = None
+                log.info(f"  IFD completed for {n_ifd_success}/{len(ifd_targets)} candidates")
+            else:
+                log.warning("  Skipping IFD: receptor PDB or active center unavailable")
+        except Exception as exc:
+            log.warning(f"  ⚠  IFD refinement failed: {exc}")
+        log.info("─── Phase 3.6 complete ───")
+
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
 

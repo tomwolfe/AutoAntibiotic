@@ -1,237 +1,96 @@
 {
-  "n_candidates": 5,
-  "n_succeeded": 5,
+  "n_candidates": 3,
+  "n_succeeded": 0,
+  "n_validated": 0,
   "parameters": {
     "solvent": "TIP3P",
-    "npt_duration_ns": 0.1,
+    "padding_A": 10.0,
+    "nacl_concentration_M": 0.15,
+    "n_replicas": 1,
+    "npt_duration_ns": 2,
+    "timestep_ps": 0.002,
     "force_field_protein": "amber14-all",
-    "force_field_ligand": "openff-2.0.0"
+    "force_field_ligand": "openff-2.0.0",
+    "water_model": "tip3p"
   },
   "candidates": [
     {
-      "compound_id": "ALL_QU05",
-      "smiles": "O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1",
-      "success": true,
-      "error": null,
-      "minimization": {
-        "initial_energy_kcal": -909720.7,
-        "final_energy_kcal": -1564772.3,
-        "ligand_rmsd_A": 0.223,
-        "success": true
-      },
-      "equilibration": {
-        "nvt_duration_ps": 10,
-        "ligand_rmsd_mean_A": 2.369,
-        "ligand_rmsd_std_A": 0.725,
-        "success": true
-      },
-      "production": {
-        "npt_duration_ns": 0.1,
-        "n_frames": 20,
-        "ligand_rmsd_mean_A": 5.352,
-        "ligand_rmsd_std_A": 1.034,
-        "ligand_rmsd_max_A": 7.371,
-        "hbond_occupancy": {
-          "SER403": {
-            "occupancy": 0.4,
-            "mean_distance_A": 3.0,
-            "min_distance_A": 2.8
-          },
-          "LYS406": {
-            "occupancy": 0.35,
-            "mean_distance_A": 3.1,
-            "min_distance_A": 2.9
-          },
-          "TYR446": {
-            "occupancy": 0.3,
-            "mean_distance_A": 3.3,
-            "min_distance_A": 3.1
-          }
-        },
-        "pocket_volume_mean_A3": 4590.0,
-        "pocket_volume_std_A3": 141.8,
-        "success": true
-      }
-    },
-    {
-      "compound_id": "BRICS_01163",
-      "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)c2ccccc12",
-      "success": true,
-      "error": null,
-      "minimization": {
-        "initial_energy_kcal": -918895.2,
-        "final_energy_kcal": -1487967.5,
-        "ligand_rmsd_A": 0.055,
-        "success": true
-      },
-      "equilibration": {
-        "nvt_duration_ps": 10,
-        "ligand_rmsd_mean_A": 1.542,
-        "ligand_rmsd_std_A": 0.562,
-        "success": true
-      },
-      "production": {
-        "npt_duration_ns": 0.1,
-        "n_frames": 20,
-        "ligand_rmsd_mean_A": 6.231,
-        "ligand_rmsd_std_A": 2.216,
-        "ligand_rmsd_max_A": 9.033,
-        "hbond_occupancy": {
-          "SER403": {
-            "occupancy": 0.5,
-            "mean_distance_A": 2.7,
-            "min_distance_A": 2.5
-          },
-          "LYS406": {
-            "occupancy": 0.4,
-            "mean_distance_A": 3.0,
-            "min_distance_A": 2.8
-          },
-          "TYR446": {
-            "occupancy": 0.15,
-            "mean_distance_A": 3.7,
-            "min_distance_A": 3.5
-          }
-        },
-        "pocket_volume_mean_A3": 4435.0,
-        "pocket_volume_std_A3": 171.7,
-        "success": true
-      }
-    },
-    {
       "compound_id": "BRICS_0022",
       "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-      "success": true,
+      "success": false,
       "error": null,
-      "minimization": {
-        "initial_energy_kcal": -942198.9,
-        "final_energy_kcal": -1578954.3,
-        "ligand_rmsd_A": 0.378,
-        "success": true
-      },
-      "equilibration": {
-        "nvt_duration_ps": 10,
-        "ligand_rmsd_mean_A": 1.976,
-        "ligand_rmsd_std_A": 0.423,
-        "success": true
-      },
-      "production": {
-        "npt_duration_ns": 0.1,
-        "n_frames": 20,
-        "ligand_rmsd_mean_A": 5.073,
-        "ligand_rmsd_std_A": 1.285,
-        "ligand_rmsd_max_A": 6.873,
-        "hbond_occupancy": {
-          "SER403": {
-            "occupancy": 0.75,
-            "mean_distance_A": 2.2,
-            "min_distance_A": 2.0
-          },
-          "LYS406": {
-            "occupancy": 0.6,
-            "mean_distance_A": 2.6,
-            "min_distance_A": 2.4
-          },
-          "TYR446": {
-            "occupancy": 0.65,
-            "mean_distance_A": 2.4,
-            "min_distance_A": 2.2
-          }
-        },
-        "pocket_volume_mean_A3": 4520.0,
-        "pocket_volume_std_A3": 133.9,
-        "success": true
-      }
+      "n_replicas": 1,
+      "npt_duration_ns": 2,
+      "replicas": [
+        {
+          "replica": 0,
+          "compound_id": "BRICS_0022",
+          "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
+          "success": false,
+          "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
+          "minimization": {},
+          "equilibration": {},
+          "production": {},
+          "stability_class": null
+        }
+      ],
+      "stability_classes": [
+        null
+      ],
+      "consensus_stability": "Not Validated",
+      "validated": false
     },
     {
       "compound_id": "ALL_QU04",
       "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
-      "success": true,
+      "success": false,
       "error": null,
-      "minimization": {
-        "initial_energy_kcal": -930233.0,
-        "final_energy_kcal": -1460266.5,
-        "ligand_rmsd_A": 0.066,
-        "success": true
-      },
-      "equilibration": {
-        "nvt_duration_ps": 10,
-        "ligand_rmsd_mean_A": 2.064,
-        "ligand_rmsd_std_A": 0.364,
-        "success": true
-      },
-      "production": {
-        "npt_duration_ns": 0.1,
-        "n_frames": 20,
-        "ligand_rmsd_mean_A": 6.576,
-        "ligand_rmsd_std_A": 1.23,
-        "ligand_rmsd_max_A": 8.776,
-        "hbond_occupancy": {
-          "SER403": {
-            "occupancy": 0.45,
-            "mean_distance_A": 3.5,
-            "min_distance_A": 3.3
-          },
-          "LYS406": {
-            "occupancy": 0.55,
-            "mean_distance_A": 2.6,
-            "min_distance_A": 2.4
-          },
-          "TYR446": {
-            "occupancy": 0.7,
-            "mean_distance_A": 1.9,
-            "min_distance_A": 1.7
-          }
-        },
-        "pocket_volume_mean_A3": 4475.0,
-        "pocket_volume_std_A3": 143.2,
-        "success": true
-      }
+      "n_replicas": 1,
+      "npt_duration_ns": 2,
+      "replicas": [
+        {
+          "replica": 0,
+          "compound_id": "ALL_QU04",
+          "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
+          "success": false,
+          "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
+          "minimization": {},
+          "equilibration": {},
+          "production": {},
+          "stability_class": null
+        }
+      ],
+      "stability_classes": [
+        null
+      ],
+      "consensus_stability": "Not Validated",
+      "validated": false
     },
     {
       "compound_id": "SEED_01150",
       "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
-      "success": true,
+      "success": false,
       "error": null,
-      "minimization": {
-        "initial_energy_kcal": -942754.6,
-        "final_energy_kcal": -1462291.9,
-        "ligand_rmsd_A": 0.051,
-        "success": true
-      },
-      "equilibration": {
-        "nvt_duration_ps": 10,
-        "ligand_rmsd_mean_A": 2.699,
-        "ligand_rmsd_std_A": 0.924,
-        "success": true
-      },
-      "production": {
-        "npt_duration_ns": 0.1,
-        "n_frames": 20,
-        "ligand_rmsd_mean_A": 5.318,
-        "ligand_rmsd_std_A": 1.99,
-        "ligand_rmsd_max_A": 8.508,
-        "hbond_occupancy": {
-          "SER403": {
-            "occupancy": 0.45,
-            "mean_distance_A": 2.9,
-            "min_distance_A": 2.7
-          },
-          "LYS406": {
-            "occupancy": 0.35,
-            "mean_distance_A": 3.2,
-            "min_distance_A": 3.0
-          },
-          "TYR446": {
-            "occupancy": 0.3,
-            "mean_distance_A": 3.4,
-            "min_distance_A": 3.2
-          }
-        },
-        "pocket_volume_mean_A3": 4468.0,
-        "pocket_volume_std_A3": 178.6,
-        "success": true
-      }
+      "n_replicas": 1,
+      "npt_duration_ns": 2,
+      "replicas": [
+        {
+          "replica": 0,
+          "compound_id": "SEED_01150",
+          "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
+          "success": false,
+          "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
+          "minimization": {},
+          "equilibration": {},
+          "production": {},
+          "stability_class": null
+        }
+      ],
+      "stability_classes": [
+        null
+      ],
+      "consensus_stability": "Not Validated",
+      "validated": false
     }
   ]
 }

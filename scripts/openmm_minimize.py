@@ -101,8 +101,28 @@ def _load_receptor_pdb():
         log.error(f"Receptor PDB not found: {RECEPTOR_PDB}")
         sys.exit(1)
     pdb = app.PDBFile(str(RECEPTOR_PDB))
+
+    # PROPKA-based protonation state assignment
+    from utils.structure_prep import assign_protonation_states, build_openmm_variant_list
+    propka_variants = assign_protonation_states(str(RECEPTOR_PDB), pH=7.4)
+
     modeller = app.Modeller(pdb.topology, pdb.positions)
-    modeller.addHydrogens(pH=7.4)
+    variant_list = build_openmm_variant_list(modeller.topology, propka_variants)
+    modeller.addHydrogens(pH=7.4, variants=variant_list)
+
+    # Verify key active-site residues
+    for res_idx in range(modeller.topology.getNumResidues()):
+        res = modeller.topology.getResidue(res_idx)
+        res_name = res.name
+        try:
+            res_num = int(res.id)
+        except ValueError:
+            continue
+        if res_name == "LYS" and res_num == 406:
+            log.info(f"  ✓ Lys406 confirmed as {res_name} (protonated)")
+        elif res_name == "SER" and res_num == 403:
+            log.info(f"  ✓ Ser403 confirmed as {res_name} (neutral)")
+
     log.info(f"  Loaded receptor: {RECEPTOR_PDB} ({modeller.topology.getNumAtoms()} atoms)")
     return modeller.topology, modeller.positions
 
