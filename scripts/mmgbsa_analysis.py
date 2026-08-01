@@ -372,7 +372,10 @@ def main():
                         try:
                             with open(cs_path) as f:
                                 cs = json.load(f)
-                            row["MD_Stability"] = cs.get("consensus_stability", "")
+                            row["MD_Stability"] = cs.get(
+                                "stability_class_d3",
+                                cs.get("consensus_stability", ""),
+                            ) or ""
                         except Exception:
                             row["MD_Stability"] = ""
                     rows.append(row)

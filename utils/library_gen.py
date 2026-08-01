@@ -67,6 +67,8 @@ class CompoundRecord:
     suspect_score: bool = False
     si_provisional: Optional[float] = None
     mmff_sa_score: Optional[float] = None
+    ifd_energy: Optional[float] = None
+    ifd_pose_pdbqt: Optional[str] = None
 
 
 SEED_SCAFFOLDS = [

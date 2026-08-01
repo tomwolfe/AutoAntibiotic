@@ -69,6 +69,70 @@ CYP450_INHIBITOR_SMARTS = [
 MD_STABILITY_MAX_RMSD = 3.0  # mean ligand RMSD threshold (Å)
 MD_STABILITY_MIN_HBOND = 1.0  # minimum H-bond contacts for any catalytic residue
 
+# 10 ns multi-replica binding-stability criteria (paper §4.x / D3):
+#   "Validated"   — mean ligand RMSD < 3.0 Å over the last 5 ns in >= 2/3
+#                   replicas AND >= 50% H-bond occupancy with Ser403 OG.
+#   "Metastable"  — RMSD 3–5 Å and >= 25% H-bond retention (Ser403 OG).
+#   "Dissociated" — RMSD > 5 Å or zero H-bonds.
+VALIDATED_RMSD_MAX = 3.0          # Å, mean over last 5 ns
+METASTABLE_RMSD_MAX = 5.0         # Å
+VALIDATED_SER403_HBOND_OCC = 0.50  # fraction of frames with Ser403 OG contact
+METASTABLE_SER403_HBOND_OCC = 0.25
+MIN_REPLICAS_FOR_VALIDATED = 2    # out of 3 replicas
+REPLICA_COUNT = 3
+
+
+def classify_md_stability(
+    replicas: list, ligand_rmsd_key: str = "ligand_rmsd_mean_last5ns_A",
+) -> str:
+    """Classify a candidate's binding stability from per-replica MD metrics.
+
+    Each entry of *replicas* is a dict with at least:
+        - ligand_rmsd_mean_last5ns_A (float): mean ligand RMSD over the final
+          5 ns of production, relative to the energy-minimised pose.
+        - ser403_og_hbond_occupancy (float): fraction of production frames in
+          which the ligand stays within H-bond distance of Ser403 OG.
+    Missing replicas or missing metrics are ignored when counting consensus
+    (never count an absent replica as evidence of stability).
+
+    Returns one of:
+        "Validated"   — >= 2/3 replicas with RMSD < 3.0 Å AND Ser403 occupancy
+                        >= 0.50.
+        "Metastable"  — not Validated, but >= 1 replica with RMSD < 5.0 Å AND
+                        Ser403 occupancy >= 0.25.
+        "Dissociated" — all remaining cases (RMSD >= 5.0 Å in >= 2/3 replicas
+                        or zero retained H-bonds).
+    """
+    qualifying = []
+    for rep in replicas or []:
+        if not isinstance(rep, dict):
+            continue
+        rmsd = rep.get(ligand_rmsd_key)
+        occ = rep.get("ser403_og_hbond_occupancy")
+        if rmsd is None or occ is None:
+            continue
+        qualifying.append(rep)
+    n = len(qualifying)
+    if n == 0:
+        return "Dissociated"
+
+    n_validated = sum(
+        1 for rep in qualifying
+        if rep[ligand_rmsd_key] < VALIDATED_RMSD_MAX
+        and rep["ser403_og_hbond_occupancy"] >= VALIDATED_SER403_HBOND_OCC
+    )
+    if n_validated >= MIN_REPLICAS_FOR_VALIDATED:
+        return "Validated"
+
+    n_metastable = sum(
+        1 for rep in qualifying
+        if rep[ligand_rmsd_key] < METASTABLE_RMSD_MAX
+        and rep["ser403_og_hbond_occupancy"] >= METASTABLE_SER403_HBOND_OCC
+    )
+    if n_metastable >= 1:
+        return "Metastable"
+    return "Dissociated"
+
 
 def filter_by_md_stability(record, md_results=None) -> dict:
     """Check if a candidate passes the MD-stability gate.

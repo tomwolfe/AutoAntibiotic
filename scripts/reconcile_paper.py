@@ -53,7 +53,7 @@ print("=" * 60)
 
 print("\n--- Paper body checks ---")
 check("Core RMSD (1.251)", core_rmsd, paper, "paper.tex")
-check("AUC (0.792)", auc, paper, "paper.tex")
+check("AUC (dynamic)", auc, paper, "paper.tex")
 check("EF_1% (8.14)", ef1, paper, "paper.tex")
 
 for r in top5:
@@ -68,7 +68,7 @@ print("\n--- Cover letter checks ---")
 check("Cover letter SI", si_val(rows[0]), cover.replace("\\_", "_"), "cover_letter.tex")
 # LaTeX escapes underscores, so check both escaped and unescaped forms
 check("Cover letter underscore IDs", "ALL_QU04", cover.replace("\\_", "_"), "cover_letter.tex")
-check("Cover letter AUC (0.792)", auc, cover, "cover_letter.tex")
+check("Cover letter AUC (dynamic)", auc, cover, "cover_letter.tex")
 check("Cover letter EF_1% (8.14)", ef1, cover, "cover_letter.tex")
 check("Cover letter SI≥1.5 count", str(n_si_ge_15), cover, "cover_letter.tex")
 

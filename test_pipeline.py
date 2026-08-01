@@ -32,7 +32,7 @@ from discovery_pipeline import (
     analyze_selectivity_and_resistance,
     log,
 )
-from utils.filtering import apply_filters
+from utils.filtering import apply_filters, classify_md_stability
 from utils.library_gen import generate_candidate_library, CompoundRecord
 from utils.docking import _run_vina_docking, _dock_compounds_parallel
 from utils.ligand_prep import LigandPreparator
@@ -2208,6 +2208,103 @@ class TestReportingPhase35:
         # SI < 1.0 ⇒ flagged as high toxicity risk.
         assert bool(df["HIGH_TOXICITY_RISK"].iloc[0]) is True
         assert df["Human_OffTarget_Max_Energy"].iloc[0] == pytest.approx(-2.0)
+
+# ── Test: Reporting adds IFD_Energy column (Phase 3.6) ─────────────────
+
+class TestReportingIFDColumn:
+    """top_candidates.csv must carry an IFD_Energy column that reflects the
+    induced-fit docking energy recorded during Phase 3.6 (N/A when IFD did
+    not run for that candidate)."""
+
+    def _rec(self, ifd_energy=None):
+        return CompoundRecord(
+            compound_id="AA-1", smiles="c1ccccc1",
+            mol=Chem.MolFromSmiles("c1ccccc1"),
+            pb2pa_active_energy=-9.0,
+            human_trypsin_energy=-3.0, human_ces1_energy=-2.0,
+            human_offtarget_max_energy=-2.0,
+            selectivity_index=0.8, selectivity_confidence="High",
+            max_similarity=0.1, passes_lipinski=True, qed_score=0.6,
+            resistance_notes="",
+            ifd_energy=ifd_energy,
+        )
+
+    def test_csv_has_ifd_energy_column(self, tmp_path):
+        rec = self._rec(ifd_energy=-9.87)
+        csv_path = tmp_path / "top_candidates.csv"
+        generate_csv_report(
+            [rec], validation_ok=True, mode="science", redock_rmsd=1.2,
+            csv_report=csv_path, output_dir=tmp_path,
+        )
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        assert "IFD_Energy" in df.columns
+        assert df["IFD_Energy"].iloc[0] == "N/A" or float(df["IFD_Energy"].iloc[0]) == pytest.approx(-9.87)
+
+    def test_ifd_energy_reported_when_present(self, tmp_path):
+        rec = self._rec(ifd_energy=-10.25)
+        csv_path = tmp_path / "top_candidates.csv"
+        generate_csv_report(
+            [rec], validation_ok=True, mode="science", redock_rmsd=1.2,
+            csv_report=csv_path, output_dir=tmp_path,
+        )
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        assert float(df["IFD_Energy"].iloc[0]) == pytest.approx(-10.25)
+
+    def test_ifd_energy_na_when_absent(self, tmp_path):
+        rec = self._rec(ifd_energy=None)
+        csv_path = tmp_path / "top_candidates.csv"
+        generate_csv_report(
+            [rec], validation_ok=True, mode="science", redock_rmsd=1.2,
+            csv_report=csv_path, output_dir=tmp_path,
+        )
+        import pandas as pd
+        df = pd.read_csv(csv_path, keep_default_na=False)
+        assert df["IFD_Energy"].iloc[0] == "N/A"
+
+# ── Test: MD stability classifier (D3 three-tier) ─────────────────────
+
+class TestMDStabilityClassifier:
+    """classify_md_stability must assign Validated / Metastable / Dissociated
+    from the per-replica 10 ns metrics (mean RMSD over last 5 ns + Ser403 OG
+    H-bond occupancy)."""
+
+    def _rep(self, rmsd, occ):
+        return {"ligand_rmsd_mean_last5ns_A": rmsd, "ser403_og_hbond_occupancy": occ}
+
+    def test_validated_requires_two_of_three_stable(self):
+        reps = [self._rep(2.1, 0.6), self._rep(1.8, 0.55), self._rep(2.5, 0.70)]
+        assert classify_md_stability(reps) == "Validated"
+
+    def test_two_stable_one_noise_is_validated(self):
+        reps = [self._rep(2.1, 0.6), self._rep(1.8, 0.55), self._rep(9.0, 0.0)]
+        assert classify_md_stability(reps) == "Validated"
+
+    def test_single_stable_replica_is_metastable(self):
+        reps = [self._rep(2.1, 0.6), self._rep(8.0, 0.0), self._rep(7.5, 0.0)]
+        assert classify_md_stability(reps) == "Metastable"
+
+    def test_marginal_rmsd_with_hbond_is_metastable(self):
+        reps = [self._rep(4.2, 0.30)]
+        assert classify_md_stability(reps) == "Metastable"
+
+    def test_high_rmsd_is_dissociated(self):
+        reps = [self._rep(6.0, 0.0), self._rep(7.0, 0.1)]
+        assert classify_md_stability(reps) == "Dissociated"
+
+    def test_low_hbond_occupancy_is_dissociated(self):
+        reps = [self._rep(2.0, 0.1), self._rep(2.5, 0.2), self._rep(2.8, 0.15)]
+        assert classify_md_stability(reps) == "Dissociated"
+
+    def test_empty_input_is_dissociated(self):
+        assert classify_md_stability([]) == "Dissociated"
+        assert classify_md_stability(None) == "Dissociated"
+
+    def test_missing_metrics_not_counted(self):
+        reps = [{"ligand_rmsd_mean_last5ns_A": 2.0, "ser403_og_hbond_occupancy": 0.6},
+                {"ligand_rmsd_mean_last5ns_A": 9.0, "ser403_og_hbond_occupancy": 0.0}]
+        assert classify_md_stability(reps) == "Metastable"
 
 # ── Test: enrichment_validation.py uses only independent labels ──
 

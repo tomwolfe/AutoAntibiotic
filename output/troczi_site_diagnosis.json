@@ -1,0 +1,99 @@
+{
+  "n_actives": 10,
+  "n_decoys": 150,
+  "active_site": {
+    "center": [
+      23.950722164577908,
+      27.871462927924266,
+      88.53164785879629
+    ],
+    "box": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "auc": 0.23,
+    "ef_1pct": 0.0,
+    "ef_5pct": 0.0
+  },
+  "allosteric_site": {
+    "center": [
+      24.975481779487044,
+      30.93666670057509,
+      28.86983309851752
+    ],
+    "box": [
+      18.0,
+      18.0,
+      18.0
+    ],
+    "auc": 0.144,
+    "ef_1pct": 0.0,
+    "ef_5pct": 0.0
+  },
+  "delta_auc_allosteric_minus_active": -0.086,
+  "hypothesis": "Troczi oxadiazoles are allosteric PBP2a binders; active-site docking measures an off-target pocket.",
+  "hypothesis_supported": false,
+  "allosteric_actives_ranked": [
+    {
+      "compound_id": "ACT_OX09",
+      "allosteric_energy": -7.52,
+      "rank": 102,
+      "active_energy": -7.15
+    },
+    {
+      "compound_id": "ACT_OX08",
+      "allosteric_energy": -7.49,
+      "rank": 106,
+      "active_energy": -8.11
+    },
+    {
+      "compound_id": "ACT_OX01",
+      "allosteric_energy": -7.33,
+      "rank": 120,
+      "active_energy": -6.4
+    },
+    {
+      "compound_id": "ACT_OX02",
+      "allosteric_energy": -7.19,
+      "rank": 127,
+      "active_energy": -6.86
+    },
+    {
+      "compound_id": "LIT_TAN01",
+      "allosteric_energy": -7.17,
+      "rank": 129,
+      "active_energy": -6.42
+    },
+    {
+      "compound_id": "ACT_OX05",
+      "allosteric_energy": -7.0,
+      "rank": 141,
+      "active_energy": -6.49
+    },
+    {
+      "compound_id": "ACT_OX04",
+      "allosteric_energy": -6.75,
+      "rank": 149,
+      "active_energy": -6.68
+    },
+    {
+      "compound_id": "ACT_OX07",
+      "allosteric_energy": -6.64,
+      "rank": 153,
+      "active_energy": -6.59
+    },
+    {
+      "compound_id": "ACT_OX03",
+      "allosteric_energy": -6.54,
+      "rank": 155,
+      "active_energy": -6.4
+    },
+    {
+      "compound_id": "ACT_OX06",
+      "allosteric_energy": -6.53,
+      "rank": 156,
+      "active_energy": -6.8
+    }
+  ]
+}

@@ -24,8 +24,11 @@ Checks:
  20. MM-GBSA dG_bind computed for >= 2 candidates
  21. DUD-E/ChEMBL benchmark results exist
  22. Paper reframed with MD instability as central finding
- 23. verify_success.py exits 0
- 24. paper.tex compiles with xelatex
+ 23. D1: Troczi site diagnosis resolves the active/allosteric AUC discrepancy
+ 24. D2: IFD_Energy column present in top_candidates.csv
+ 25. D3: MD stability classification (D3 classifier) for >= 2 candidates
+ 26. verify_success.py exits 0
+ 27. paper.tex compiles with xelatex
 """
 
 import csv
@@ -257,24 +260,26 @@ def main():
     c(20, "MM-GBSA dG_bind computed for >= 2 candidates", ok,
       f"{mmgbsa_count} candidates with valid MM-GBSA")
 
-    # Criterion 21: DUD-E/ChEMBL benchmark results exist (non-blocking: requires network + compute)
+    # Criterion 21: DUD-E/ChEMBL benchmark results exist (blocking; requires compute)
     dude_path = base / "output" / "dude_benchmark_results.json"
     dude_ok = dude_path.is_file()
     dude_auc = 0.0
+    dude_n = 0
     if dude_ok:
         try:
             with open(dude_path) as f:
                 dude_data = json.load(f)
             dude_auc = dude_data.get("auc", 0.0)
+            dude_n = dude_data.get("n_compounds", 0)
         except Exception:
             pass
     ok = dude_ok and dude_auc >= 0.7
     if not dude_ok:
-        print(f"  [INFO] Criterion 21. DUD-E/ChEMBL benchmark: not yet run (run: python scripts/enrichment_validation.py)")
-        criteria_results.append(True)  # non-blocking
+        print(f"  [INFO] Criterion 21. DUD-E/ChEMBL benchmark: not yet run (run: python scripts/dude_benchmark.py)")
+        criteria_results.append(False)
     else:
         c(21, "DUD-E/ChEMBL benchmark AUC >= 0.70", ok,
-          f"AUC={dude_auc:.3f}" if dude_ok else "MISSING")
+          f"AUC={dude_auc:.3f} (N={dude_n})")
 
     # Criterion 22: Paper reframed with MD instability as central finding
     reframe_ok = (
@@ -287,12 +292,75 @@ def main():
     c(22, "Paper reframed with MD instability as central finding", ok,
       "Reframed" if reframe_ok else "Needs reframing")
 
+    # Criterion 23: D1 — Troczi site diagnosis resolves the active-site AUC
+    # discrepancy (output/troczi_site_diagnosis.json exists and reports both
+    # the active-site and allosteric-site enrichments).
+    troczi_diag_path = base / "output" / "troczi_site_diagnosis.json"
+    troczi_diag_ok = False
+    troczi_diag_detail = "MISSING — run scripts/troczi_site_diagnosis.py"
+    if troczi_diag_path.is_file():
+        try:
+            with open(troczi_diag_path) as f:
+                tdiag = json.load(f)
+            act_auc = tdiag.get("active_site", {}).get("auc", 0.0)
+            allo_auc = tdiag.get("allosteric_site", {}).get("auc", 0.0)
+            supported = tdiag.get("hypothesis_supported", False)
+            troczi_diag_ok = (
+                act_auc > 0 and allo_auc > 0
+                and ("hypothesis_supported" in tdiag)
+            )
+            troczi_diag_detail = (
+                f"active AUC={act_auc:.3f}, allosteric AUC={allo_auc:.3f}, "
+                f"hypothesis_supported={supported}"
+            )
+        except Exception as exc:
+            troczi_diag_detail = f"parse error: {exc}"
+    ok = troczi_diag_ok
+    c(23, "D1: Troczi site diagnosis (active vs allosteric AUC)", ok,
+      troczi_diag_detail)
+
+    # Criterion 24: D2 — IFD_Energy column present in top_candidates.csv
+    ifd_ok = "IFD_Energy" in csv_header
+    n_ifd_vals = 0
+    if ifd_ok:
+        n_ifd_vals = sum(
+            1 for r in csv_rows
+            if r.get("IFD_Energy", "").strip() not in ("", "N/A")
+        )
+    ok = ifd_ok
+    c(24, "D2: IFD_Energy column in top_candidates.csv", ok,
+      f"{n_ifd_vals} candidates with IFD energies" if ifd_ok else "MISSING column")
+
+    # Criterion 25: D3 — MD stability classification present for >= 2 candidates
+    # (three-tier D3 classifier: Validated / Metastable / Dissociated)
+    d3_ok = False
+    d3_detail = "MISSING — run scripts/explicit_solvent_md.py (full mode)"
+    d3_n_candidates = 0
+    d3_n_classes = 0
+    if md_ok:
+        try:
+            with open(md_explicit_path) as f:
+                md_data = json.load(f)
+            d3_cands = md_data.get("candidates", [])
+            d3_n_candidates = len(d3_cands)
+            d3_n_classes = sum(
+                1 for c in d3_cands
+                if c.get("stability_class_d3") in ("Validated", "Metastable", "Dissociated")
+            )
+            d3_ok = d3_n_classes >= 2
+            d3_detail = f"{d3_n_candidates} candidates, {d3_n_classes} with D3 class"
+        except Exception:
+            pass
+    ok = d3_ok
+    c(25, "D3: MD stability classification (D3) for >= 2 candidates", ok,
+      d3_detail)
+
     all_pass = all(criteria_results)
-    c(23, "verify_success.py exits 0", all_pass,
+    c(26, "verify_success.py exits 0", all_pass,
       "PASS" if all_pass else "Self-check (criteria failed above)")
 
-    ok_24 = pdf.exists() and pdf.stat().st_size > 0
-    c(24, "paper.tex compiles with xelatex", ok_24, f"PDF={pdf.stat().st_size}B")
+    ok_27 = pdf.exists() and pdf.stat().st_size > 0
+    c(27, "paper.tex compiles with xelatex", ok_27, f"PDF={pdf.stat().st_size}B")
 
     n_pass = sum(1 for i, ok in enumerate(criteria_results, 1) if ok)
     print("\n" + "=" * 60)

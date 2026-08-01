@@ -359,6 +359,10 @@ def generate_csv_report(
                 f"{rec.mmff_sa_score:.2f}" if getattr(rec, "mmff_sa_score", None) is not None
                 else "N/A"
             ),
+            "IFD_Energy": (
+                f"{rec.ifd_energy:.2f}" if getattr(rec, "ifd_energy", None) is not None
+                else "N/A"
+            ),
             "SI_Tier": rec.report_tier or si_tier(rec.selectivity_index),
             "Selectivity_Index_TwoTarget": (
                 f"{rec.selectivity_index:.2f}" if rec.selectivity_index is not None

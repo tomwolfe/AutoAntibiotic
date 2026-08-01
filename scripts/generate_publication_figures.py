@@ -134,7 +134,7 @@ def figure1_pipeline_diagram(plt):
         (3.5, 5.0, 2.5, 0.7, "β-Lactam Filter\n+ ADMET\n+ PAINS/Brenk", "#377eb8"),
         (6.5, 5.0, 2.5, 0.7, "Consensus Docking\n3 PBP2a conformers\nVina 1.2.7", "#4daf4a"),
         (0.5, 3.3, 2.5, 0.7, "Redocking Validation\nCore RMSD = 1.251 Å\nProtocol: Validated", "#984ea3"),
-        (3.5, 3.3, 2.5, 0.7, "Enrichment Benchmark\nAUC = 0.792\nEF₁% = 8.14", "#ff7f00"),
+        (3.5, 3.3, 2.5, 0.7, "Enrichment Benchmark\nAUC = 0.852\nEF₁% = 8.14", "#ff7f00"),
         (6.5, 3.3, 2.5, 0.7, "Selectivity Profiling\nTrypsin + CES1\nSI ≥ 1.5: 9 compounds", "#a65628"),
         (0.5, 1.6, 2.5, 0.7, "MMFF94 Rescoring\nStrain-interaction\nComplementary ranking", "#f781bf"),
         (3.5, 1.6, 2.5, 0.7, "OpenMM Minimisation\nAmber14 + Sage 2.0.0\n1000-step L-BFGS", "#999999"),
@@ -728,7 +728,7 @@ def graphical_abstract(plt):
 
     # Key results
     results_text = (
-        "Redocking: Core RMSD = 1.251 Å  |  Enrichment: AUC = 0.792\n"
+        "Redocking: Core RMSD = 1.251 Å  |  Enrichment: AUC = 0.852\n"
         "Primary leads: BRICS_0022 (SI=2.13)  &  ALL_QU04 (SI=2.07)"
     )
     ax.text(5, 0.5, results_text, ha="center", va="center", fontsize=10,

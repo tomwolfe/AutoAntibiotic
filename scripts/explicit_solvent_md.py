@@ -84,7 +84,8 @@ SOLVENT_PADDING = 10.0  # Å
 NACL_CONCENTRATION = 0.150  # M
 TIMESTEP_PS = 0.002
 REPORT_INTERVAL_STEPS = 5000  # every 10 ps for trajectory
-
+# Frames per nanosecond: 5000 steps * 0.002 ps / 1000 ps = 1000 frames/ns.
+DT_NS = 0.002
 
 def _check_deps():
     try:
@@ -662,6 +663,17 @@ def _run_replica(
         stability = _classify_stability(lig_rmsd_array, last_n_ns=5.0)
         result["stability_class"] = stability
 
+        # Per-replica 10 ns stability metrics (consumed by the D3 classifier in
+        # utils.filtering.classify_md_stability): mean ligand RMSD over the last
+        # 5 ns and the Ser403 OG H-bond occupancy.
+        last5_mean_rmsd = None
+        if len(lig_rmsd_array) > 1:
+            n_last5 = max(1, int(5.0 / (DT_NS * REPORT_INTERVAL_STEPS)))
+            last5_mean_rmsd = float(np.mean(lig_rmsd_array[-n_last5:]))
+        ser403_occ = hb_occ.get("SER403_OG", {}).get("occupancy", 0.0)
+        result["ligand_rmsd_mean_last5ns_A"] = last5_mean_rmsd
+        result["ser403_og_hbond_occupancy"] = float(ser403_occ)
+
         prod_energies_array = np.array(prod_energies)
 
         result["production"] = {
@@ -737,6 +749,19 @@ def run_explicit_md(
     result["validated"] = stable_or_meta >= max(2, n_replicas // 2 + 1)
     result["consensus_stability"] = "Validated" if result["validated"] else "Not Validated"
     result["success"] = any(r["success"] for r in result["replicas"])
+
+    # D3 three-tier classification from the 10 ns per-replica metrics. This is
+    # the primary binding-stability call used in the paper (§4.x) and by
+    # utils.filtering.classify_md_stability. The legacy
+    # "Stable/Metastable/Unstable" replica classes above are retained for
+    # backwards compatibility.
+    try:
+        from utils.filtering import classify_md_stability
+        d3_class = classify_md_stability(result["replicas"])
+        result["stability_class_d3"] = d3_class
+    except Exception as exc:
+        result["stability_class_d3"] = "Dissociated"
+        log.warning(f"  D3 classifier unavailable ({exc}); defaulting to Dissociated")
 
     # Write per-candidate summary
     summary_path = candidate_dir / "summary.json"

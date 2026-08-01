@@ -2,6 +2,44 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [6.0.0] — IFD auto-run; MD stability classifier; Troczi site diagnosis; DUD-E benchmark
+
+### Added
+- **Induced-fit docking auto-run (D2, `discovery_pipeline.py` Phase 3.6)** — In
+  science mode the pipeline now automatically refines the top-50 candidates by
+  PBP2a active-site energy with `dock_compound_induced_fit()` (flexible residues
+  within 5.0 Å of the rigid pose, which includes Ser403/Lys406/Tyr446). Poses
+  are persisted to `output/ifd_poses/<CID>/ifd_pose.pdbqt` with `ifd_info.json`;
+  `CompoundRecord.ifd_energy` / `ifd_pose_pdbqt` fields and an `IFD_Energy`
+  CSV column were added. Skipped in CI mode for speed.
+- **D3 three-tier MD stability classifier (`utils/filtering.py:classify_md_stability`)** —
+  classifies candidates as `Validated` (≥2/3 replicas mean ligand RMSD < 3.0 Å
+  over the last 5 ns AND Ser403 OG H-bond occupancy ≥ 0.50), `Metastable`
+  (≥1 replica RMSD < 5.0 Å AND occupancy ≥ 0.25), or `Dissociated`. Wired into
+  `scripts/explicit_solvent_md.py` (new per-replica metrics
+  `ligand_rmsd_mean_last5ns_A` and `ser403_og_hbond_occupancy`, consensus
+  `stability_class_d3`) and consumed by `scripts/mmgbsa_analysis.py` for the
+  `MD_Stability` column.
+- **Troczi site-specific diagnosis (D1, `scripts/troczi_site_diagnosis.py`)** —
+  docks the 10 Troczi oxadiazole/quinazolinone actives + 150 decoys against both
+  the active-site and allosteric grids using the identical protocol, reporting
+  AUC/EF at each site and testing the hypothesis that the Troczi actives are
+  allosteric PBP2a binders. Writes `output/troczi_site_diagnosis.json` and
+  `output/troczi_site_comparison.png`.
+- **DUD-E style benchmark (D4, `scripts/dude_benchmark.py`)** — docks the 21
+  known PBP2a actives plus 50 property-matched decoys per active (MW ±10%,
+  logP ±0.5, HBD/HBA ±1, rotatable bonds ±2, Tanimoto < 0.35 to any active)
+  against the PBP2a apo (1VQQ) receptor at exhaustiveness 32. Reports ROC-AUC,
+  BEDROC(α=20), EF_1%/5%/10% to `output/dude_benchmark_results.json`, plus ROC
+  figure and the reproducible decoy set (`output/dude_decoys.csv`).
+- **`verify_success.py` criteria 23–25** for D1 (Troczi diagnosis), D2
+  (`IFD_Energy` column), and D3 (D3 stability classes present for ≥2 candidates);
+  criterion 21 now points to `scripts/dude_benchmark.py`.
+
+### Changed
+- `scripts/mmgbsa_analysis.py` — `MD_Stability` column prefers the new D3
+  three-tier class over the legacy consensus label.
+
 ## [5.6.0] — MMFF94 rescoring fix; CSV ranking; ADMET filters; flexible docking; MD stability gate; paper revision
 
 ### Paper revised
