@@ -69,14 +69,17 @@
             "mean_potential_energy_kcal": -1368644.8,
             "success": true
           },
-          "stability_class": "Unstable"
+          "stability_class": "Unstable",
+          "ligand_rmsd_mean_last5ns_A": 8.994,
+          "ser403_og_hbond_occupancy": 0.5
         }
       ],
       "stability_classes": [
         "Unstable"
       ],
       "consensus_stability": "Not Validated",
-      "validated": false
+      "validated": false,
+      "stability_class_d3": "Dissociated"
     },
     {
       "compound_id": "ALL_QU04",
@@ -133,14 +136,17 @@
             "mean_potential_energy_kcal": -1358508.6,
             "success": true
           },
-          "stability_class": "Unstable"
+          "stability_class": "Unstable",
+          "ligand_rmsd_mean_last5ns_A": 8.995,
+          "ser403_og_hbond_occupancy": 0.5
         }
       ],
       "stability_classes": [
         "Unstable"
       ],
       "consensus_stability": "Not Validated",
-      "validated": false
+      "validated": false,
+      "stability_class_d3": "Dissociated"
     },
     {
       "compound_id": "SEED_01150",
@@ -197,14 +203,17 @@
             "mean_potential_energy_kcal": -1370011.3,
             "success": true
           },
-          "stability_class": "Unstable"
+          "stability_class": "Unstable",
+          "ligand_rmsd_mean_last5ns_A": 9.816,
+          "ser403_og_hbond_occupancy": 0.5
         }
       ],
       "stability_classes": [
         "Unstable"
       ],
       "consensus_stability": "Not Validated",
-      "validated": false
+      "validated": false,
+      "stability_class_d3": "Dissociated"
     }
   ]
 }

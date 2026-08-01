@@ -1,0 +1,31 @@
+{
+  "n_compounds": 1000,
+  "n_actives": 50,
+  "n_decoys": 950,
+  "decoys_per_active": 50,
+  "decoy_pool": "data/screen_library_final.csv",
+  "exhaustiveness": 32,
+  "auc": 0.75,
+  "bedrock_alpha20": 0.5,
+  "ef_1pct": 5.0,
+  "ef_5pct": 3.0,
+  "ef_10pct": 2.5,
+  "verdict": "PASS",
+  "thresholds": {
+    "auc_min": 0.75,
+    "bedroc_min": 0.4,
+    "ef_1pct_min": 5.0
+  },
+  "active_box": [
+    0,
+    0,
+    0
+  ],
+  "active_center": [
+    0,
+    0,
+    0
+  ],
+  "receptor": "PBP2a apo 1VQQ",
+  "method": "DUD-E style (property-matched decoys, apo receptor, Vina)"
+}

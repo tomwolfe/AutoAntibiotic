@@ -61,7 +61,7 @@ MD_OUT = OUT / "md_explicit"
 # CLI defaults
 DEFAULT_N_CANDIDATES = 5
 DEFAULT_N_REPLICAS = 3
-DEFAULT_NPT_NS = 10
+DEFAULT_NPT_NS = 100  # Run at 100 ns for proper MD stability analysis
 QUICK_N_CANDIDATES = 3
 QUICK_N_REPLICAS = 1
 # Quick mode follows the paper's preliminary explicit-solvent protocol:
@@ -668,10 +668,20 @@ def _run_replica(
         # 5 ns and the Ser403 OG H-bond occupancy.
         last5_mean_rmsd = None
         if len(lig_rmsd_array) > 1:
+            # Calculate the number of frames to average over (last 5 ns)
+            # For 0.002 ps timestep, we need 5.0 / 0.002 = 2500 steps per ns
+            # So for 5 ns, we need the last 5 * 1000 = 5000 frames (at 0.002 ps timestep)
             n_last5 = max(1, int(5.0 / (DT_NS * REPORT_INTERVAL_STEPS)))
             last5_mean_rmsd = float(np.mean(lig_rmsd_array[-n_last5:]))
+        else:
+            # If we don't have enough frames, use the mean of all frames
+            last5_mean_rmsd = float(np.mean(lig_rmsd_array)) if len(lig_rmsd_array) > 0 else None
         ser403_occ = hb_occ.get("SER403_OG", {}).get("occupancy", 0.0)
-        result["ligand_rmsd_mean_last5ns_A"] = last5_mean_rmsd
+        # Ensure keys are set for D3 classifier
+        if last5_mean_rmsd is not None:
+            result["ligand_rmsd_mean_last5ns_A"] = last5_mean_rmsd
+        else:
+            result["ligand_rmsd_mean_last5ns_A"] = None
         result["ser403_og_hbond_occupancy"] = float(ser403_occ)
 
         prod_energies_array = np.array(prod_energies)
