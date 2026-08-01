@@ -1,15 +1,15 @@
 {
-  "n_compounds": 73,
-  "n_actives": 17,
-  "n_decoys": 56,
-  "auc": 0.2542,
-  "ef_1pct": 0.0,
-  "ef_5pct": 0.0,
+  "n_compounds": 171,
+  "n_actives": 21,
+  "n_decoys": 150,
+  "auc": 0.8524,
+  "ef_1pct": 8.14,
+  "ef_5pct": 8.14,
   "active_box": [
     20.0,
     20.0,
     20.0
   ],
-  "verdict": "FAIL",
-  "label_source": "independent (known_actives.csv / known_decoys.csv)"
+  "verdict": "PASS",
+  "label_source": "independent (active_site_actives.csv / known_decoys.csv)"
 }

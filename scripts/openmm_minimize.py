@@ -111,8 +111,7 @@ def _load_receptor_pdb():
     modeller.addHydrogens(pH=7.4, variants=variant_list)
 
     # Verify key active-site residues
-    for res_idx in range(modeller.topology.getNumResidues()):
-        res = modeller.topology.getResidue(res_idx)
+    for res in modeller.topology.residues():
         res_name = res.name
         try:
             res_num = int(res.id)

@@ -452,44 +452,49 @@ See figure5_pymol.pml for the full rendering script.
 
 
 def figure6_md_rmsd_timeseries(plt):
-    """Figure 6: MD RMSD time series (from explicit-solvent MD)."""
-    openmm_data = _load_openmm()
-    if not openmm_data:
-        log.warning("  Figure 6: No OpenMM data, skipping")
-        return
+    """Figure 6: MD ligand RMSD time series from explicit-solvent NPT MD."""
+    MD_OUT = OUT / "md_explicit"
+    candidates = sorted(
+        d for d in MD_OUT.iterdir()
+        if d.is_dir() and d.name.startswith(("BRICS_", "ALL_", "SEED_"))
+    )
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
     colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00"]
     has_data = False
 
-    for idx, entry in enumerate(openmm_data):
-        cid = entry.get("compound_id", f"Compound {idx}")
-        md = entry.get("md", {})
-        if md.get("success"):
-            mean = md.get("ligand_rmsd_mean_A")
-            std = md.get("ligand_rmsd_std_A")
-            if mean is not None:
-                # Generate a synthetic trajectory
-                np.random.seed(hash(cid) % 10000)
-                n_frames = 200
-                t = np.linspace(0, md.get("nvt_duration_ps", 20), n_frames)
-                rmsd = np.random.normal(mean, std / 2, n_frames)
-                rmsd = np.clip(rmsd, 0, mean + 3 * std)
-                rmsd = np.convolve(rmsd, np.ones(5) / 5, mode="same")
-
-                ax.plot(t, rmsd, color=colors[idx % len(colors)], lw=1.5,
-                        label=f"{cid} ({mean:.1f}±{std:.1f} Å)")
-                has_data = True
+    for idx, cand_dir in enumerate(candidates):
+        cid = cand_dir.name
+        summary_path = cand_dir / "summary.json"
+        if not summary_path.is_file():
+            continue
+        with open(summary_path) as f:
+            cs = json.load(f)
+        if not cs.get("success"):
+            continue
+        rmsd_path = cand_dir / "replica_0" / "ligand_rmsd.npy"
+        if not rmsd_path.is_file():
+            continue
+        rmsd = np.load(str(rmsd_path))
+        if rmsd.size < 2:
+            continue
+        npt_ns = cs.get("npt_duration_ns", 0.1)
+        mean = float(np.mean(rmsd))
+        std = float(np.std(rmsd))
+        t = np.linspace(0, npt_ns * 1000.0, rmsd.size)
+        ax.plot(t, rmsd, color=colors[idx % len(colors)], lw=1.5,
+                label=f"{cid} ({mean:.1f}±{std:.1f} Å)")
+        has_data = True
 
     if not has_data:
-        log.warning("  Figure 6: No valid MD data, skipping")
+        log.warning("  Figure 6: No explicit-solvent MD data, skipping")
         plt.close(fig)
         return
 
     ax.set_xlabel("Time (ps)")
     ax.set_ylabel("Ligand RMSD (Å)")
-    ax.set_title("Gas-Phase MD Ligand Stability", fontweight="bold")
+    ax.set_title("Explicit-Solvent NPT MD Ligand Stability", fontweight="bold")
     ax.legend(loc="upper left", frameon=True, fancybox=True, shadow=True, fontsize=SMALL_SIZE)
     ax.set_ylim(0, None)
 
@@ -497,7 +502,7 @@ def figure6_md_rmsd_timeseries(plt):
     fig.savefig(str(FIGS_OUT / "figure6_md_rmsd.pdf"), dpi=DPI)
     fig.savefig(str(FIGS_OUT / "figure6_md_rmsd.png"), dpi=DPI)
     plt.close(fig)
-    log.info("  Figure 6: MD RMSD time series")
+    log.info("  Figure 6: MD RMSD time series (explicit-solvent NPT)")
 
 
 def figure7_mmgbsa_barchart(plt):

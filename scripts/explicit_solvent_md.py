@@ -64,7 +64,11 @@ DEFAULT_N_REPLICAS = 3
 DEFAULT_NPT_NS = 10
 QUICK_N_CANDIDATES = 3
 QUICK_N_REPLICAS = 1
-QUICK_NPT_NS = 2
+# Quick mode follows the paper's preliminary explicit-solvent protocol:
+# short equilibration followed by 100 ps NPT production (TIP3P, 150 mM NaCl).
+QUICK_NPT_NS = 0.1
+QUICK_NVT_PS = 50.0
+QUICK_NPT_EQ_PS = 50.0
 
 H_BOND_RESIDUES = {
     "SER403_OG": ("SER", 403, "OG"),
@@ -164,8 +168,7 @@ def _load_receptor_pdb():
     modeller.addHydrogens(pH=7.4, variants=variant_list)
 
     # Verify key active-site residues
-    for res_idx in range(modeller.topology.getNumResidues()):
-        res = modeller.topology.getResidue(res_idx)
+    for res in modeller.topology.residues():
         res_name = res.name
         try:
             res_num = int(res.id)
@@ -320,6 +323,7 @@ def _run_replica(
     nvt_steps: int,
     nvt_duration_ps: float,
     npt_duration_ns: float,
+    npt_eq_duration_ps: float = 500.0,
 ) -> dict:
     """Run a single MD replica for one candidate.
 
@@ -335,6 +339,12 @@ def _run_replica(
     from openmm import app, unit
     from openmmforcefields.generators import SMIRNOFFTemplateGenerator
     from openff.toolkit import Molecule as OffMolecule
+
+    # The OpenCL platform in this OpenMM build evaluates CustomExternalForce
+    # incorrectly for periodic systems (wildly inflated restraint energies).
+    # Force the CPU platform for correct physics, using all available cores.
+    _PLATFORM = openmm.Platform.getPlatformByName("CPU")
+    _PLATFORM.setPropertyDefaultValue("Threads", "14")
 
     cid = candidate["Compound_ID"]
     smi = candidate["SMILES"]
@@ -391,10 +401,24 @@ def _run_replica(
     complex_pos = modeller.positions
     lig_indices = _compute_ligand_indices(complex_top, n_rec_atoms)
 
+    # Build the system force field (protein + water + ligand template) up
+    # front so the ligand is parameterised before solvation and the same
+    # ForceField can drive both addSolvent and createSystem.
+    try:
+        off_mol = OffMolecule.from_rdkit(mol, allow_undefined_stereo=True)
+        off_mol.assign_partial_charges(partial_charge_method="gasteiger")
+        tg = SMIRNOFFTemplateGenerator(molecules=off_mol, forcefield="openff-2.0.0")
+        ff = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
+        ff.registerTemplateGenerator(tg.generator)
+    except Exception as exc:
+        result["error"] = f"Force field setup failed: {exc}"
+        return result
+
     # Solvate
     try:
         modeller.addSolvent(
-            app.TIP3P(),
+            ff,
+            model="tip3p",
             padding=SOLVENT_PADDING * unit.angstrom,
             ionicStrength=NACL_CONCENTRATION * unit.molar,
             neutralize=True,
@@ -413,11 +437,6 @@ def _run_replica(
 
     # Create system
     try:
-        off_mol = OffMolecule.from_rdkit(mol, allow_undefined_stereo=True)
-        off_mol.assign_partial_charges(partial_charge_method="gasteiger")
-        tg = SMIRNOFFTemplateGenerator(molecules=off_mol, forcefield="openff-2.0.0")
-        ff = app.ForceField("amber14-all.xml", "amber14/tip3p.xml")
-        ff.registerTemplateGenerator(tg.generator)
         system = ff.createSystem(
             solvated_top,
             nonbondedMethod=app.PME,
@@ -429,36 +448,44 @@ def _run_replica(
         result["error"] = f"System creation failed: {exc}"
         return result
 
-    # Restraint helper
+    # Restraint helper. Restrains backbone Cα atoms with a harmonic flat-well
+    # potential k*(Δx²+Δy²+Δz²). k is stored per-particle in internal OpenMM
+    # units (kJ/mol/nm²): 10 kcal/mol/Å² ≡ 4184 kJ/mol/nm². This OpenMM build
+    # exposes CustomExternalForce.setParticleParameters(index, particle, params).
     RESTRAINT_FORCE = 10.0  # kcal/mol/Å²
+    RESTRAINT_FORCE_KJ = RESTRAINT_FORCE * 4.184 / (0.1 ** 2)  # kJ/mol/nm²
     restraint = openmm.CustomExternalForce("k * (x - x0)^2 + k * (y - y0)^2 + k * (z - z0)^2")
     restraint.addPerParticleParameter("k")
     restraint.addPerParticleParameter("x0")
     restraint.addPerParticleParameter("y0")
     restraint.addPerParticleParameter("z0")
 
+    ca_indices = []
+    ca_xyz = []
     n_restrained_ca = 0
-    for res_idx in range(receptor_top.getNumResidues()):
-        residue = receptor_top.getResidue(res_idx)
+    for residue in receptor_top.residues():
         for atom in residue.atoms():
             if atom.name == "CA":
                 pos = solvated_pos[atom.index]
-                restraint.addParticle(atom.index, [RESTRAINT_FORCE, pos[0], pos[1], pos[2]])
+                restraint.addParticle(atom.index, [RESTRAINT_FORCE_KJ, pos.x, pos.y, pos.z])
+                ca_indices.append(atom.index)
+                ca_xyz.append([pos.x, pos.y, pos.z])
                 n_restrained_ca += 1
                 break
+    system.addForce(restraint)
 
     # i. Minimisation
     try:
         integrator = openmm.LangevinIntegrator(
             300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
         )
-        simulation = app.Simulation(solvated_top, system, integrator)
+        simulation = app.Simulation(solvated_top, system, integrator, platform=_PLATFORM)
         simulation.context.setPositions(solvated_pos)
 
         state_before = simulation.context.getState(getEnergy=True)
         e_init = state_before.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
 
-        simulation.minimizeEnergy(maxIterations=5000)
+        simulation.minimizeEnergy(maxIterations=2000)
         state_min = simulation.context.getState(getEnergy=True, getPositions=True)
         e_min = state_min.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
         min_pos = state_min.getPositions()
@@ -482,19 +509,25 @@ def _run_replica(
 
         nvt_positions = []
         nvt_steps_half = nvt_steps // 2
-        for step in range(nvt_steps):
-            # Gradually release restraint from 10 to 0 over first half, then 0
+        # Release the restraint over ~100 discrete ramps within the first half
+        # of the NVT phase, batching the integrator calls for performance.
+        nvt_chunk = max(1, nvt_steps_half // 100)
+        step = 0
+        while step < nvt_steps:
             if step < nvt_steps_half:
                 frac = 1.0 - step / nvt_steps_half
-                k = RESTRAINT_FORCE * frac
+                k = RESTRAINT_FORCE_KJ * frac
                 for i in range(n_restrained_ca):
-                    restraint.setParticleParameters(i, [k,
-                        solvated_pos[i][0], solvated_pos[i][1], solvated_pos[i][2]])
+                    restraint.setParticleParameters(i, ca_indices[i],
+                        [k, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
                 restraint.updateParametersInContext(simulation.context)
-            simulation.step(1)
-            if step % REPORT_INTERVAL_STEPS == 0 or step == nvt_steps - 1:
-                state_nvt = simulation.context.getState(getPositions=True, getEnergy=True)
-                nvt_positions.append(state_nvt.getPositions())
+                n_run = min(nvt_chunk, nvt_steps - step)
+            else:
+                n_run = nvt_steps - step
+            simulation.step(n_run)
+            step += n_run
+            state_nvt = simulation.context.getState(getPositions=True, getEnergy=True)
+            nvt_positions.append(state_nvt.getPositions())
 
         state_nvt_final = simulation.context.getState(getEnergy=True)
         e_nvt = state_nvt_final.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
@@ -519,25 +552,34 @@ def _run_replica(
     # iii. NPT equilibration + iv. Production
     try:
         system.addForce(openmm.MonteCarloBarostat(1.0 * unit.atmosphere, 300 * unit.kelvin, 25))
-        simulation = app.Simulation(solvated_top, system, integrator)
+        # The LangevinIntegrator is already bound to the NVT context; OpenMM
+        # forbids reusing an integrator across contexts, so build a fresh one.
+        npt_integrator = openmm.LangevinIntegrator(
+            300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
+        )
+        simulation = app.Simulation(solvated_top, system, npt_integrator, platform=_PLATFORM)
         simulation.context.setPositions(nvt_pos)
         simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
 
-        # NPT equilibration (first 500 ps with gradual restraint release)
-        npt_eq_steps = int(500 / TIMESTEP_PS)
-        for step in range(npt_eq_steps):
-            frac = 1.0 - step / npt_eq_steps
-            k = 5.0 * frac  # start at 5 kcal/mol/Å², release to 0
+        # NPT equilibration (first npt_eq_duration_ps ps with gradual restraint release)
+        npt_eq_steps = int(npt_eq_duration_ps / TIMESTEP_PS)
+        npt_eq_chunk = max(1, npt_eq_steps // 100)
+        eq_step = 0
+        while eq_step < npt_eq_steps:
+            frac = 1.0 - eq_step / npt_eq_steps
+            k = 0.5 * RESTRAINT_FORCE_KJ * frac  # start at 5 kcal/mol/Å², release to 0
             for i in range(n_restrained_ca):
-                restraint.setParticleParameters(i, [k,
-                    solvated_pos[i][0], solvated_pos[i][1], solvated_pos[i][2]])
+                restraint.setParticleParameters(i, ca_indices[i],
+                    [k, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
             restraint.updateParametersInContext(simulation.context)
-            simulation.step(1)
+            n_run = min(npt_eq_chunk, npt_eq_steps - eq_step)
+            simulation.step(n_run)
+            eq_step += n_run
 
         # Remove restraints for production
         for i in range(n_restrained_ca):
-            restraint.setParticleParameters(i, [0.0,
-                solvated_pos[i][0], solvated_pos[i][1], solvated_pos[i][2]])
+            restraint.setParticleParameters(i, ca_indices[i],
+                [0.0, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
         restraint.updateParametersInContext(simulation.context)
 
         # NPT production
@@ -547,18 +589,28 @@ def _run_replica(
         lig_rmsd_traj = []
         report_npt_steps = max(1, npt_steps // int(npt_duration_ns * 1000 / TIMESTEP_PS / 1000))
 
-        for step in range(npt_steps):
-            simulation.step(1)
-            if step % report_npt_steps == 0 or step == npt_steps - 1:
-                state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
-                pos = state_prod.getPositions()
-                prod_positions.append(pos)
-                prod_energies.append(
-                    state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                )
-                lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
-                if lr is not None:
-                    lig_rmsd_traj.append(float(lr))
+        n_prod_chunks = npt_steps // report_npt_steps
+        for _ in range(n_prod_chunks):
+            simulation.step(report_npt_steps)
+            state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
+            pos = state_prod.getPositions()
+            prod_positions.append(pos)
+            prod_energies.append(
+                state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            )
+            lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
+            if lr is not None:
+                lig_rmsd_traj.append(float(lr))
+        if npt_steps % report_npt_steps:
+            simulation.step(npt_steps % report_npt_steps)
+            state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
+            prod_positions.append(state_prod.getPositions())
+            prod_energies.append(
+                state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            )
+            lr = _compute_ligand_rmsd(min_pos, state_prod.getPositions(), lig_indices)
+            if lr is not None:
+                lig_rmsd_traj.append(float(lr))
 
         log.info(f"    NPT production complete: {npt_duration_ns} ns, {len(prod_positions)} frames")
     except Exception as exc:
@@ -637,6 +689,7 @@ def run_explicit_md(
     n_replicas: int = DEFAULT_N_REPLICAS,
     npt_duration_ns: float = DEFAULT_NPT_NS,
     nvt_duration_ps: float = 500.0,
+    npt_eq_duration_ps: float = 500.0,
 ) -> dict:
     """Run MD for a candidate across multiple replicas.
 
@@ -668,6 +721,7 @@ def run_explicit_md(
         log.info(f"  Replica {rep_idx + 1}/{n_replicas}...")
         rep_result = _run_replica(
             candidate, rep_idx, npt_steps, nvt_steps, nvt_duration_ps, npt_duration_ns,
+            npt_eq_duration_ps,
         )
         result["replicas"].append(rep_result)
         result["stability_classes"].append(rep_result.get("stability_class"))
@@ -702,11 +756,16 @@ def main():
         n_candidates = QUICK_N_CANDIDATES
         n_replicas = QUICK_N_REPLICAS
         npt_ns = QUICK_NPT_NS
-        log.info(f"QUICK MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replica")
+        nvt_ps = QUICK_NVT_PS
+        npt_eq_ps = QUICK_NPT_EQ_PS
+        log.info(f"QUICK MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replica "
+                 f"(NVT {nvt_ps:.0f} ps, NPT eq {npt_eq_ps:.0f} ps)")
     else:
         n_candidates = DEFAULT_N_CANDIDATES
         n_replicas = DEFAULT_N_REPLICAS
         npt_ns = DEFAULT_NPT_NS
+        nvt_ps = 500.0
+        npt_eq_ps = 500.0
         log.info(f"FULL MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replicas")
 
     _check_deps()
@@ -718,7 +777,10 @@ def main():
     for cand in candidates:
         cid = cand["Compound_ID"]
         log.info(f"\n  Processing {cid}...")
-        result = run_explicit_md(cand, n_replicas=n_replicas, npt_duration_ns=npt_ns)
+        result = run_explicit_md(
+            cand, n_replicas=n_replicas, npt_duration_ns=npt_ns,
+            nvt_duration_ps=nvt_ps, npt_eq_duration_ps=npt_eq_ps,
+        )
         all_results.append(result)
 
     log.info("")

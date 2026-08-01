@@ -31,17 +31,20 @@ from utils.ligand_prep import LigandPreparator
 log = logging.getLogger("AutoAntibiotic")
 
 # Hydrogen variant names for OpenMM Modeller.addHydrogens(variants=...)
-# Keyed by PROPKA residue type string → (protonated_form, deprotonated_form)
+# Keyed by PROPKA residue type string → (protonated_form, deprotonated_form).
+# Only entries whose *non-default* form is a valid OpenMM variant get applied;
+# forms equal to the residue's default name (e.g. TYR) are never passed to
+# addHydrogens because OpenMM rejects "default name" variants.
 _PROPKA_VARIANT_MAP = {
     "ASP": ("ASH", "ASP"),   # ASP: neutral (protonated) / charged
     "GLU": ("GLH", "GLU"),   # GLU: neutral / charged
     "HIS": ("HIP", "HIE"),   # HIS: +charged / neutral (NE2-H)
     "LYS": ("LYS", "LYN"),   # LYS: +charged (3H) / neutral (2H)
     "CYS": ("CYS", "CYX"),   # CYS: neutral / deprotonated or disulfide
-    "TYR": ("TYR", "TYR"),   # TYR: pKa ~ 10, neutral at pH 7.4
-    "SER": ("SER", "SER"),   # SER: pKa ~ 13, neutral at pH 7.4
-    "THR": ("THR", "THR"),   # THR: neutral
-    "ARG": ("ARG", "ARG"),   # ARG: +charged (pKa ~ 12)
+    "TYR": ("TYR", "TYM"),   # TYR: neutral (default) / tyrosinate (deprotonated)
+    "SER": ("SER", "SER"),   # SER: pKa ~ 13, neutral at pH 7.4 (no variant)
+    "THR": ("THR", "THR"),   # THR: neutral (no variant)
+    "ARG": ("ARG", "ARG"),   # ARG: +charged (pKa ~ 12) (no variant)
 }
 
 
@@ -112,13 +115,18 @@ def assign_protonation_states(
         else:
             desired = deprotonated
 
-        # Only add if different from default at this pH
-        # Default: most basic residues are protonated, most acidic are deprotonated
-        is_basic = res_type in ("LYS", "ARG", "HIS")
+        # Default protonation form for this residue at physiological pH:
+        # acidic residues default to their deprotonated (charged) form, all
+        # others default to their protonated / neutral form.
         is_acidic = res_type in ("ASP", "GLU")
-        default_protonated = is_basic  # basic residues default to protonated at pH 7.4
+        default_form = deprotonated if is_acidic else protonated
 
-        if (desired == protonated) != default_protonated:
+        # Only request an explicit OpenMM hydrogen variant when the PROPKA
+        # prediction differs from the residue's default form AND the desired
+        # form is a genuine non-default variant name. Passing the default
+        # residue name (e.g. "TYR", "SER", "ARG") as a variant is illegal in
+        # OpenMM's Modeller.addHydrogens.
+        if desired != default_form:
             variants[(res_name, res_num)] = desired
             log.info(
                 f"  PROPKA: {res_name}{res_num} ({res_type}) pKa={pka:.2f} "
@@ -152,8 +160,9 @@ def build_openmm_variant_list(
     n_residues = topology.getNumResidues()
     variant_list = [None] * n_residues
 
+    residue_list = list(topology.residues())
     for res_idx in range(n_residues):
-        residue = topology.getResidue(res_idx)
+        residue = residue_list[res_idx]
         key = (residue.name, int(residue.id))
         if key in propka_variants:
             variant_list[res_idx] = propka_variants[key]

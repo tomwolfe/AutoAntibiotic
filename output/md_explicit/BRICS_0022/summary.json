@@ -1,25 +1,63 @@
 {
   "compound_id": "BRICS_0022",
   "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-  "success": false,
+  "success": true,
   "error": null,
   "n_replicas": 1,
-  "npt_duration_ns": 2,
+  "npt_duration_ns": 0.1,
   "replicas": [
     {
       "replica": 0,
       "compound_id": "BRICS_0022",
       "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-      "success": false,
-      "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
-      "minimization": {},
-      "equilibration": {},
-      "production": {},
-      "stability_class": null
+      "success": true,
+      "error": null,
+      "minimization": {
+        "initial_energy_kcal": -1017878.3,
+        "final_energy_kcal": -1679880.5,
+        "delta_energy_kcal": -662002.2,
+        "ligand_rmsd_A": 1.136,
+        "success": true
+      },
+      "equilibration": {
+        "nvt_duration_ps": 50.0,
+        "final_energy_kcal": -1358913.7,
+        "ligand_rmsd_mean_A": 3.534,
+        "ligand_rmsd_std_A": 0.892,
+        "success": true
+      },
+      "production": {
+        "npt_duration_ns": 0.1,
+        "n_frames": 50,
+        "ligand_rmsd_mean_A": 8.994,
+        "ligand_rmsd_std_A": 0.854,
+        "ligand_rmsd_max_A": 11.329,
+        "ligand_rmsd_final_A": 10.188,
+        "hbond_occupancy": {
+          "SER403_OG": {
+            "occupancy": 0.0,
+            "mean_distance_A": 88.60429955468013,
+            "min_distance_A": 77.12696701395546
+          },
+          "LYS406_NZ": {
+            "occupancy": 0.0,
+            "mean_distance_A": 91.40996218810426,
+            "min_distance_A": 80.22846639391814
+          },
+          "TYR446_OH": {
+            "occupancy": 0.0,
+            "mean_distance_A": 90.9360914728319,
+            "min_distance_A": 76.33006031573542
+          }
+        },
+        "mean_potential_energy_kcal": -1368644.8,
+        "success": true
+      },
+      "stability_class": "Unstable"
     }
   ],
   "stability_classes": [
-    null
+    "Unstable"
   ],
   "consensus_stability": "Not Validated",
   "validated": false

@@ -1,126 +1,88 @@
 [
   {
-    "compound_id": "ALL_QU05",
-    "n_snapshots": 50,
-    "delta_G_bind_mean_kcal": -30.4,
-    "delta_G_bind_std_kcal": 3.6,
-    "delta_G_bind_min_kcal": -35.4,
-    "delta_G_bind_max_kcal": -25.4,
+    "compound_id": "ALL_QU04",
+    "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
+    "n_snapshots": 1,
+    "replica_used": 0,
+    "delta_G_bind_mean_kcal": 0.13,
+    "delta_G_bind_std_kcal": 0.0,
+    "delta_G_bind_min_kcal": 0.13,
+    "delta_G_bind_max_kcal": 0.13,
+    "delta_G_bind_values": [
+      0.13
+    ],
+    "method": "OpenMM_GBSAOBC2_single_pose_minimized",
     "success": true,
-    "method": "MMFF94_strain_interaction_scoring",
-    "MMFF94_Strain_Score": 472.5,
     "per_residue": {
-      "SER403": {
-        "mean_kcal": -3.29,
-        "std_kcal": 0.5
-      },
       "LYS406": {
-        "mean_kcal": -2.84,
-        "std_kcal": 0.4
+        "mean_kcal": 0.01,
+        "std_kcal": 0.0
       },
       "TYR446": {
-        "mean_kcal": -1.69,
-        "std_kcal": 0.3
-      }
-    }
-  },
-  {
-    "compound_id": "BRICS_01163",
-    "n_snapshots": 50,
-    "delta_G_bind_mean_kcal": -31.4,
-    "delta_G_bind_std_kcal": 3.5,
-    "delta_G_bind_min_kcal": -36.4,
-    "delta_G_bind_max_kcal": -26.4,
-    "success": true,
-    "method": "MMFF94_strain_interaction_scoring",
-    "MMFF94_Strain_Score": 445.51,
-    "per_residue": {
+        "mean_kcal": 0.0,
+        "std_kcal": 0.0
+      },
       "SER403": {
-        "mean_kcal": -3.36,
-        "std_kcal": 0.5
-      },
-      "LYS406": {
-        "mean_kcal": -2.88,
-        "std_kcal": 0.4
-      },
-      "TYR446": {
-        "mean_kcal": -1.78,
-        "std_kcal": 0.3
+        "mean_kcal": -0.0,
+        "std_kcal": 0.0
       }
     }
   },
   {
     "compound_id": "BRICS_0022",
-    "n_snapshots": 50,
-    "delta_G_bind_mean_kcal": -20.4,
-    "delta_G_bind_std_kcal": 4.9,
-    "delta_G_bind_min_kcal": -25.4,
-    "delta_G_bind_max_kcal": -15.4,
+    "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
+    "n_snapshots": 1,
+    "replica_used": 0,
+    "delta_G_bind_mean_kcal": 0.45,
+    "delta_G_bind_std_kcal": 0.0,
+    "delta_G_bind_min_kcal": 0.45,
+    "delta_G_bind_max_kcal": 0.45,
+    "delta_G_bind_values": [
+      0.45
+    ],
+    "method": "OpenMM_GBSAOBC2_single_pose_minimized",
     "success": true,
-    "method": "MMFF94_strain_interaction_scoring",
-    "MMFF94_Strain_Score": 738.35,
     "per_residue": {
-      "SER403": {
-        "mean_kcal": -2.55,
-        "std_kcal": 0.5
-      },
       "LYS406": {
-        "mean_kcal": -2.18,
-        "std_kcal": 0.4
+        "mean_kcal": 0.0,
+        "std_kcal": 0.0
       },
       "TYR446": {
-        "mean_kcal": -1.31,
-        "std_kcal": 0.3
-      }
-    }
-  },
-  {
-    "compound_id": "ALL_QU04",
-    "n_snapshots": 50,
-    "delta_G_bind_mean_kcal": -34.4,
-    "delta_G_bind_std_kcal": 3.1,
-    "delta_G_bind_min_kcal": -39.4,
-    "delta_G_bind_max_kcal": -29.4,
-    "success": true,
-    "method": "MMFF94_strain_interaction_scoring",
-    "MMFF94_Strain_Score": 366.54,
-    "per_residue": {
+        "mean_kcal": -0.0,
+        "std_kcal": 0.0
+      },
       "SER403": {
-        "mean_kcal": -3.6,
-        "std_kcal": 0.5
-      },
-      "LYS406": {
-        "mean_kcal": -3.06,
-        "std_kcal": 0.4
-      },
-      "TYR446": {
-        "mean_kcal": -1.84,
-        "std_kcal": 0.3
+        "mean_kcal": 0.01,
+        "std_kcal": 0.0
       }
     }
   },
   {
     "compound_id": "SEED_01150",
-    "n_snapshots": 50,
-    "delta_G_bind_mean_kcal": -31.6,
-    "delta_G_bind_std_kcal": 3.5,
-    "delta_G_bind_min_kcal": -36.6,
-    "delta_G_bind_max_kcal": -26.6,
+    "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
+    "n_snapshots": 1,
+    "replica_used": 0,
+    "delta_G_bind_mean_kcal": 0.12,
+    "delta_G_bind_std_kcal": 0.0,
+    "delta_G_bind_min_kcal": 0.12,
+    "delta_G_bind_max_kcal": 0.12,
+    "delta_G_bind_values": [
+      0.12
+    ],
+    "method": "OpenMM_GBSAOBC2_single_pose_minimized",
     "success": true,
-    "method": "MMFF94_strain_interaction_scoring",
-    "MMFF94_Strain_Score": 440.13,
     "per_residue": {
-      "SER403": {
-        "mean_kcal": -3.38,
-        "std_kcal": 0.5
-      },
       "LYS406": {
-        "mean_kcal": -2.93,
-        "std_kcal": 0.4
+        "mean_kcal": 0.0,
+        "std_kcal": 0.0
       },
       "TYR446": {
-        "mean_kcal": -1.81,
-        "std_kcal": 0.3
+        "mean_kcal": 0.0,
+        "std_kcal": 0.0
+      },
+      "SER403": {
+        "mean_kcal": 0.0,
+        "std_kcal": 0.0
       }
     }
   }

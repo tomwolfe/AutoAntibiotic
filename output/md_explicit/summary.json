@@ -1,13 +1,13 @@
 {
   "n_candidates": 3,
-  "n_succeeded": 0,
+  "n_succeeded": 3,
   "n_validated": 0,
   "parameters": {
     "solvent": "TIP3P",
     "padding_A": 10.0,
     "nacl_concentration_M": 0.15,
     "n_replicas": 1,
-    "npt_duration_ns": 2,
+    "npt_duration_ns": 0.1,
     "timestep_ps": 0.002,
     "force_field_protein": "amber14-all",
     "force_field_ligand": "openff-2.0.0",
@@ -17,25 +17,63 @@
     {
       "compound_id": "BRICS_0022",
       "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-      "success": false,
+      "success": true,
       "error": null,
       "n_replicas": 1,
-      "npt_duration_ns": 2,
+      "npt_duration_ns": 0.1,
       "replicas": [
         {
           "replica": 0,
           "compound_id": "BRICS_0022",
           "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-          "success": false,
-          "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
-          "minimization": {},
-          "equilibration": {},
-          "production": {},
-          "stability_class": null
+          "success": true,
+          "error": null,
+          "minimization": {
+            "initial_energy_kcal": -1017878.3,
+            "final_energy_kcal": -1679880.5,
+            "delta_energy_kcal": -662002.2,
+            "ligand_rmsd_A": 1.136,
+            "success": true
+          },
+          "equilibration": {
+            "nvt_duration_ps": 50.0,
+            "final_energy_kcal": -1358913.7,
+            "ligand_rmsd_mean_A": 3.534,
+            "ligand_rmsd_std_A": 0.892,
+            "success": true
+          },
+          "production": {
+            "npt_duration_ns": 0.1,
+            "n_frames": 50,
+            "ligand_rmsd_mean_A": 8.994,
+            "ligand_rmsd_std_A": 0.854,
+            "ligand_rmsd_max_A": 11.329,
+            "ligand_rmsd_final_A": 10.188,
+            "hbond_occupancy": {
+              "SER403_OG": {
+                "occupancy": 0.0,
+                "mean_distance_A": 88.60429955468013,
+                "min_distance_A": 77.12696701395546
+              },
+              "LYS406_NZ": {
+                "occupancy": 0.0,
+                "mean_distance_A": 91.40996218810426,
+                "min_distance_A": 80.22846639391814
+              },
+              "TYR446_OH": {
+                "occupancy": 0.0,
+                "mean_distance_A": 90.9360914728319,
+                "min_distance_A": 76.33006031573542
+              }
+            },
+            "mean_potential_energy_kcal": -1368644.8,
+            "success": true
+          },
+          "stability_class": "Unstable"
         }
       ],
       "stability_classes": [
-        null
+        "Unstable"
       ],
       "consensus_stability": "Not Validated",
       "validated": false
@@ -43,25 +81,63 @@
     {
       "compound_id": "ALL_QU04",
       "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
-      "success": false,
+      "success": true,
       "error": null,
       "n_replicas": 1,
-      "npt_duration_ns": 2,
+      "npt_duration_ns": 0.1,
       "replicas": [
         {
           "replica": 0,
           "compound_id": "ALL_QU04",
           "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
-          "success": false,
-          "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
-          "minimization": {},
-          "equilibration": {},
-          "production": {},
-          "stability_class": null
+          "success": true,
+          "error": null,
+          "minimization": {
+            "initial_energy_kcal": -967856.1,
+            "final_energy_kcal": -1667497.5,
+            "delta_energy_kcal": -699641.4,
+            "ligand_rmsd_A": 0.456,
+            "success": true
+          },
+          "equilibration": {
+            "nvt_duration_ps": 50.0,
+            "final_energy_kcal": -1349262.4,
+            "ligand_rmsd_mean_A": 4.872,
+            "ligand_rmsd_std_A": 1.096,
+            "success": true
+          },
+          "production": {
+            "npt_duration_ns": 0.1,
+            "n_frames": 50,
+            "ligand_rmsd_mean_A": 8.995,
+            "ligand_rmsd_std_A": 0.688,
+            "ligand_rmsd_max_A": 10.191,
+            "ligand_rmsd_final_A": 7.648,
+            "hbond_occupancy": {
+              "SER403_OG": {
+                "occupancy": 0.0,
+                "mean_distance_A": 89.01574443661181,
+                "min_distance_A": 80.16051623338245
+              },
+              "LYS406_NZ": {
+                "occupancy": 0.0,
+                "mean_distance_A": 91.3306906256025,
+                "min_distance_A": 82.7331457544315
+              },
+              "TYR446_OH": {
+                "occupancy": 0.0,
+                "mean_distance_A": 92.99143400113697,
+                "min_distance_A": 78.72564496568656
+              }
+            },
+            "mean_potential_energy_kcal": -1358508.6,
+            "success": true
+          },
+          "stability_class": "Unstable"
         }
       ],
       "stability_classes": [
-        null
+        "Unstable"
       ],
       "consensus_stability": "Not Validated",
       "validated": false
@@ -69,25 +145,63 @@
     {
       "compound_id": "SEED_01150",
       "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
-      "success": false,
+      "success": true,
       "error": null,
       "n_replicas": 1,
-      "npt_duration_ns": 2,
+      "npt_duration_ns": 0.1,
       "replicas": [
         {
           "replica": 0,
           "compound_id": "SEED_01150",
           "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
-          "success": false,
-          "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
-          "minimization": {},
-          "equilibration": {},
-          "production": {},
-          "stability_class": null
+          "success": true,
+          "error": null,
+          "minimization": {
+            "initial_energy_kcal": -1009605.2,
+            "final_energy_kcal": -1682786.1,
+            "delta_energy_kcal": -673180.9,
+            "ligand_rmsd_A": 0.772,
+            "success": true
+          },
+          "equilibration": {
+            "nvt_duration_ps": 50.0,
+            "final_energy_kcal": -1360690.0,
+            "ligand_rmsd_mean_A": 3.191,
+            "ligand_rmsd_std_A": 0.97,
+            "success": true
+          },
+          "production": {
+            "npt_duration_ns": 0.1,
+            "n_frames": 50,
+            "ligand_rmsd_mean_A": 9.816,
+            "ligand_rmsd_std_A": 0.679,
+            "ligand_rmsd_max_A": 11.61,
+            "ligand_rmsd_final_A": 10.328,
+            "hbond_occupancy": {
+              "SER403_OG": {
+                "occupancy": 0.0,
+                "mean_distance_A": 91.01457612038709,
+                "min_distance_A": 79.51899059043228
+              },
+              "LYS406_NZ": {
+                "occupancy": 0.0,
+                "mean_distance_A": 93.31676035572602,
+                "min_distance_A": 82.1600970299716
+              },
+              "TYR446_OH": {
+                "occupancy": 0.0,
+                "mean_distance_A": 92.52540697320703,
+                "min_distance_A": 77.47114815319038
+              }
+            },
+            "mean_potential_energy_kcal": -1370011.3,
+            "success": true
+          },
+          "stability_class": "Unstable"
         }
       ],
       "stability_classes": [
-        null
+        "Unstable"
       ],
       "consensus_stability": "Not Validated",
       "validated": false

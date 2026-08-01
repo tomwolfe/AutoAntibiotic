@@ -1,34 +1,39 @@
 #!/usr/bin/env python3
 """
-MM-GBSA binding free energy analysis from explicit-solvent MD trajectories.
+MM-GBSA binding free energy analysis from the minimised explicit-solvent MD complexes.
 
-Reads the explicit-solvent MD trajectories (output/md_explicit/<CID>/replica_N/),
-extracts 200 evenly-spaced snapshots from the last 5 ns of the best replica,
-and computes MM-GBSA ΔG_bind using OpenMM's GBSA (OBC2 model).
+The explicit-solvent MD protocol stores per-frame ligand RMSD / receptor RMSF
+traces but not full trajectory coordinates, so MM-GBSA is evaluated as a
+single-pose end-point calculation on each successful candidate's energy-minimised
+protein--ligand complex (output/md_explicit/<CID>/replica_0/topology.pdb),
+with water and ions stripped and an implicit-solvent OBC2 (GBSAOBC2) model.
 
-For each candidate, picks the replica with the lowest mean ligand RMSD
-(prefers Stable > Metastable > Unstable).
+delta_G_bind = E_complex - E_receptor - E_ligand
+where each term is computed with three separate systems (the partner's atoms are
+fully removed, so bonded energies cancel correctly). The catalytic triad
+(Ser403/Lys406/Tyr446) is located in the stripped topology by matching atom
+coordinates against the prepared receptor PDB, which is robust to the sequential
+residue renumbering introduced by PDBFile.writeFile.
 
 Reports:
-  - Mean ΔG_bind ± std for each compound
-  - Per-residue energy decomposition for top 3 candidates
-  - Per-term breakdown (E_MM, G_GB, G_SA)
+  - delta_G_bind for each compound
+  - Per-residue decomposition for the catalytic triad
 
 Usage:
     python scripts/mmgbsa_analysis.py
 
 Outputs:
-    output/mmgbsa_results.json           — per-candidate MM-GBSA results
-    output/mmgbsa_per_residue.json       — per-residue decomposition for top 3
-    output/figures/publication/mmgbsa_barchart.pdf — bar chart of ΔG_bind
-    output/figures/publication/per_residue_decomp.pdf — per-residue decomposition
+    output/mmgbsa_results.json           - per-candidate MM-GBSA results
+    output/mmgbsa_per_residue.json       - per-residue decomposition
+    output/figures/publication/mmgbsa_barchart.{pdf,png} - bar chart of dG_bind
+    output/figures/publication/per_residue_decomp.{pdf,png} - per-residue decomposition
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -40,17 +45,16 @@ log = logging.getLogger("mmgbsa")
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "output"
 MD_OUT = OUT / "md_explicit"
-MMGBSA_OUT = OUT
 FIGS_OUT = OUT / "figures" / "publication"
+RECEPTOR_PDB = OUT / "workdir" / "PBP2a_holo_clean.pdb"
+CSV_PATH = OUT / "top_candidates.csv"
 
-N_SNAPSHOTS = 200
-TEMPERATURE_K = 300.0
+WATER = {"HOH", "WAT", "NA", "CL", "K", "Cl-", "Na+"}
 
-H_BOND_RESIDUES = {"SER403", "LYS406", "TYR446"}
-
-# SA parameters for OBC2
-SURFACE_TENSION = 0.00542  # kcal/mol/Å²
-SURFACE_OFFSET = 0.92  # kcal/mol
+# Receptor-numbering catalytic triad and the reference atom to match by coordinates.
+CATALYTIC = {"SER403": ("SER", 403, "OG"),
+             "LYS406": ("LYS", 406, "NZ"),
+             "TYR446": ("TYR", 446, "OH")}
 
 
 def _check_deps():
@@ -61,323 +65,193 @@ def _check_deps():
         sys.exit(1)
 
 
-def _select_best_replica(cand_data: dict) -> tuple[dict | None, int]:
-    """Select the best replica for MM-GBSA.
-
-    Preference: Stable > Metastable > Unstable > first replica.
-    Within same class, pick the one with lowest mean ligand RMSD.
-
-    Returns ``(replica_data, replica_index)`` or ``(None, -1)``.
-    """
-    replicas = cand_data.get("replicas", [])
-    if not replicas:
-        # Backward compat: some summaries may have flat structure
-        return cand_data, -1
-
-    def _score(rep: dict) -> tuple:
-        sc = rep.get("stability_class", "Unstable")
-        rank = {"Stable": 0, "Metastable": 1, "Unstable": 2}.get(sc, 3)
-        rmsd = rep.get("production", {}).get("ligand_rmsd_mean_A", 999)
-        return (rank, rmsd)
-
-    replicas_sorted = sorted(
-        [(i, rep) for i, rep in enumerate(replicas) if rep.get("success")],
-        key=lambda x: _score(x[1]),
-    )
-    if replicas_sorted:
-        idx, rep = replicas_sorted[0]
-        return rep, idx
-    return None, -1
+def _reference_catalytic_coords():
+    """Coordinates of Ser403.OG / Lys406.NZ / Tyr446.OH in the prepared receptor."""
+    import openmm.app as app
+    pdb = app.PDBFile(str(RECEPTOR_PDB))
+    refs = {}
+    for residue in pdb.topology.residues():
+        for label, (resname, resnum, atom_name) in CATALYTIC.items():
+            if residue.name == resname and int(residue.id) == resnum:
+                for atom in residue.atoms():
+                    if atom.name == atom_name:
+                        p = pdb.positions[atom.index]
+                        refs[label] = (atom_name, p.x, p.y, p.z)
+    missing = [k for k in CATALYTIC if k not in refs]
+    if missing:
+        raise RuntimeError(f"Could not locate catalytic atoms {missing} in {RECEPTOR_PDB}")
+    return refs
 
 
-def compute_mmgbsa(
-    topology,
-    positions,
-    system,
-    lig_indices,
-    rec_indices,
-    temperature=TEMPERATURE_K,
-) -> dict:
-    """
-    Compute MM-GBSA binding free energy for a single snapshot.
-
-    ΔG_bind = E_complex - E_receptor - E_ligand
-    where each E = E_MM + G_GB + G_SA
-
-    SA = SURFACE_TENSION × SASA + SURFACE_OFFSET
-    """
-    import openmm
-    from openmm import app, unit
-
-    context = openmm.Context(system, openmm.VerletIntegrator(0.001 * unit.picoseconds))
-    context.setPositions(positions)
-
-    # Complex energy
-    state = context.getState(getEnergy=True, getParameterDerivatives=False)
-    e_complex = state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-
-    # Receptor energy (zero ligand charges + LJ)
-    for i in lig_indices:
-        system.setParticleParameters(i, 0.0, 0.0, 0.0)
-    context.reinitialize(preserveState=True)
-    context.setPositions(positions)
-    state = context.getState(getEnergy=True)
-    e_receptor = state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-
-    # Ligand energy (zero receptor charges + LJ)
-    for i in lig_indices:
-        orig_charge, orig_sigma, orig_epsilon = system.getParticleParameters(i)
-        system.setParticleParameters(i, orig_charge, orig_sigma, orig_epsilon)
-    for i in rec_indices:
-        system.setParticleParameters(i, 0.0, 0.0, 0.0)
-    context.reinitialize(preserveState=True)
-    context.setPositions(positions)
-    state = context.getState(getEnergy=True)
-    e_ligand = state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-
-    # Restore
-    for i in rec_indices:
-        orig_charge, orig_sigma, orig_epsilon = system.getParticleParameters(i)
-        system.setParticleParameters(i, orig_charge, orig_sigma, orig_epsilon)
-    context.reinitialize(preserveState=True)
-
-    delta_g = e_complex - e_receptor - e_ligand
-    return {"delta_G_kcal": delta_g}
+def _strip_solvent(modeller):
+    """Delete water / ions from a Modeller, returning atom count removed."""
+    n_before = modeller.topology.getNumAtoms()
+    modeller.delete([r for r in modeller.topology.residues() if r.name in WATER])
+    return n_before - modeller.topology.getNumAtoms()
 
 
-def decompose_per_residue(topology, positions, system, lig_indices, res_indices):
-    """Compute per-residue contribution to binding."""
-    import openmm
-    from openmm import app, unit
-
-    contributions = {}
-    context = openmm.Context(system, openmm.VerletIntegrator(0.001 * unit.picoseconds))
-    context.setPositions(positions)
-
-    # Full complex energy
-    state = context.getState(getEnergy=True)
-    e_complex = state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-
-    # Zero out all protein residues and compute each residue's contribution
-    for res_idx, (res_name, res_atom_indices) in res_indices.items():
-        if len(res_atom_indices) == 0:
-            continue
-
-        # Save parameters
-        saved_params = {}
-        for i in res_atom_indices:
-            saved_params[i] = system.getParticleParameters(i)
-            system.setParticleParameters(i, 0.0, 0.0, 0.0)
-
-        context.reinitialize(preserveState=True)
-        context.setPositions(positions)
-        state = context.getState(getEnergy=True)
-        e_mut = state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-        contributions[res_name] = -(e_complex - e_mut)  # positive = stabilising
-
-        # Restore
-        for i, params in saved_params.items():
-            system.setParticleParameters(i, *params)
-
-    context.reinitialize(preserveState=True)
-    return contributions
-
-
-def compute_mmgbsa_trajectory(candidate_dir: Path) -> dict | None:
-    """Compute MM-GBSA for snapshots from the best replica of one candidate."""
-    import openmm
-    from openmm import app, unit
+def _build_system(topology, smi=None):
+    """Build a GBSAOBC2 (OBC2) implicit-solvent system."""
+    import openmm.app as app
     from openmmforcefields.generators import SMIRNOFFTemplateGenerator
     from openff.toolkit import Molecule as OffMolecule
     from rdkit import Chem
+
+    ff = app.ForceField("amber14-all.xml", "implicit/obc2.xml")
+    if smi:
+        mol = Chem.MolFromSmiles(smi)
+        mol = Chem.AddHs(mol)
+        off = OffMolecule.from_rdkit(mol, allow_undefined_stereo=True)
+        off.assign_partial_charges(partial_charge_method="gasteiger")
+        tg = SMIRNOFFTemplateGenerator(molecules=off, forcefield="openff-2.0.0")
+        ff.registerTemplateGenerator(tg.generator)
+    return ff.createSystem(topology, nonbondedMethod=app.NoCutoff, constraints=app.HBonds)
+
+
+def _energy(system, positions):
+    import openmm
+    ctx = openmm.Context(system, openmm.VerletIntegrator(0.001 * openmm.unit.picoseconds))
+    ctx.setPositions(positions)
+    return ctx.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+        openmm.unit.kilocalories_per_mole
+    )
+
+
+def _zero_residue(system, indices):
+    """Zero charges + LJ of the given atoms in both NonbondedForce and CustomGBForce."""
+    import openmm
+    nb = [f for f in system.getForces() if isinstance(f, openmm.NonbondedForce)][0]
+    gb = [f for f in system.getForces() if isinstance(f, openmm.CustomGBForce)][0]
+    saved = {}
+    for i in indices:
+        q, s, e = nb.getParticleParameters(i)
+        saved[i] = (q, s, e, gb.getParticleParameters(i))
+        nb.setParticleParameters(i, 0.0, s, e)
+        ch, o, sr = gb.getParticleParameters(i)
+        gb.setParticleParameters(i, [0.0, o, sr])
+    return saved, nb, gb
+
+
+def _restore_residue(saved, nb, gb):
+    for i, (q, s, e, gbparams) in saved.items():
+        nb.setParticleParameters(i, q, s, e)
+        gb.setParticleParameters(i, gbparams)
+
+
+def _match_catalytic_by_coords(topology, positions, refs):
+    """Return {label: residue} by nearest-atom coordinate match to receptor refs."""
+    import numpy as np
+    best = {}
+    for res in topology.residues():
+        for atom in res.atoms():
+            if atom.name not in ("OG", "NZ", "OH"):
+                continue
+            p = positions[atom.index]
+            for label, (ref_name, rx, ry, rz) in refs.items():
+                if atom.name != ref_name:
+                    continue
+                d = np.sqrt((p.x - rx) ** 2 + (p.y - ry) ** 2 + (p.z - rz) ** 2)
+                if label not in best or d < best[label][0]:
+                    best[label] = (d, res)
+    return {label: res for label, (d, res) in best.items()}
+
+
+def compute_mmgbsa(candidate_dir: Path) -> dict | None:
+    """Single-pose MM-GBSA for one successful MD candidate."""
+    import openmm.app as app
 
     summary_path = candidate_dir / "summary.json"
     if not summary_path.is_file():
         log.warning(f"  Summary not found: {summary_path}")
         return None
-
     with open(summary_path) as f:
         cand_data = json.load(f)
-
     if not cand_data.get("success"):
         log.warning(f"  Candidate MD failed, skipping MM-GBSA")
         return None
 
     cid = cand_data["compound_id"]
     smi = cand_data["smiles"]
-
-    # Select best replica
-    best_rep, rep_idx = _select_best_replica(cand_data)
-    if best_rep is None:
-        log.warning(f"  No successful replica for {cid}")
-        return None
-
-    rep_dir = candidate_dir / f"replica_{rep_idx}" if rep_idx >= 0 else candidate_dir
-
-    # Load topology from the replica directory
-    top_pdb = str(rep_dir / "topology.pdb")
-    if not os.path.exists(top_pdb):
+    rep_dir = candidate_dir / "replica_0"
+    top_pdb = rep_dir / "topology.pdb"
+    if not top_pdb.is_file():
         log.warning(f"  Topology not found: {top_pdb}")
         return None
 
-    pdb = app.PDBFile(top_pdb)
-    topology = pdb.topology
-    positions = pdb.positions
-
-    # Count atoms
-    n_total = topology.getNumAtoms()
-    mol = Chem.MolFromSmiles(smi)
-    if mol is None:
-        return None
-    mol = Chem.AddHs(mol)
-    n_lig_atoms = mol.GetNumAtoms()
-    n_rec_atoms = n_total - n_lig_atoms
-    lig_indices = list(range(n_rec_atoms, n_total))
-    rec_indices = list(range(n_rec_atoms))
-
-    # Build system with GBSA (OBC2)
     try:
-        off_mol = OffMolecule.from_rdkit(mol, allow_undefined_stereo=True)
-        off_mol.assign_partial_charges(partial_charge_method="gasteiger")
-        tg = SMIRNOFFTemplateGenerator(molecules=off_mol, forcefield="openff-2.0.0")
-        ff = app.ForceField("amber14-all.xml")
-        ff.registerTemplateGenerator(tg.generator)
-
-        system = ff.createSystem(
-            topology,
-            nonbondedMethod=app.NoCutoff,
-            constraints=app.HBonds,
-            implicitSolvent=app.OBC2,
-            implicitSolventSaltConc=0.15 * unit.molar,
-        )
+        pdb = app.PDBFile(str(top_pdb))
     except Exception as exc:
-        log.warning(f"  System creation failed: {exc}")
+        log.warning(f"  PDB load failed: {exc}")
         return None
 
-    # Get per-residue atom indices for the receptor
-    res_indices = {}
-    chain_residues = []
-    for chain in topology.chains():
-        try:
-            chain_residues.extend(list(chain.residues()))
-        except TypeError:
-            chain_residues.extend(list(chain.residues))
-    for residue in chain_residues:
-        if residue.index >= n_rec_atoms:
-            break
-        atom_indices = [atom.index for atom in residue.atoms()]
-        res_name = f"{residue.name}_{residue.index + 1}"
-        res_indices[res_name] = (residue.name, atom_indices)
+    mod = app.Modeller(pdb.topology, pdb.positions)
+    _strip_solvent(mod)
 
-    # Load ligand RMSD trajectory to determine last 5 ns window
-    lig_rmsd_path = rep_dir / "ligand_rmsd.npy"
-    npt_duration_ns = best_rep.get("production", {}).get("npt_duration_ns",
-                         cand_data.get("npt_duration_ns", 10))
-    n_frames = best_rep.get("production", {}).get("n_frames", 0)
+    # Identify the ligand residue (last non-solvent residue).
+    lig_residues = [r for r in mod.topology.residues() if r.name in ("LIG", "UNL", "MOL")]
+    if not lig_residues:
+        lig_residues = [list(mod.topology.residues())[-1]]
+    if len(lig_residues) != 1:
+        log.warning(f"  {cid}: unexpected ligand residue count {len(lig_residues)}")
+        return None
+    lig_res = lig_residues[0]
 
-    if n_frames < 2 or not lig_rmsd_path.is_file():
-        # Single snapshot fallback
-        result_single = compute_mmgbsa(topology, positions, system, lig_indices, rec_indices)
-        base = {
-            "compound_id": cid,
-            "smiles": smi,
-            "n_snapshots": 1,
-            "delta_G_bind_mean_kcal": round(result_single["delta_G_kcal"], 2),
-            "delta_G_bind_std_kcal": 0.0,
-            "delta_G_bind_min_kcal": round(result_single["delta_G_kcal"], 2),
-            "delta_G_bind_max_kcal": round(result_single["delta_G_kcal"], 2),
-            "success": True,
-        }
-        return base
+    cpx_top, cpx_pos = mod.topology, mod.positions
 
-    # Determine frame range for last 5 ns
-    frames_per_ns = max(1, n_frames / npt_duration_ns)
-    last_5_ns_frames = int(frames_per_ns * 5)
-    start_frame = max(0, n_frames - last_5_ns_frames)
-    frame_step = max(1, last_5_ns_frames // N_SNAPSHOTS)
+    rec_mod = app.Modeller(mod.topology, mod.positions)
+    rec_mod.delete([lig_res])
+    rec_top, rec_pos = rec_mod.topology, rec_mod.positions
 
-    # Re-run simulation to extract frame positions (we don't have stored coords)
-    # Instead, use the stored ligand_rmsd trajectory as a proxy and re-simulate
-    integrator = openmm.LangevinIntegrator(
-        temperature * unit.kelvin,
-        1.0 / unit.picosecond,
-        0.002 * unit.picoseconds,
-    )
-    simulation = app.Simulation(topology, system, integrator)
-    simulation.context.setPositions(positions)
+    lig_mod = app.Modeller(mod.topology, mod.positions)
+    lig_mod.delete([r for r in mod.topology.residues() if r != lig_res])
+    lig_top, lig_pos = lig_mod.topology, lig_mod.positions
 
-    delta_g_values = []
-    snapshot_count = 0
-    for frame_idx in range(start_frame, n_frames, frame_step):
-        if snapshot_count >= N_SNAPSHOTS:
-            break
-        n_advance = frame_step if frame_idx > 0 else 0
-        if n_advance > 0:
-            integrator.step(n_advance)
-            simulation.context.setPositions(
-                simulation.context.getState(getPositions=True).getPositions()
-            )
-
-        state = simulation.context.getState(getPositions=True)
-        frame_pos = state.getPositions()
-
-        result_snap = compute_mmgbsa(topology, frame_pos, system, lig_indices, rec_indices)
-        delta_g_values.append(result_snap["delta_G_kcal"])
-        snapshot_count += 1
-
-    if not delta_g_values:
+    try:
+        sys_cpx = _build_system(cpx_top, smi)
+        sys_rec = _build_system(rec_top)
+        sys_lig = _build_system(lig_top, smi)
+    except Exception as exc:
+        log.warning(f"  {cid}: system build failed: {exc}")
         return None
 
-    delta_g_array = np.array(delta_g_values)
-    result = {
+    e_complex = _energy(sys_cpx, cpx_pos)
+    e_receptor = _energy(sys_rec, rec_pos)
+    e_ligand = _energy(sys_lig, lig_pos)
+    dg = e_complex - e_receptor - e_ligand
+    dg_ref = e_complex - e_receptor
+
+    # Per-residue decomposition of the catalytic triad.
+    per_res = {}
+    try:
+        refs = _reference_catalytic_coords()
+        matched = _match_catalytic_by_coords(cpx_top, cpx_pos, refs)
+        for label, res in matched.items():
+            idxs = [a.index for a in res.atoms()]
+            saved, nb, gb = _zero_residue(sys_cpx, idxs)
+            e_cpx_mut = _energy(sys_cpx, cpx_pos)
+            _restore_residue(saved, nb, gb)
+            saved, nb, gb = _zero_residue(sys_rec, idxs)
+            e_rec_mut = _energy(sys_rec, rec_pos)
+            _restore_residue(saved, nb, gb)
+            per_res[label] = round((e_cpx_mut - e_rec_mut) - dg_ref, 2)
+    except Exception as exc:
+        log.warning(f"  {cid}: per-residue decomposition skipped: {exc}")
+
+    log.info(f"    dG_bind = {dg:.2f} kcal/mol; per-residue {per_res}")
+    return {
         "compound_id": cid,
         "smiles": smi,
-        "n_snapshots": len(delta_g_values),
-        "replica_used": rep_idx,
-        "delta_G_bind_mean_kcal": round(float(np.mean(delta_g_array)), 2),
-        "delta_G_bind_std_kcal": round(float(np.std(delta_g_array)), 2),
-        "delta_G_bind_min_kcal": round(float(np.min(delta_g_array)), 2),
-        "delta_G_bind_max_kcal": round(float(np.max(delta_g_array)), 2),
-        "delta_G_bind_values": [round(float(v), 2) for v in delta_g_array],
+        "n_snapshots": 1,
+        "replica_used": 0,
+        "delta_G_bind_mean_kcal": round(dg, 2),
+        "delta_G_bind_std_kcal": 0.0,
+        "delta_G_bind_min_kcal": round(dg, 2),
+        "delta_G_bind_max_kcal": round(dg, 2),
+        "delta_G_bind_values": [round(dg, 2)],
+        "method": "OpenMM_GBSAOBC2_single_pose_minimized",
         "success": True,
+        "per_residue": {k: {"mean_kcal": v, "std_kcal": 0.0} for k, v in per_res.items()},
     }
-
-    # Per-residue decomposition (top 3 catalytic residues)
-    log.info(f"  Computing per-residue decomposition for {cid}...")
-    integrator2 = openmm.LangevinIntegrator(
-        temperature * unit.kelvin,
-        1.0 / unit.picosecond,
-        0.002 * unit.picoseconds,
-    )
-    simulation2 = app.Simulation(topology, system, integrator2)
-    simulation2.context.setPositions(positions)
-
-    res_contribs = {}
-    n_decomp_frames = min(10, snapshot_count)
-    for snap_i in range(n_decomp_frames):
-        if snap_i > 0:
-            integrator2.step(frame_step)
-            simulation2.context.setPositions(
-                simulation2.context.getState(getPositions=True).getPositions()
-            )
-        state = simulation2.context.getState(getPositions=True)
-        frame_pos = state.getPositions()
-
-        contribs = decompose_per_residue(topology, frame_pos, system, lig_indices, res_indices)
-        for res_name, val in contribs.items():
-            if res_name not in res_contribs:
-                res_contribs[res_name] = []
-            res_contribs[res_name].append(val)
-
-    result["per_residue"] = {}
-    for res_name, vals in res_contribs.items():
-        if len(vals) > 0:
-            result["per_residue"][res_name] = {
-                "mean_kcal": round(float(np.mean(vals)), 2),
-                "std_kcal": round(float(np.std(vals)), 2),
-            }
-
-    return result
 
 
 def main():
@@ -386,8 +260,8 @@ def main():
     MD_OUT.mkdir(parents=True, exist_ok=True)
     FIGS_OUT.mkdir(parents=True, exist_ok=True)
 
-    candidates = sorted([d for d in MD_OUT.iterdir() if d.is_dir() and d.name.startswith(("BRICS_", "ALL_", "SEED_"))])
-
+    candidates = sorted([d for d in MD_OUT.iterdir()
+                         if d.is_dir() and d.name.startswith(("BRICS_", "ALL_", "SEED_"))])
     if not candidates:
         log.error(f"No candidate directories found in {MD_OUT}. Run scripts/explicit_solvent_md.py first.")
         sys.exit(1)
@@ -398,154 +272,118 @@ def main():
     for cand_dir in candidates:
         cid = cand_dir.name
         log.info(f"\n  Processing {cid}...")
-        result = compute_mmgbsa_trajectory(cand_dir)
+        result = compute_mmgbsa(cand_dir)
         if result:
             all_results.append(result)
-            log.info(f"    ΔG_bind = {result['delta_G_bind_mean_kcal']:.2f} ± {result['delta_G_bind_std_kcal']:.2f} kcal/mol ({result['n_snapshots']} snapshots)")
 
-    # Save results
-    results_path = MMGBSA_OUT / "mmgbsa_results.json"
-    with open(results_path, "w") as fh:
+    with open(OUT / "mmgbsa_results.json", "w") as fh:
         json.dump(all_results, fh, indent=2, default=str)
-    log.info(f"\n  MM-GBSA results saved: {results_path}")
+    log.info(f"\n  MM-GBSA results saved: {OUT / 'mmgbsa_results.json'}")
 
-    # Per-residue decomposition for top 3
-    top3 = sorted(all_results, key=lambda r: r.get("delta_G_bind_mean_kcal", 999))[:3]
     per_res_data = {}
-    for r in top3:
-        if "per_residue" in r:
+    for r in all_results:
+        if r.get("per_residue"):
             per_res_data[r["compound_id"]] = {
                 "delta_G_bind_mean_kcal": r["delta_G_bind_mean_kcal"],
                 "per_residue": r["per_residue"],
+                "method": r.get("method"),
             }
-    per_res_path = MMGBSA_OUT / "mmgbsa_per_residue.json"
-    with open(per_res_path, "w") as fh:
+    with open(OUT / "mmgbsa_per_residue.json", "w") as fh:
         json.dump(per_res_data, fh, indent=2, default=str)
-    log.info(f"  Per-residue results saved: {per_res_path}")
+    log.info(f"  Per-residue results saved: {OUT / 'mmgbsa_per_residue.json'}")
 
-    # Generate figures if matplotlib is available
+    # Figures
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        # ΔG_bind bar chart
-        fig, ax = plt.subplots(figsize=(8, 5))
         cids = [r["compound_id"] for r in all_results]
         means = [r["delta_G_bind_mean_kcal"] for r in all_results]
         stds = [r["delta_G_bind_std_kcal"] for r in all_results]
 
+        fig, ax = plt.subplots(figsize=(8, 5))
+        colors = ["#2c7fb8", "#7fcdbb", "#edf8b1", "#41b6c4", "#253494"]
         bars = ax.bar(range(len(cids)), means, yerr=stds, capsize=5,
-                      color=["#2c7fb8", "#7fcdbb", "#edf8b1", "#41b6c4", "#253494"])
+                      color=colors[:len(cids)], edgecolor="black", linewidth=0.5)
         ax.set_xticks(range(len(cids)))
         ax.set_xticklabels(cids, rotation=45, ha="right")
         ax.set_ylabel("ΔG_bind (kcal/mol)")
-        ax.set_title("MM-GBSA Binding Free Energies")
+        ax.set_title("MM-GBSA (OBC2, single-pose) Binding Free Energies")
         ax.axhline(0, color="grey", ls="--", lw=0.5)
-
         for bar, mean, std in zip(bars, means, stds):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + std + 0.5,
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + std + 0.3,
                     f"{mean:.1f}±{std:.1f}", ha="center", va="bottom", fontsize=9)
-
         fig.tight_layout()
         fig.savefig(str(FIGS_OUT / "mmgbsa_barchart.pdf"), dpi=300)
         fig.savefig(str(FIGS_OUT / "mmgbsa_barchart.png"), dpi=300)
         plt.close(fig)
-        log.info(f"  Bar chart saved: {FIGS_OUT / 'mmgbsa_barchart.pdf'}")
 
-        # Per-residue decomposition for top 3
         if per_res_data:
-            n_compounds = len(per_res_data)
-            fig, axes = plt.subplots(1, n_compounds, figsize=(6 * n_compounds, 5))
-            if n_compounds == 1:
+            n = len(per_res_data)
+            fig, axes = plt.subplots(1, n, figsize=(6 * n, 5))
+            if n == 1:
                 axes = [axes]
-
+            from matplotlib.patches import Patch
             for idx, (cid, data) in enumerate(per_res_data.items()):
                 ax = axes[idx]
                 residues = list(data["per_residue"].keys())
                 values = [data["per_residue"][r]["mean_kcal"] for r in residues]
                 errs = [data["per_residue"][r]["std_kcal"] for r in residues]
-
-                colors = ["#e41a1c" if any(h in r for h in H_BOND_RESIDUES) else "#377eb8" for r in residues]
-                ax.barh(range(len(residues)), values, xerr=errs, color=colors, capsize=3)
+                ax.barh(range(len(residues)), values, xerr=errs, color="#377eb8",
+                        edgecolor="black", linewidth=0.3, capsize=3)
                 ax.set_yticks(range(len(residues)))
                 ax.set_yticklabels(residues, fontsize=8)
                 ax.set_xlabel("Energy contribution (kcal/mol)")
                 ax.set_title(f"{cid}: ΔG = {data['delta_G_bind_mean_kcal']:.1f} kcal/mol")
                 ax.axvline(0, color="grey", ls="--", lw=0.5)
-
-                # Add legend
-                from matplotlib.patches import Patch
-                legend_elements = [
-                    Patch(facecolor="#e41a1c", label="Catalytic residue"),
-                    Patch(facecolor="#377eb8", label="Other residue"),
-                ]
-                ax.legend(handles=legend_elements, fontsize=8, loc="lower right")
-
             fig.tight_layout()
             fig.savefig(str(FIGS_OUT / "per_residue_decomp.pdf"), dpi=300)
             fig.savefig(str(FIGS_OUT / "per_residue_decomp.png"), dpi=300)
             plt.close(fig)
-            log.info(f"  Per-residue decomposition figure saved: {FIGS_OUT / 'per_residue_decomp.pdf'}")
-
     except ImportError:
         log.warning("  matplotlib not available; skipping figures")
 
     # Update top_candidates.csv with MMGBSA_dG_Bind and MD_Stability columns
-    csv_path = OUT / "top_candidates.csv"
-    if csv_path.is_file():
+    if CSV_PATH.is_file():
         try:
-            import csv as csv_mod
             rows = []
-            with open(csv_path, newline="") as f:
-                reader = csv_mod.DictReader(f)
-                fieldnames = reader.fieldnames or []
-                if "MMGBSA_dG_Bind" not in fieldnames:
-                    fieldnames.append("MMGBSA_dG_Bind")
-                if "MD_Stability" not in fieldnames:
-                    fieldnames.append("MD_Stability")
+            with open(CSV_PATH, newline="") as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames or [])
+                for col in ("MMGBSA_dG_Bind", "MD_Stability"):
+                    if col not in fieldnames:
+                        fieldnames.append(col)
                 for row in reader:
                     cid = row.get("Compound_ID", "")
-                    # Find MM-GBSA result
                     mmgbsa_result = next(
                         (r for r in all_results if r.get("compound_id") == cid), None
                     )
                     if mmgbsa_result and mmgbsa_result.get("success"):
-                        row["MMGBSA_dG_Bind"] = f"{mmgbsa_result['delta_G_bind_mean_kcal']:.2f}±{mmgbsa_result['delta_G_bind_std_kcal']:.2f}"
+                        row["MMGBSA_dG_Bind"] = (
+                            f"{mmgbsa_result['delta_G_bind_mean_kcal']:.2f}±"
+                            f"{mmgbsa_result['delta_G_bind_std_kcal']:.2f}"
+                        )
                     else:
                         row["MMGBSA_dG_Bind"] = ""
-
-                    # Find MD stability from per-candidate summary
                     cand_dir = MD_OUT / cid
-                    if cand_dir.is_dir():
-                        cand_summary = cand_dir / "summary.json"
-                        if cand_summary.is_file():
-                            try:
-                                with open(cand_summary) as f:
-                                    cs = json.load(f)
-                                row["MD_Stability"] = cs.get("consensus_stability", "")
-                            except Exception:
-                                row["MD_Stability"] = ""
+                    cs_path = cand_dir / "summary.json"
+                    if cand_dir.is_dir() and cs_path.is_file():
+                        try:
+                            with open(cs_path) as f:
+                                cs = json.load(f)
+                            row["MD_Stability"] = cs.get("consensus_stability", "")
+                        except Exception:
+                            row["MD_Stability"] = ""
                     rows.append(row)
 
-            with open(csv_path, "w", newline="") as f:
-                writer = csv_mod.DictWriter(f, fieldnames=fieldnames)
+            with open(CSV_PATH, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
-            log.info(f"  Updated {csv_path} with MMGBSA_dG_Bind and MD_Stability columns")
+            log.info(f"  Updated {CSV_PATH} with MMGBSA_dG_Bind and MD_Stability columns")
         except Exception as exc:
             log.warning(f"  Could not update CSV: {exc}")
-
-    # Summary table
-    log.info("")
-    log.info("─" * 80)
-    log.info(f"  {'Compound':<20} {'ΔG_bind':<16} {'N snapshots':<14} {'Status':<12}")
-    log.info("  " + "-" * 62)
-    for r in all_results:
-        dg = f"{r['delta_G_bind_mean_kcal']:.2f}±{r['delta_G_bind_std_kcal']:.2f}" if r.get("success") else "FAIL"
-        ns = str(r.get("n_snapshots", "N/A"))
-        status = "OK" if r.get("success") else "FAIL"
-        log.info(f"  {r['compound_id']:<20} {dg:<16} {ns:<14} {status:<12}")
 
     n_ok = sum(1 for r in all_results if r.get("success"))
     log.info(f"\n  {n_ok}/{len(all_results)} succeeded")

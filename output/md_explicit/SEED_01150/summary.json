@@ -1,25 +1,63 @@
 {
   "compound_id": "SEED_01150",
   "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
-  "success": false,
+  "success": true,
   "error": null,
   "n_replicas": 1,
-  "npt_duration_ns": 2,
+  "npt_duration_ns": 0.1,
   "replicas": [
     {
       "replica": 0,
       "compound_id": "SEED_01150",
       "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
-      "success": false,
-      "error": "Receptor loading failed: 'Topology' object has no attribute 'getResidue'",
-      "minimization": {},
-      "equilibration": {},
-      "production": {},
-      "stability_class": null
+      "success": true,
+      "error": null,
+      "minimization": {
+        "initial_energy_kcal": -1009605.2,
+        "final_energy_kcal": -1682786.1,
+        "delta_energy_kcal": -673180.9,
+        "ligand_rmsd_A": 0.772,
+        "success": true
+      },
+      "equilibration": {
+        "nvt_duration_ps": 50.0,
+        "final_energy_kcal": -1360690.0,
+        "ligand_rmsd_mean_A": 3.191,
+        "ligand_rmsd_std_A": 0.97,
+        "success": true
+      },
+      "production": {
+        "npt_duration_ns": 0.1,
+        "n_frames": 50,
+        "ligand_rmsd_mean_A": 9.816,
+        "ligand_rmsd_std_A": 0.679,
+        "ligand_rmsd_max_A": 11.61,
+        "ligand_rmsd_final_A": 10.328,
+        "hbond_occupancy": {
+          "SER403_OG": {
+            "occupancy": 0.0,
+            "mean_distance_A": 91.01457612038709,
+            "min_distance_A": 79.51899059043228
+          },
+          "LYS406_NZ": {
+            "occupancy": 0.0,
+            "mean_distance_A": 93.31676035572602,
+            "min_distance_A": 82.1600970299716
+          },
+          "TYR446_OH": {
+            "occupancy": 0.0,
+            "mean_distance_A": 92.52540697320703,
+            "min_distance_A": 77.47114815319038
+          }
+        },
+        "mean_potential_energy_kcal": -1370011.3,
+        "success": true
+      },
+      "stability_class": "Unstable"
     }
   ],
   "stability_classes": [
-    null
+    "Unstable"
   ],
   "consensus_stability": "Not Validated",
   "validated": false

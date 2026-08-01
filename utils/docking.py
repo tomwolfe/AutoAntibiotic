@@ -37,7 +37,7 @@ def _run_vina_docking(
     center: np.ndarray,
     box_size: Tuple[float, float, float],
     timeout: Optional[int] = None,
-    exhaustiveness: int = 8,
+    exhaustiveness: int = 32,
     num_modes: int = 3,
 ) -> Optional[float]:
     """
@@ -45,7 +45,7 @@ def _run_vina_docking(
     or None on failure.
 
     Args:
-        exhaustiveness: Vina exhaustiveness (default 8, use 32 for CES1).
+        exhaustiveness: Vina exhaustiveness (default 32 in science mode).
         num_modes: Number of output modes (default 3, use 9 for CES1).
     """
     if timeout is None:
@@ -129,7 +129,7 @@ def dock_compound(
     work_dir: str,
     tag: str = "",
     timeout: Optional[int] = None,
-    exhaustiveness: int = 8,
+    exhaustiveness: int = 32,
     num_modes: int = 3,
 ) -> Optional[float]:
     """
@@ -143,7 +143,7 @@ def dock_compound(
         work_dir: Scratch directory.
         tag: Label for temp files (e.g. 'allosteric').
         timeout: Optional per-call Vina timeout override (seconds).
-        exhaustiveness: Vina exhaustiveness (default 8).
+        exhaustiveness: Vina exhaustiveness (default 32 in science mode).
         num_modes: Number of output modes (default 3).
 
     Returns:
@@ -874,6 +874,8 @@ def dock_compound_induced_fit(
 
             # Apply restraints: 10 kcal/mol/Å² on backbone CA of non-flexible residues
             RESTRAINT_FORCE = 10.0  # kcal/mol/Å²
+            # k is stored per-particle in internal OpenMM units (kJ/mol/nm²).
+            RESTRAINT_FORCE_KJ = RESTRAINT_FORCE * 4.184 / (0.1 ** 2)
             n_rec_atoms = pdb.topology.getNumAtoms()
             restraint = openmm.CustomExternalForce("k * (x - x0)^2 + k * (y - y0)^2 + k * (z - z0)^2")
             restraint.addPerParticleParameter("k")
@@ -882,8 +884,7 @@ def dock_compound_induced_fit(
             restraint.addPerParticleParameter("z0")
 
             n_restrained = 0
-            for res_idx in range(pdb.topology.getNumResidues()):
-                residue = pdb.topology.getResidue(res_idx)
+            for residue in pdb.topology.residues():
                 res_key = (residue.name, int(residue.id))
                 if res_key in flex_set:
                     continue  # Flexible residue — no restraint
@@ -892,7 +893,7 @@ def dock_compound_induced_fit(
                         pos = complex_pos[atom.index]
                         restraint.addParticle(
                             atom.index,
-                            [RESTRAINT_FORCE, pos[0], pos[1], pos[2]]
+                            [RESTRAINT_FORCE_KJ, pos.x, pos.y, pos.z]
                         )
                         n_restrained += 1
                         break
@@ -904,7 +905,7 @@ def dock_compound_induced_fit(
                 pos = complex_pos[idx]
                 restraint.addParticle(
                     idx,
-                    [RESTRAINT_FORCE, pos[0], pos[1], pos[2]]
+                    [RESTRAINT_FORCE_KJ, pos.x, pos.y, pos.z]
                 )
                 n_restrained += 1
 

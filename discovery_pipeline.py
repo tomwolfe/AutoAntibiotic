@@ -417,7 +417,7 @@ class _CentroidCheckDock:
     """
 
     def __init__(self, target_center: np.ndarray, max_dist: float = 8.0,
-                 exhaustiveness: int = 8, num_modes: int = 3):
+                 exhaustiveness: int = 32, num_modes: int = 3):
         self._target_center = tuple(target_center)
         self._max_dist = max_dist
         self._exhaustiveness = exhaustiveness
@@ -456,7 +456,7 @@ class _CentroidCheckDock:
 def _offtarget_dock_with_centroid_check(
     target_center: np.ndarray,
     max_dist: float = 8.0,
-    exhaustiveness: int = 8,
+    exhaustiveness: int = 32,
     num_modes: int = 3,
 ) -> Callable:
     """Return a dock_compound wrapper that rejects poses too far from the
