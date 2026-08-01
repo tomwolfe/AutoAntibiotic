@@ -141,7 +141,7 @@ try:
 
     __version__ = _pkg_version("autoantibiotic-discovery-pipeline")
 except Exception:  # pragma: no cover - local/dev fallback
-    __version__ = "5.6.0"
+    __version__ = "6.0.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2699,7 +2699,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
     if deps.get("USE_VINA") and config.get("mode") != "ci":
         log.info("─── Phase 3.6: Induced-Fit Docking Refinement (science mode) ───")
         try:
-            from utils.docking import dock_compound_induced_fit, _parse_pdbqt_heavy_coords
+            from utils.ifd import run_ifd_orchestration
 
             ifd_top_n = 50
             if isinstance(config, dict):
@@ -2717,44 +2717,15 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             ) if active_center is not None else ACTIVE_BOX_SIZE
 
             if receptor_pdb and active_center is not None:
-                n_ifd_success = 0
-                ifd_poses_dir = OUTPUT_DIR / "ifd_poses"
-                ifd_poses_dir.mkdir(parents=True, exist_ok=True)
-                for rec in ifd_targets:
-                    pose_pdbqt = getattr(rec, "active_docked_pdbqt", None)
-                    if pose_pdbqt is None or not os.path.exists(pose_pdbqt):
-                        continue
-                    ifd_energy, ifd_pose = dock_compound_induced_fit(
-                        rec, receptor_pdb, active_center, active_box,
-                        work_dir, rigid_pose_pdbqt=pose_pdbqt, tag="ifd",
-                    )
-                    if ifd_energy is not None and ifd_pose is not None:
-                        rec.ifd_energy = ifd_energy
-                        rec.ifd_pose_pdbqt = ifd_pose
-                        n_ifd_success += 1
-                        # Persist the induced-fit pose under output/ifd_poses/<CID>/
-                        cid_dir = ifd_poses_dir / rec.compound_id
-                        cid_dir.mkdir(parents=True, exist_ok=True)
-                        try:
-                            shutil.copyfile(ifd_pose, cid_dir / "ifd_pose.pdbqt")
-                            with open(cid_dir / "ifd_info.json", "w") as fh:
-                                json.dump({
-                                    "compound_id": rec.compound_id,
-                                    "rigid_energy": rec.pb2pa_active_energy,
-                                    "ifd_energy": ifd_energy,
-                                    "flex_residues": _find_flexible_residues(
-                                        receptor_pdb,
-                                        _parse_pdbqt_heavy_coords(ifd_pose),
-                                        distance_cutoff=5.0,
-                                    ),
-                                }, fh, indent=2)
-                        except Exception as exc:
-                            log.warning(f"  Could not persist IFD pose for {rec.compound_id}: {exc}")
-                        log.info(f"    {rec.compound_id}: rigid={rec.pb2pa_active_energy:.2f} → IFD={ifd_energy:.2f} kcal/mol")
-                    else:
-                        rec.ifd_energy = None
-                        rec.ifd_pose_pdbqt = None
-                log.info(f"  IFD completed for {n_ifd_success}/{len(ifd_targets)} candidates; poses in {ifd_poses_dir}")
+                ifd_results = run_ifd_orchestration(
+                    records=ifd_targets,
+                    receptor_pdb=receptor_pdb,
+                    active_center=active_center,
+                    active_box=active_box,
+                    work_dir=work_dir,
+                    output_dir=str(OUTPUT_DIR),
+                )
+                log.info(f"  IFD orchestration complete: {len(ifd_results)} candidates processed")
             else:
                 log.warning("  Skipping IFD: receptor PDB or active center unavailable")
         except Exception as exc:

@@ -60,7 +60,7 @@ Treat any result whose `protocol_trust` is not `Validated` as preliminary.
 > The canonical logic for these exact trust strings lives in
 > `config/constants.py` (`protocol_trust`).
 
-## Features and caveats (v5.6.0)
+## Features and caveats (v6.0.0)
 
 ### Docking pipeline
 **Consensus rigid docking** docks every compound against a set of PBP2a
@@ -93,13 +93,13 @@ in arbitrary units. **This is NOT an MM-GBSA score.** It is an approximate
 rescoring filter that flags ligands with excessive conformational strain
 (e.g., BRICS_0022 at 738 a.u. vs ~366 a.u. for ALL_QU04).
 
-### Flexible side-chain docking (v5.6.0)
+### Flexible side-chain docking (v6.0.0)
 `dock_compound_flexible()` in `utils/docking.py` enables Vina `--flex` docking
 for catalytic residues (Tyr446, Ser403). This is not used in the primary screen
 (which uses rigid consensus docking for throughput) but is available for
 follow-up refinement of top candidates.
 
-### MD stability filter (v5.6.0)
+### MD stability filter (v6.0.0)
 `filter_by_md_stability()` in `utils/filtering.py` flags candidates with
 mean ligand RMSD > 3.0 Å or zero H-bond contacts to catalytic residues during
 explicit-solvent MD. The threshold is strict: in the current study, all top
@@ -168,12 +168,12 @@ weakened.
 > Structure note: the repo screens **3ZG0** (holo, ceftaroline ligand
 > **AI8**) and **1VQQ** (apo), *not* 6TKO/CEF as earlier docs claimed.
 
-### Restored (v5.6.0)
-- **Flexible (`--flex`) docking** was restored in v5.6.0 via
+### Restored (v6.0.0)
+- **Flexible (`--flex`) docking** was restored in v6.0.0 via
   `utils/docking.py:dock_compound_flexible()` and
   `_prepare_flexible_pdbqt()`. It is available for targeted refinement of
   top candidates but is not part of the primary screening pipeline.
 - **MMFF94 strain-interaction rescoring** is available as
   `rescore_mmff94_strain()` for complementary ranking.
-- **MD stability filtering** (`filter_by_md_stability()`) is new in v5.6.0
+- **MD stability filtering** (`filter_by_md_stability()`) is new in v6.0.0
   as a post-MD triage gate.

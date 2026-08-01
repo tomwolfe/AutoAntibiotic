@@ -5,6 +5,19 @@ All notable changes to the pipeline are documented here, newest first.
 ## [6.0.0] — IFD auto-run; MD stability classifier; Troczi site diagnosis; DUD-E benchmark
 
 ### Added
+- **SI confidence intervals** — `Selectivity_Index_CI` column in
+  `output/top_candidates.csv` reports `mean ± std [low–high]` from 3-seed
+  re-docking at exhaustiveness 32.
+- **`output/top_candidates_ci.csv`** — full CSV with `Selectivity_Index_CI`
+  column alongside all original columns.
+
+### Fixed
+- **Version consistency** — `discovery_pipeline.py`, `paper.tex`,
+  `cover_letter.tex`, and `SCIENCE.md` now all report v6.0.0.
+- **Table 3** — corrected to list the true top 5 (BRICS_0022, ALL_QU04,
+  SEED_01150, ALL_SU08, ALL_SP03); ALL_QU05 and BRICS_01163 removed.
+
+### Added
 - **Induced-fit docking auto-run (D2, `discovery_pipeline.py` Phase 3.6)** — In
   science mode the pipeline now automatically refines the top-50 candidates by
   PBP2a active-site energy with `dock_compound_induced_fit()` (flexible residues
