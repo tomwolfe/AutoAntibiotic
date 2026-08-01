@@ -2,6 +2,32 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [7.0.0] — Known-binder validation pipeline; honest negative-result framing
+
+### Added
+- **`scripts/validate_known_binders.py`** — validates known binders (Troczi 2013
+  oxadiazoles, ceftaroline, known decoys) through the full pipeline: rigid docking
+  → IFD → 10 ns explicit-solvent MD (3 replicas) → MM-GBSA. Reports survival
+  classification (Validated / Metastable / Dissociated) per compound.
+- **`scripts/validate_known_binders.py`** — CLI with `--input`, `--decoys`, `--n`,
+  `--protocol` (full vs rigid-only), and `--output-dir` options.
+
+### Changed
+- **Version consistency** — `discovery_pipeline.py`, `paper.tex`, `cover_letter.tex`,
+  `SCIENCE.md`, `CHANGELOG.md`, and `dude_benchmark.py` now all report v7.0.0.
+- **Paper restructured** — leads with the negative finding (all rigid-docking
+  candidates dissociate); adds a "Validated Protocol" section documenting the
+  minimum credible protocol (IFD + 10 ns MD + MM-GBSA); moves MD dissociation
+  results to Methods Results section.
+- **Abstract updated** — reframes the central finding as a negative result:
+  rigid docking is insufficient for PBP2a; known binders now serve as validation
+  of the pipeline rather than as novel lead candidates.
+
+### Fixed
+- **Version number consistency** — all references to v6.0.0 updated to v7.0.0
+  across `discovery_pipeline.py`, `paper.tex`, `cover_letter.tex`,
+  `SCIENCE.md`, `CHANGELOG.md`, and `dude_benchmark.py`.
+
 ## [6.0.0] — IFD auto-run; MD stability classifier; Troczi site diagnosis; DUD-E benchmark
 
 ### Added

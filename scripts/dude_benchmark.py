@@ -379,7 +379,7 @@ def fetch_chembl_pbp2a_actives() -> List[Tuple[str, str, float]]:
     actives: List[Tuple[str, str, float]] = []
     try:
         req = urllib.request.Request(
-            url, headers={"User-Agent": "AutoAntibiotic/5.6.0"}
+            url, headers={"User-Agent": "AutoAntibiotic/7.0.0"}
         )
         with urllib.request.urlopen(req, timeout=30) as response:
             data = _json.loads(response.read().decode())
