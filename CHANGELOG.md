@@ -2,6 +2,25 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [7.1.1] — Fix circular enrichment validation, paper contradictions, and overclaiming
+
+### Fixed
+- **Circular enrichment validation** — `scripts/enrichment_validation.py` now uses property-matched decoys from `data/chembl_decoy_pool.csv` (DUD-E methodology: MW ±10%, logP ±0.5, HBD/HBA ±1, rotatable bonds ±2, Tanimoto < 0.35 to any active) instead of BRICS recombination of known actives. The previous approach was circular because decoys were structurally similar to the actives used for enrichment.
+- **Paper internal contradictions** — Fixed the following contradictions in `paper.tex`:
+  - Abstract no longer claims "multi-replica 100 ns explicit-solvent MD" when only 100 ps single-replica was run; now states "preliminary 100 ps explicit-solvent MD (single replica)"
+  - Methods section now clarifies that IFD infrastructure exists but was not executed in the primary screen for this study
+  - Removed "trajectory-based MM-GBSA" claims when trajectory is only 100 ps; now states "single-pose MM-GBSA at energy-minimized geometry"
+  - Removed "central finding" language throughout; replaced with "primary result"
+  - Removed "lead" language throughout; replaced with "candidate" or "hypothesis"
+  - Added "What this paper does NOT demonstrate" section to abstract
+- **ALL_QU04 H-bond occupancy** — Paper now explicitly notes that ALL_QU04's Ser403 H-bond occupancy is low (0.04) in the 100 ps trajectory, undermining claims about catalytic contacts
+- **Enrichment methodology** — Paper now explicitly states decoys were generated using DUD-E methodology with property matching, not BRICS recombination of actives
+- **Title reframed** — Changed from discovery-focused title to methods-focused title: "AutoAntibiotic: A Validated, Reproducible Virtual Screening Pipeline for MRSA PBP2a"
+
+### Changed
+- **Paper reframed as methods paper** — Title, abstract, and conclusion now focus on pipeline validation rather than lead discovery. Compounds are described as "computational hypotheses" not "validated leads"
+- **Enrichment results table** — Updated to reflect DUD-E property-matched decoy methodology from ChEMBL pool
+
 ## [7.1.0] — Title fix, IFD wired into primary screen, MD stability filter, flexible docking, exhaustiveness increase
 
 ### Added
