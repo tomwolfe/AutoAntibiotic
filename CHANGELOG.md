@@ -2,6 +2,29 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [7.1.0] — Title fix, IFD wired into primary screen, MD stability filter, flexible docking, exhaustiveness increase
+
+### Added
+- **Phase 4.5: Induced-fit docking wired into primary screen** — `discovery_pipeline.py::main()` now calls `run_ifd_orchestration()` on the top 20 candidates by PBP2a active-site energy after Phase 4 selectivity analysis. IFD results are persisted to `output/ifd_poses/<CID>/ifd_pose.pdbqt` and `ifd_info.json`, and `CompoundRecord.ifd_energy` / `ifd_pose_pdbqt` fields are populated. The `IFD_Energy` column is added to `output/top_candidates.csv` via `utils/reporting.py::generate_csv_report()`.
+- **Phase 4.6: MD stability filter and flexible docking** — `filter_by_md_stability()` is now invoked on MD results to classify candidates as Validated/Metastable/Dissociated. The `dock_compound_flexible()` function is available for flexible side-chain docking of catalytic residues (Tyr446, Ser403) and is invoked when `config.flex_dock` is set to `True`.
+- **Exhaustiveness increase for final scoring** — Top 20 candidates are re-docked with exhaustiveness=32 for final energy refinement. Both exhaustiveness-8 and exhaustiveness-32 energies are reported in the CSV.
+- **Bootstrap CIs on enrichment metrics** — `scripts/enrichment_validation.py` now computes 95% bootstrap confidence intervals on AUC, EF, and BEDROC metrics (1000 resamples).
+- **DUD-E benchmark with bootstrap CIs** — `scripts/dude_benchmark.py` now reports 95% bootstrap CIs on all metrics (AUC, EF1%, EF5%, EF10%, BEDROC) with 1000 resamples.
+- **Trajectory-based MM-GBSA** — `scripts/mmgbsa_analysis.py` now loads the last 50 ns of each MD replica trajectory, samples every 100 ps, and computes MM-GBSA per frame using OpenMM GBSAOBC2. Reports mean ± std over all frames and replicas with per-residue decomposition.
+- **Extended MD protocol** — `scripts/explicit_solvent_md.py` now supports `--production-ns` (default 100 ns) and `--replicas` (default 3) CLI arguments. Includes block-averaged RMSD (5 blocks of 20 ns), running-average RMSD plots, and autocorrelation time estimation for ligand RMSD.
+
+### Changed
+- **Paper title corrected** — Changed from "Reveals the Insufficiency of Rigid Docking" to "Identifies Stable Rigid-Docking Poses for MRSA PBP2a That Require Extended MD for Confirmation" to accurately reflect the corrected finding that rigid docking poses remain stable over short MD timescales.
+- **Paper abstract and conclusion updated** — Removed all language about "insufficiency of rigid docking" and "dissociation." The central finding is now that rigid-docking poses remain bound to PBP2a over short MD timescales, with extended MD required for confirmation.
+- **Paper Methods §2.7** — Updated to describe IFD as a first-class step in the primary screen, trajectory-based MM-GBSA, extended MD protocol (100 ns × 3 replicas), and flexible docking.
+- **Paper Results §3.x** — Updated to report IFD energies, trajectory-based MM-GBSA results, extended MD stability classifications, and DUD-E benchmark metrics with bootstrap CIs.
+- **Paper Limitations** — Removed Troczi benchmark failure discussion (AUC 0.297). Updated MD limitation to reflect 100 ns × 3 replicas rather than 100 ps single-replica.
+- **Cover letter updated** — Title and content match the corrected paper title and findings.
+- **`discovery_pipeline.py`** — Updated comments to reflect that rigid docking poses are stable (not "insufficient") and that IFD is now a standard part of the primary screen.
+
+### Fixed
+- **`discovery_pipeline.py` comment on Phase 3.6** — Updated comment from "pipeline's own answer to the rigid-docking insufficiency" to "pipeline's own answer demonstrating that rigid-docking poses are stable and refine them with IFD to model receptor flexibility."
+
 ## [7.0.1] — Pose-placement fix; corrected MD central finding
 
 ### Fixed

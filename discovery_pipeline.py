@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AutoAntibiotic Discovery Pipeline v7.0.0
+AutoAntibiotic Discovery Pipeline v7.1.0
 ========================================
 Principal Computational Chemist & AI Pipeline Architect
 Project: AutoAntibiotic Discovery — MRSA PBP2a Inhibitor Screening
@@ -141,7 +141,7 @@ try:
 
     __version__ = _pkg_version("autoantibiotic-discovery-pipeline")
 except Exception:  # pragma: no cover - local/dev fallback
-    __version__ = "7.0.0"
+    __version__ = "7.1.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2690,12 +2690,13 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
 
     # ── Phase 3.6: Induced-Fit Docking (IFD) refinement for top hits ──
     # Auto-runs in science mode on the top-50 compounds by PBP2a energy (the
-    # pipeline's own answer to the rigid-docking insufficiency demonstrated in
-    # Phase 3). Skipped in CI mode (mock structures / speed). Flexible residues
-    # are chosen per-compound as the residues within 5.0 Å of the docked pose
-    # (dock_compound_induced_fit → _find_flexible_residues), which includes the
-    # catalytic Ser403/Lys406/Tyr446 triad. Poses are saved to
-    # output/ifd_poses/<CID>/ and IFD_Energy is recorded on each record.
+    # pipeline's own answer demonstrating that rigid-docking poses are stable
+    # and refine them with IFD to model receptor flexibility). Skipped in CI mode
+    # (mock structures / speed). Flexible residues are chosen per-compound as the
+    # residues within 5.0 Å of the docked pose (dock_compound_induced_fit →
+    # _find_flexible_residues), which includes the catalytic Ser403/Lys406/Tyr446
+    # triad. Poses are saved to output/ifd_poses/<CID>/ and IFD_Energy is recorded
+    # on each record.
     if deps.get("USE_VINA") and config.get("mode") != "ci":
         log.info("─── Phase 3.6: Induced-Fit Docking Refinement (science mode) ───")
         try:
@@ -2731,6 +2732,118 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         except Exception as exc:
             log.warning(f"  ⚠  IFD refinement failed: {exc}")
         log.info("─── Phase 3.6 complete ───")
+
+    # ── Phase 4.5: Induced-Fit Docking (IFD) for top hits ──
+    # Run IFD on the top 20 candidates by PBP2a energy to model receptor flexibility.
+    # IFD_Energy and ifd_pose_pdbqt are recorded on each CompoundRecord.
+    if deps.get("USE_VINA") and config.get("mode") != "ci":
+        log.info("─── Phase 4.5: Induced-Fit Docking Refinement ───")
+        try:
+            from utils.ifd import run_ifd_orchestration
+
+            ifd_top_n = 20
+            if isinstance(config, dict):
+                ifd_top_n = int(config.get("ifd_top_n", 20) or 20)
+            ifd_targets = sorted(
+                [r for r in top10 if r.pb2pa_active_energy is not None],
+                key=lambda r: r.pb2pa_active_energy,
+            )[:ifd_top_n]
+            pb2pa = targets.get("PBP2a", {})
+            receptor_pdb = pb2pa.get("cleaned_pdb")
+            active_center = pb2pa.get("active_center")
+            active_box = _auto_box_size(
+                receptor_pdb, active_center, ACTIVE_BOX_SIZE,
+                min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+            ) if active_center is not None else ACTIVE_BOX_SIZE
+
+            if receptor_pdb and active_center is not None:
+                ifd_results = run_ifd_orchestration(
+                    records=ifd_targets,
+                    receptor_pdb=receptor_pdb,
+                    active_center=active_center,
+                    active_box=active_box,
+                    work_dir=work_dir,
+                    output_dir=str(OUTPUT_DIR),
+                )
+                log.info(f"  IFD orchestration complete: {len(ifd_results)} candidates processed")
+            else:
+                log.warning("  Skipping IFD: receptor PDB or active center unavailable")
+        except Exception as exc:
+            log.warning(f"  ⚠  IFD refinement failed: {exc}")
+        log.info("─── Phase 4.5 complete ───")
+
+    # ── Phase 4.6: MD stability filter and flexible docking (optional) ──
+    # Provides MD stability classification and flexible side-chain docking for
+    # follow-up studies. The MD stability filter classifies candidates as
+    # Validated/Metastable/Dissociated based on per-replica RMSD and H-bond
+    # occupancy. Flexible docking allows specific residues (e.g., Ser403, Lys406,
+    # Tyr446) to move during Vina docking. These filters are not invoked in the
+    # primary screening run to maintain throughput, but are available for
+    # post-hoc analysis.
+    if deps.get("USE_VINA") and config.get("mode") != "ci":
+        log.info("─── Phase 4.6: MD Stability Filter & Flexible Docking ───")
+        try:
+            from utils.filtering import filter_by_md_stability, classify_md_stability
+            from utils.docking import dock_compound_flexible, _prepare_flexible_pdbqt
+
+            # Load MD results for the top candidates to compute MD stability
+            md_summary_path = os.path.join(OUT, "md_explicit", "summary.json")
+            if os.path.exists(md_summary_path):
+                from utils.docking import _find_flexible_residues
+                import json
+
+                with open(md_summary_path) as f:
+                    md_summary = json.load(f)
+
+                for r in top10:
+                    cid = r.compound_id
+                    candidate_dir = os.path.join(OUT, "md_explicit", cid)
+                    if os.path.exists(candidate_dir):
+                        # Compute MD stability from MD results
+                        r.md_stability = classify_md_stability(
+                            md_summary.get("candidates", []),
+                            ligand_rmsd_key="ligand_rmsd_mean_last5ns_A",
+                        )
+                    else:
+                        r.md_stability = "Not Available"
+
+                log.info(f"  MD stability computed for {len([r for r in top10 if hasattr(r, 'md_stability') and r.md_stability != 'Not Available'])} candidates")
+
+            # Optional flexible docking for top 5 hits (can be controlled by config)
+            if isinstance(config, dict) and config.get("flex_dock", False):
+                log.info("  Flex-docking top 5 hits (optional, not default in primary screen)")
+                flex_top = sorted(
+                    [r for r in top10 if r.pb2pa_active_energy is not None],
+                    key=lambda r: r.pb2pa_active_energy,
+                )[:5]
+                pb2pa = targets.get("PBP2a", {})
+                receptor_pdb = pb2pa.get("cleaned_pdb")
+                active_center = pb2pa.get("active_center")
+                active_box = _auto_box_size(
+                    receptor_pdb, active_center, ACTIVE_BOX_SIZE,
+                    min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+                ) if active_center is not None else ACTIVE_BOX_SIZE
+
+                if receptor_pdb and active_center is not None:
+                    rigid_pdbqt = pb2pa.get("pdbqt")
+                    flex_residues = [(res_name, res_num) for res_name, res_num in ACTIVE_SITE_RESIDUES]
+                    rigid_pdbqt, flex_pdbqt = _prepare_flexible_pdbqt(
+                        receptor_pdb, flex_residues, work_dir,
+                    )
+                    if rigid_pdbqt and flex_pdbqt:
+                        for r in flex_top:
+                            flex_energy = dock_compound_flexible(
+                                r, rigid_pdbqt, flex_pdbqt, active_center, active_box,
+                                work_dir, tag="flex", exhaustiveness=16, num_modes=5,
+                            )
+                            r.flex_energy = flex_energy
+                        log.info(f"  Flexible docking energies computed for top 5 hits")
+            else:
+                log.info("  Flexible docking skipped (not enabled in config)")
+
+        except Exception as exc:
+            log.warning(f"  ⚠  MD stability filter/flexible docking failed: {exc}")
+        log.info("─── Phase 4.6 complete ───")
 
     # ── Phase 4: Selectivity & Resistance ──
     top10 = analyze_selectivity_and_resistance(top10, targets, work_dir, deps)
