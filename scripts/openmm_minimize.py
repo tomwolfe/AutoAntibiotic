@@ -66,8 +66,7 @@ def _openmmforcefields_available() -> bool:
         return False
 
 
-def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str) -> bool:
-    mol = Chem.AddHs(mol)
+def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str, pose_pdbqt: str | None = None) -> bool:
     params = AllChem.ETKDGv3()
     params.randomSeed = 42
     status = AllChem.EmbedMolecule(mol, params)
@@ -75,7 +74,13 @@ def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str) -> bool:
         AllChem.EmbedMolecule(mol, randomSeed=42)
     if mol.GetNumConformers() == 0:
         return False
-    AllChem.UFFOptimizeMolecule(mol, maxIters=200)
+    if pose_pdbqt:
+        from utils.docking import set_pose_coordinates
+        if not set_pose_coordinates(mol, pose_pdbqt):
+            log.warning(f"  Pose overlay failed for {pose_pdbqt}; using ETKDG conformer")
+    mol = Chem.AddHs(mol, addCoords=True)
+    if mol.GetNumConformers() == 0:
+        return False
     Chem.MolToPDBFile(mol, pdb_path)
     return True
 
@@ -196,10 +201,21 @@ def run_simulation(candidate: dict) -> dict:
         result["error"] = "RDKit MolFromSmiles failed"
         return result
 
+    # Start MD from the actual docked pose rather than an arbitrary ETKDG
+    # conformer (which sits ~100 Å away from the pocket and spuriously
+    # "dissociates" on every run).
+    from utils.docking import find_best_pose_pdbqt
+    pose_pdbqt = find_best_pose_pdbqt(cid, str(OUT / "workdir"))
+
     lig_pdb = str(OUT / f"openmm_lig_{cid}.pdb")
-    if not _prepare_ligand_pdb(mol, lig_pdb):
+    if not _prepare_ligand_pdb(mol, lig_pdb, pose_pdbqt=pose_pdbqt):
         result["error"] = "3D conformer generation failed"
         return result
+    if pose_pdbqt:
+        result["pose_pdbqt"] = pose_pdbqt
+        log.info(f"  {cid}: starting from docked pose {pose_pdbqt}")
+    else:
+        log.warning(f"  {cid}: no docked pose found; using ETKDG conformer")
 
     try:
         receptor_top, receptor_pos = _load_receptor_pdb()

@@ -13,52 +13,56 @@
       "success": true,
       "error": null,
       "minimization": {
-        "initial_energy_kcal": -1017878.3,
-        "final_energy_kcal": -1679880.5,
-        "delta_energy_kcal": -662002.2,
-        "ligand_rmsd_A": 1.136,
+        "initial_energy_kcal": 1830342298329.4,
+        "final_energy_kcal": -1694623.1,
+        "delta_energy_kcal": -1830343992952.5,
+        "ligand_rmsd_A": 5.795,
         "success": true
       },
       "equilibration": {
         "nvt_duration_ps": 50.0,
-        "final_energy_kcal": -1358913.7,
-        "ligand_rmsd_mean_A": 3.534,
-        "ligand_rmsd_std_A": 0.892,
+        "final_energy_kcal": -1370356.2,
+        "ligand_rmsd_mean_A": 2.048,
+        "ligand_rmsd_std_A": 0.313,
         "success": true
       },
       "production": {
         "npt_duration_ns": 0.1,
         "n_frames": 50,
-        "ligand_rmsd_mean_A": 8.994,
-        "ligand_rmsd_std_A": 0.854,
-        "ligand_rmsd_max_A": 11.329,
-        "ligand_rmsd_final_A": 10.188,
+        "ligand_rmsd_mean_A": 1.865,
+        "ligand_rmsd_std_A": 0.175,
+        "ligand_rmsd_max_A": 2.311,
+        "ligand_rmsd_final_A": 1.766,
         "hbond_occupancy": {
           "SER403_OG": {
-            "occupancy": 0.0,
-            "mean_distance_A": 88.60429955468013,
-            "min_distance_A": 77.12696701395546
+            "occupancy": 1.0,
+            "mean_distance_A": 36.639181252045816,
+            "min_distance_A": 2.282391763066822
           },
           "LYS406_NZ": {
-            "occupancy": 0.0,
-            "mean_distance_A": 91.40996218810426,
-            "min_distance_A": 80.22846639391814
+            "occupancy": 0.84,
+            "mean_distance_A": 37.07582945306771,
+            "min_distance_A": 2.5209108814472274
           },
           "TYR446_OH": {
-            "occupancy": 0.0,
-            "mean_distance_A": 90.9360914728319,
-            "min_distance_A": 76.33006031573542
+            "occupancy": 0.02,
+            "mean_distance_A": 40.29835456770383,
+            "min_distance_A": 3.423212626337014
           }
         },
-        "mean_potential_energy_kcal": -1368644.8,
+        "mean_potential_energy_kcal": -1379174.8,
         "success": true
       },
-      "stability_class": "Unstable"
+      "stability_class": "Stable",
+      "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/BRICS_0022_active_c2_out.pdbqt",
+      "ligand_rmsd_mean_last5ns_A": 1.7655712094837932,
+      "ser403_og_hbond_occupancy": 1.0
     }
   ],
   "stability_classes": [
-    "Unstable"
+    "Stable"
   ],
   "consensus_stability": "Not Validated",
-  "validated": false
+  "validated": false,
+  "stability_class_d3": "Metastable"
 }

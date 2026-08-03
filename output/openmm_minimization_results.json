@@ -1,187 +1,192 @@
 [
   {
-    "compound_id": "ALL_QU05",
-    "smiles": "O=c1[nH]c2ccc3cccnc3c2n1Cc1ccc(-c2ccccc2)cc1",
-    "minimization": {
-      "initial_energy_kcal": 60064.7,
-      "final_energy_kcal": -9603.5,
-      "delta_energy_kcal": -69668.2,
-      "receptor_rmsd_A": 0.217,
-      "ligand_rmsd_A": 0.058,
-      "success": true
-    },
-    "md": {
-      "nvt_duration_ps": 20.0,
-      "temperature_K": 300,
-      "final_energy_kcal": 5699.7,
-      "ligand_rmsd_mean_A": 6.645,
-      "ligand_rmsd_std_A": 3.284,
-      "ligand_rmsd_max_A": 11.101,
-      "hbond_occupancy": {
-        "SER403_OG": {
-          "n_contacts": 8,
-          "min_distance_A": 2.8
-        },
-        "LYS406_NZ": {
-          "n_contacts": 7,
-          "min_distance_A": 2.9
-        },
-        "TYR446_OH": {
-          "n_contacts": 6,
-          "min_distance_A": 3.1
-        }
-      },
-      "success": true
-    },
-    "success": true,
-    "error": null
-  },
-  {
-    "compound_id": "BRICS_01163",
-    "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-n3c(=O)[nH]c4ccccc43)cc2)c2ccccc12",
-    "minimization": {
-      "initial_energy_kcal": 58933.8,
-      "final_energy_kcal": -9731.1,
-      "delta_energy_kcal": -68664.9,
-      "receptor_rmsd_A": 0.216,
-      "ligand_rmsd_A": 0.053,
-      "success": true
-    },
-    "md": {
-      "nvt_duration_ps": 20.0,
-      "temperature_K": 300,
-      "final_energy_kcal": 5554.1,
-      "ligand_rmsd_mean_A": 5.217,
-      "ligand_rmsd_std_A": 1.859,
-      "ligand_rmsd_max_A": 7.46,
-      "hbond_occupancy": {
-        "SER403_OG": {
-          "n_contacts": 10,
-          "min_distance_A": 2.5
-        },
-        "LYS406_NZ": {
-          "n_contacts": 8,
-          "min_distance_A": 2.8
-        },
-        "TYR446_OH": {
-          "n_contacts": 3,
-          "min_distance_A": 3.5
-        }
-      },
-      "success": true
-    },
-    "success": true,
-    "error": null
-  },
-  {
     "compound_id": "BRICS_0022",
     "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
     "minimization": {
-      "initial_energy_kcal": 73161.6,
-      "final_energy_kcal": -7976.0,
-      "delta_energy_kcal": -81137.5,
-      "receptor_rmsd_A": 0.233,
-      "ligand_rmsd_A": 0.093,
+      "initial_energy_kcal": 1830126227509.3,
+      "final_energy_kcal": -8608.0,
+      "delta_energy_kcal": -1830126236117.4,
+      "receptor_rmsd_A": 0.231,
+      "ligand_rmsd_A": 4.455,
       "success": true
     },
     "md": {
       "nvt_duration_ps": 20.0,
       "temperature_K": 300,
-      "final_energy_kcal": 7152.1,
-      "ligand_rmsd_mean_A": 7.739,
-      "ligand_rmsd_std_A": 4.547,
-      "ligand_rmsd_max_A": 13.698,
+      "final_energy_kcal": 6483.2,
+      "ligand_rmsd_mean_A": 4.343,
+      "ligand_rmsd_std_A": 0.979,
+      "ligand_rmsd_max_A": 4.925,
       "hbond_occupancy": {
         "SER403_OG": {
-          "n_contacts": 15,
-          "min_distance_A": 2.0
+          "n_contacts": 0,
+          "min_distance_A": null
         },
         "LYS406_NZ": {
-          "n_contacts": 12,
-          "min_distance_A": 2.4
+          "n_contacts": 0,
+          "min_distance_A": null
         },
         "TYR446_OH": {
-          "n_contacts": 13,
-          "min_distance_A": 2.2
+          "n_contacts": 0,
+          "min_distance_A": null
         }
       },
       "success": true
     },
     "success": true,
-    "error": null
+    "error": null,
+    "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/BRICS_0022_active_c2_out.pdbqt"
   },
   {
     "compound_id": "ALL_QU04",
     "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
     "minimization": {
-      "initial_energy_kcal": 65450.9,
-      "final_energy_kcal": -9153.9,
-      "delta_energy_kcal": -74604.8,
-      "receptor_rmsd_A": 0.223,
-      "ligand_rmsd_A": 0.078,
+      "initial_energy_kcal": 335355859478.0,
+      "final_energy_kcal": -9836.3,
+      "delta_energy_kcal": -335355869314.4,
+      "receptor_rmsd_A": 0.218,
+      "ligand_rmsd_A": 3.574,
       "success": true
     },
     "md": {
       "nvt_duration_ps": 20.0,
       "temperature_K": 300,
-      "final_energy_kcal": 6155.0,
-      "ligand_rmsd_mean_A": 5.846,
-      "ligand_rmsd_std_A": 2.562,
-      "ligand_rmsd_max_A": 9.187,
+      "final_energy_kcal": 5239.0,
+      "ligand_rmsd_mean_A": 1.684,
+      "ligand_rmsd_std_A": 0.457,
+      "ligand_rmsd_max_A": 2.315,
       "hbond_occupancy": {
         "SER403_OG": {
-          "n_contacts": 9,
-          "min_distance_A": 3.3
+          "n_contacts": 0,
+          "min_distance_A": null
         },
         "LYS406_NZ": {
-          "n_contacts": 11,
-          "min_distance_A": 2.4
+          "n_contacts": 0,
+          "min_distance_A": null
         },
         "TYR446_OH": {
-          "n_contacts": 14,
-          "min_distance_A": 1.7
+          "n_contacts": 0,
+          "min_distance_A": null
         }
       },
       "success": true
     },
     "success": true,
-    "error": null
+    "error": null,
+    "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/ALL_QU04_active_c2_out.pdbqt"
   },
   {
     "compound_id": "SEED_01150",
     "smiles": "O=c1[nH]c(=O)n(Cc2ccc(-c3ccccc3)cc2)c2ccccc12",
     "minimization": {
-      "initial_energy_kcal": 70877.8,
-      "final_energy_kcal": -8314.5,
-      "delta_energy_kcal": -79192.3,
-      "receptor_rmsd_A": 0.229,
-      "ligand_rmsd_A": 0.046,
+      "initial_energy_kcal": 23937505.7,
+      "final_energy_kcal": -10569.3,
+      "delta_energy_kcal": -23948075.0,
+      "receptor_rmsd_A": 0.212,
+      "ligand_rmsd_A": 4.518,
       "success": true
     },
     "md": {
       "nvt_duration_ps": 20.0,
       "temperature_K": 300,
-      "final_energy_kcal": 7127.9,
-      "ligand_rmsd_mean_A": 6.95,
-      "ligand_rmsd_std_A": 2.568,
-      "ligand_rmsd_max_A": 11.008,
+      "final_energy_kcal": 4643.5,
+      "ligand_rmsd_mean_A": 3.868,
+      "ligand_rmsd_std_A": 0.865,
+      "ligand_rmsd_max_A": 4.261,
       "hbond_occupancy": {
         "SER403_OG": {
-          "n_contacts": 9,
-          "min_distance_A": 2.7
+          "n_contacts": 0,
+          "min_distance_A": null
         },
         "LYS406_NZ": {
-          "n_contacts": 7,
-          "min_distance_A": 3.0
+          "n_contacts": 0,
+          "min_distance_A": null
         },
         "TYR446_OH": {
-          "n_contacts": 6,
-          "min_distance_A": 3.2
+          "n_contacts": 0,
+          "min_distance_A": null
         }
       },
       "success": true
     },
     "success": true,
-    "error": null
+    "error": null,
+    "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/SEED_01150_active_c1_out.pdbqt"
+  },
+  {
+    "compound_id": "ALL_SP03",
+    "smiles": "O=S(=O)(NC12CC3CC(CC(C3)C1)C2)c1ccc(-c2ccccc2)cc1",
+    "minimization": {
+      "initial_energy_kcal": 260816285198.8,
+      "final_energy_kcal": -10485.5,
+      "delta_energy_kcal": -260816295684.3,
+      "receptor_rmsd_A": 0.213,
+      "ligand_rmsd_A": 2.969,
+      "success": true
+    },
+    "md": {
+      "nvt_duration_ps": 20.0,
+      "temperature_K": 300,
+      "final_energy_kcal": 4746.0,
+      "ligand_rmsd_mean_A": 2.101,
+      "ligand_rmsd_std_A": 0.56,
+      "ligand_rmsd_max_A": 2.502,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "LYS406_NZ": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "TYR446_OH": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        }
+      },
+      "success": true
+    },
+    "success": true,
+    "error": null,
+    "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/ALL_SP03_active_c2_out.pdbqt"
+  },
+  {
+    "compound_id": "ALL_SU08",
+    "smiles": "O=S(=O)(Nc1ccc(-c2ccc(F)cc2)cc1)c1ccc(C(F)(F)F)cc1",
+    "minimization": {
+      "initial_energy_kcal": 224219091630.7,
+      "final_energy_kcal": -9960.0,
+      "delta_energy_kcal": -224219101590.8,
+      "receptor_rmsd_A": 0.22,
+      "ligand_rmsd_A": 3.474,
+      "success": true
+    },
+    "md": {
+      "nvt_duration_ps": 20.0,
+      "temperature_K": 300,
+      "final_energy_kcal": 5304.5,
+      "ligand_rmsd_mean_A": 1.914,
+      "ligand_rmsd_std_A": 0.456,
+      "ligand_rmsd_max_A": 2.345,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "LYS406_NZ": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        },
+        "TYR446_OH": {
+          "n_contacts": 0,
+          "min_distance_A": null
+        }
+      },
+      "success": true
+    },
+    "success": true,
+    "error": null,
+    "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/ALL_SU08_active_c2_out.pdbqt"
   }
 ]

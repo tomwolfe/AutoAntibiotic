@@ -82,6 +82,7 @@ def run_ifd_orchestration(
             rec.ifd_energy = ifd_energy
             rec.ifd_pose_pdbqt = ifd_pose
             n_success += 1
+            results.append(rec)
 
             # Persist the induced-fit pose
             cid_dir = output_path / rec.compound_id

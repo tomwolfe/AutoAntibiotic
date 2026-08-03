@@ -2,6 +2,34 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [7.0.1] — Pose-placement fix; corrected MD central finding
+
+### Fixed
+- **Critical MD pose-placement bug** — both `scripts/explicit_solvent_md.py`
+  and `scripts/openmm_minimize.py` built the complex via `modeller.add()`
+  WITHOUT translating the ligand onto the docked-pose coordinates. The ligand
+  therefore started ~96–101 Å from the active site and "dissociated" the
+  moment any simulation began. This artifact produced the previously reported
+  "all candidates dissociate within 20 ps" result. With the ligand correctly
+  placed in the docked pose (via `utils.docking.set_pose_coordinates` /
+  `find_best_pose_pdbqt`), the top candidates instead **remain bound**: gas-phase
+  20 ps NVT ligand RMSD 1.68–4.34 Å; explicit-solvent 100 ps NPT ligand RMSD
+  1.86–3.49 Å with Ser403 H-bond occupancy 1.00 for BRICS_0022 and SEED_01150.
+- **IFD orchestration result collection** — `utils/ifd.py.run_ifd_orchestration`
+  only appended records to its return list on failure, so successful IFD
+  energies were dropped; fixed to include successful records. IFD_Energy column
+  populated for 19/20 top candidates in `output/top_candidates.csv`.
+- **IFD receptor-only PDB writer** — topology/atom-count mismatch and a
+  `formalCharge` attribute fix in `utils/docking.py.dock_compound_induced_fit`.
+
+### Changed
+- **Paper central finding corrected** — `paper.tex`, `cover_letter.tex`, and
+  `verify_success.py` criterion 22 reframed from a (now-falsified) negative
+  result ("rigid docking is insufficient / all candidates dissociate") to a
+  nuanced positive result: with correct pose placement, top candidates remain
+  bound over the short simulated MD windows, pending confirmation by longer,
+  multi-replica, unrestrained MD and induced-fit docking.
+
 ## [7.0.0] — Known-binder validation pipeline; honest negative-result framing
 
 ### Added

@@ -281,15 +281,17 @@ def main():
         c(21, "DUD-E/ChEMBL benchmark AUC >= 0.70", ok,
           f"AUC={dude_auc:.3f} (N={dude_n})")
 
-    # Criterion 22: Paper reframed with MD instability as central finding
+    # Criterion 22: Paper reframed with corrected MD central finding (with the
+    # pose-placement fixed, top candidates remain bound over the short MD runs).
     reframe_ok = (
         "central finding" in paper_text_lower
-        and "insufficiency" in paper_text_lower
-        and "dissociate" in paper_text_lower
+        and "remain bound" in paper_text_lower
+        and "preliminary" in paper_text_lower
+        and "docked pose" in paper_text_lower
         and "rigid" in paper_text_lower
     )
     ok = reframe_ok
-    c(22, "Paper reframed with MD instability as central finding", ok,
+    c(22, "Paper reframed with corrected MD central finding (candidates remain bound)", ok,
       "Reframed" if reframe_ok else "Needs reframing")
 
     # Criterion 23: D1 — Troczi site diagnosis resolves the active-site AUC

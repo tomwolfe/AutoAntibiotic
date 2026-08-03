@@ -553,6 +553,77 @@ def _parse_pdbqt_heavy_coords(pdbqt_path: str) -> List[np.ndarray]:
     return coords
 
 
+def set_pose_coordinates(mol: "Chem.Mol", pose_pdbqt: str) -> bool:
+    """Overlay an RDKit mol (with H) heavy atoms onto a docked pose PDBQT.
+
+    The docked pose PDBQT stores the ligand in the receptor coordinate frame.
+    This sets the mol's heavy-atom positions (canonical order, H appended last
+    by RDKit after ``AddHs``) to the pose coordinates so that MD starts from
+    the actual docking pose rather than an arbitrary ETKDG conformer.
+
+    Args:
+        mol: RDKit mol with an embedded conformer (all atoms, including H).
+        pose_pdbqt: Path to the docked pose PDBQT (first MODEL).
+
+    Returns:
+        True if heavy-atom coordinates were applied.
+    """
+    coords = _parse_pdbqt_heavy_coords(pose_pdbqt)
+    if not coords:
+        return False
+    conf = mol.GetConformer()
+    n_heavy = sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() > 1)
+    n_pose = len(coords)
+    if n_heavy != n_pose:
+        log.warning(
+            f"  set_pose_coordinates: mol heavy atoms ({n_heavy}) != pose "
+            f"atoms ({n_pose}); pose overlay skipped"
+        )
+        return False
+    for i in range(n_heavy):
+        conf.SetAtomPosition(
+            i,
+            Chem.rdGeometry.Point3D(
+                float(coords[i][0]), float(coords[i][1]), float(coords[i][2])
+            ),
+        )
+    return True
+
+
+def find_best_pose_pdbqt(compound_id: str, work_dir: str) -> Optional[str]:
+    """Return the lowest-energy active-site docked pose PDBQT for a compound.
+
+    Scans ``<work_dir>/<compound_id>_active_*_out.pdbqt`` and selects the file
+    whose ``REMARK VINA RESULT`` energy is most negative (best pose across the
+    multi-conformer screen).
+
+    Args:
+        compound_id: Compound ID.
+        work_dir: Directory containing the docked pose files.
+
+    Returns:
+        Path to the best pose PDBQT, or None if none found.
+    """
+    import glob
+
+    best_path = None
+    best_energy = float("inf")
+    for f in glob.glob(os.path.join(work_dir, f"{compound_id}_active_*_out.pdbqt")):
+        energy = None
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    if line.startswith("REMARK VINA RESULT"):
+                        energy = float(line.split()[3])
+                        break
+        except (OSError, ValueError, IndexError):
+            continue
+        if energy is not None and energy < best_energy:
+            best_energy = energy
+            best_path = f
+    return best_path
+
+
 def _prepare_flexible_pdbqt(
     receptor_pdb: str,
     flex_residues: List[Tuple[str, int]],
@@ -852,6 +923,10 @@ def dock_compound_induced_fit(
             variant_list = build_openmm_variant_list(modeller.topology, propka_variants)
             modeller.addHydrogens(pH=7.4, variants=variant_list)
 
+            # Receptor atom count AFTER addHydrogens (addHydrogens appends H
+            # atoms to the original topology; the ligand is appended after).
+            n_rec_atoms = modeller.topology.getNumAtoms()
+
             # Add ligand
             lig_pdb_path = os.path.join(work_dir, f"{safe_id}_{tag}_lig.pdb")
             Chem.MolToPDBFile(mol, lig_pdb_path)
@@ -876,7 +951,6 @@ def dock_compound_induced_fit(
             RESTRAINT_FORCE = 10.0  # kcal/mol/Å²
             # k is stored per-particle in internal OpenMM units (kJ/mol/nm²).
             RESTRAINT_FORCE_KJ = RESTRAINT_FORCE * 4.184 / (0.1 ** 2)
-            n_rec_atoms = pdb.topology.getNumAtoms()
             restraint = openmm.CustomExternalForce("k * (x - x0)^2 + k * (y - y0)^2 + k * (z - z0)^2")
             restraint.addPerParticleParameter("k")
             restraint.addPerParticleParameter("x0")
@@ -928,14 +1002,22 @@ def dock_compound_induced_fit(
             with open(min_complex_pdb, "w") as fh:
                 app.PDBFile.writeFile(complex_top, min_pos, fh)
 
-            # Write receptor-only PDB (first n_rec_atoms atoms)
-            rec_top = modeller.topology  # unchanged topology reference
-            rec_pos = []
-            for i in range(n_rec_atoms):
-                rec_pos.append(min_pos[i])
+            # Write receptor-only PDB (receptor atoms + H, no ligand) by
+            # writing the minimized complex and keeping only the first
+            # n_rec_atoms ATOM/HETATM records (receptor + hydrogens).
             rec_top_pdb = os.path.join(work_dir, f"{safe_id}_{tag}_iter{iteration}_rec_only.pdb")
             try:
-                app.PDBFile.writeFile(rec_top, rec_pos, open(rec_top_pdb, "w"))
+                with open(rec_top_pdb, "w") as fh_out:
+                    n_written = 0
+                    with open(min_complex_pdb) as fh_in:
+                        for line in fh_in:
+                            if line.startswith(("ATOM", "HETATM")):
+                                if n_written >= n_rec_atoms:
+                                    break
+                                fh_out.write(line)
+                                n_written += 1
+                            else:
+                                fh_out.write(line)
             except Exception as exc:
                 log.warning(f"    Could not write minimized receptor PDB: {exc}")
                 continue

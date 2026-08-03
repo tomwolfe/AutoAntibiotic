@@ -95,5 +95,41 @@
       "rank": 156,
       "active_energy": -6.8
     }
-  ]
+  ],
+  "decoy_mismatch_analysis": {
+    "summary": "The 150 decoys in data/known_decoys.csv are property-matched to the 21 in-house actives (build_decoys.py), NOT to the Troczi oxadiazole/quinazolinone actives. Systematic property differences inflate/deflate enrichment and confound the Troczi AUC comparison.",
+    "troczi_actives": {
+      "n": 10,
+      "MW_median": 359.36,
+      "MW_range": [
+        324.34,
+        375.82
+      ],
+      "LogP_median": 4.64,
+      "TPSA_median": 72.82,
+      "HBD_median": 1,
+      "HBA_median": 5
+    },
+    "decoys_used": {
+      "n": 150,
+      "MW_median": 418.46,
+      "MW_range": [
+        290.33,
+        468.54
+      ],
+      "LogP_median": 3.71,
+      "TPSA_median": 127.55,
+      "HBD_median": 3,
+      "HBA_median": 8
+    },
+    "pool_coverage": "Only 64/3096 compounds in the decoy pool fall within the oxadiazole property window, so a well-matched oxadiazole decoy set is unavailable from the current library.",
+    "dude_benchmark": {
+      "verdict": "PASS",
+      "auc": 0.75,
+      "n_actives": 50,
+      "n_decoys": 950,
+      "note": "DUD-E-style benchmark with per-active property-matched decoys passes, showing the docking protocol itself enriches known binders when decoys are matched."
+    },
+    "conclusion": "The low Troczi AUC (0.297 active / 0.230 active-site diagnosis) is attributable to decoy-set mismatch and the use of allosteric oxadiazoles in the active-site grid, not to a general docking failure (DUD-E benchmark passes)."
+  }
 }

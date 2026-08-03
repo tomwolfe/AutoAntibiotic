@@ -122,9 +122,8 @@ def _standardize_ligand(mol: Chem.Mol, pH: float = 7.4) -> Chem.Mol:
     return mol
 
 
-def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str) -> bool:
+def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str, pose_pdbqt: str | None = None) -> bool:
     mol = _standardize_ligand(mol, pH=7.4)
-    mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
     params.randomSeed = 42
     status = AllChem.EmbedMolecule(mol, params)
@@ -132,7 +131,13 @@ def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str) -> bool:
         AllChem.EmbedMolecule(mol, randomSeed=42)
     if mol.GetNumConformers() == 0:
         return False
-    AllChem.UFFOptimizeMolecule(mol, maxIters=200)
+    if pose_pdbqt:
+        from utils.docking import set_pose_coordinates
+        if not set_pose_coordinates(mol, pose_pdbqt):
+            log.warning(f"  Pose overlay failed for {pose_pdbqt}; using ETKDG conformer")
+    mol = Chem.AddHs(mol, addCoords=True)
+    if mol.GetNumConformers() == 0:
+        return False
     Chem.MolToPDBFile(mol, pdb_path)
     return True
 
@@ -238,6 +243,7 @@ def _find_hbond_occupancy(trajectory_positions, topology, lig_atom_indices):
                     for atom in residue.atoms():
                         if atom.name == atom_name:
                             ref_pos = frame_pos[atom.index]
+                            frame_dists = []
                             for li in lig_atom_indices:
                                 lig_pos = frame_pos[li]
                                 d = np.linalg.norm(np.array([
@@ -245,9 +251,11 @@ def _find_hbond_occupancy(trajectory_positions, topology, lig_atom_indices):
                                         openmm.unit.angstrom)
                                     for i in range(3)
                                 ]))
-                                min_dists.append(d)
+                                frame_dists.append(d)
                                 if d < H_BOND_DIST_CUTOFF:
                                     frame_contact = True
+                            if frame_dists:
+                                min_dists.append(min(frame_dists))
                             break
             if frame_contact:
                 contact_frames += 1
@@ -371,10 +379,20 @@ def _run_replica(
         result["error"] = "RDKit MolFromSmiles failed"
         return result
 
+    # Start MD from the actual docked pose: overlay the ligand heavy atoms
+    # onto the best active-site docked pose before building the complex.
+    from utils.docking import find_best_pose_pdbqt
+    pose_pdbqt = find_best_pose_pdbqt(cid, str(REPO / "output" / "workdir"))
+
     lig_pdb = str(replica_dir / "ligand.pdb")
-    if not _prepare_ligand_pdb(mol, lig_pdb):
+    if not _prepare_ligand_pdb(mol, lig_pdb, pose_pdbqt=pose_pdbqt):
         result["error"] = "3D conformer generation failed"
         return result
+    if pose_pdbqt:
+        result["pose_pdbqt"] = pose_pdbqt
+        log.info(f"    {cid}: starting from docked pose {pose_pdbqt}")
+    else:
+        log.warning(f"    {cid}: no docked pose found; using ETKDG conformer")
 
     try:
         receptor_top, receptor_pos = _load_receptor_pdb()
