@@ -20,7 +20,7 @@
 \DeclareSIUnit{\perMolar}{M^{-1}}
 \DeclareSIUnit{\angstrom}{\text{Å}}
 
-\title{\textbf{AutoAntibiotic: A Validated, Reproducible Virtual Screening Pipeline for MRSA PBP2a}}
+\title{\textbf{AutoAntibiotic: A Reproducible Virtual Screening Pipeline for MRSA PBP2a with Preliminary Validation}}
 
 \begin{document}
 
@@ -101,7 +101,7 @@ The redocking validation results are shown in Table~\ref{tab:redocking}. The con
 \end{table}
 
 \subsection{Enrichment validation}
-The enrichment benchmark yielded an AUC of~0.949 and EF$_{1\%}$ of~1.62 (Table~\ref{tab:enrichment}), indicating moderate enrichment of known active-site binders from property-matched decoys. The benchmark used 21 known experimental PBP2a binders and property-matched decoys from the ChEMBL decoy pool (DUD-E methodology), docked against the PBP2a apo (1VQQ) conformer. The low EF$_{1\%}$ reflects the small number of actives ($N=21$, $k_1=2$ at the 1\% threshold) and the property-matched nature of the decoys, which are structurally distinct from the actives. This constitutes an in-house self-consistency check rather than a standardised benchmark against established decoy sets (e.g., DUD-E or DEKOIS~2.0). The ROC curve is shown in Figure~\ref{fig:roc}.
+The enrichment benchmark yielded an AUC of~0.949 and EF$_{1\%}$ of~1.62 (Table~\ref{tab:enrichment}), FAILING to meet the standard validation criteria of AUC$\ge$0.7 and EF$_{1\%}$$\ge$5.0. The benchmark used 21 known experimental PBP2a binders and property-matched decoys from the ChEMBL decoy pool (DUD-E methodology), docked against the PBP2a apo (1VQQ) conformer. The low EF$_{1\%}$ reflects the small number of actives ($N=21$, $k_1=2$ at the 1\% threshold) and the property-matched nature of the decoys, which are structurally distinct from the actives. This constitutes an in-house self-consistency check rather than a standardised benchmark against established decoy sets (e.g., DUD-E or DEKOIS~2.0). The ROC curve is shown in Figure~\ref{fig:roc}. The failure to achieve acceptable enrichment demonstrates a central limitation of the pipeline: while the infrastructure exists for enrichment validation, the binding landscape of PBP2a makes it challenging to discriminate actives from property-matched decoys using rigid-receptor docking alone.
 
 \begin{table}[H]
   \centering
@@ -260,7 +260,7 @@ The structure--activity relationship heatmap (Figure~\ref{fig:sar}) summarises k
 \subsection{The top candidates remain bound to the PBP2a active site over short MD}
 The primary result of this study is that, with the ligand correctly placed in the docked pose, AutoDock Vina rigid-receptor docking produces poses that remain bound to PBP2a over the simulated MD windows (20~ps gas-phase; 100~ps explicit-solvent). This provides a positive, reproducible basis for the docked poses: rather than dissociating, the top candidates hold low and stable RMSD in explicit solvent (BRICS\_0022 stable class, Ser403 H-bond occupancy 1.00). Given the short simulated timescales, these results are best interpreted as preliminary stability supporting the docked modes, with longer, multi-replica, unrestrained MD and induced-fit docking still required to establish long-term binding. Single-pose MM-GBSA at the energy-minimized geometry was computed for the three candidates subjected to explicit-solvent MD, and per-residue decomposition is reported in the Supporting Information.
 
-The pipeline executed correctly at every stage: redocking validation of ceftaroline (core RMSD~=~\SI{1.251}{\angstrom}), enrichment benchmarking (AUC~=~0.852, EF$_{1\%}$~=~8.14), multi-conformer consensus docking, selectivity profiling, and MMFF94 rescoring all functioned as designed. The fact that the top candidates remain bound over the short MD windows is itself a meaningful result: it validates that the rigid docked poses are plausible binding modes at these timescales, rather than artifacts. Because the simulations are brief, the primary remaining gap is quantitative -- confirming long-term stability with longer, multi-replica, unrestrained MD and induced-fit docking.
+The pipeline executed correctly at every stage: redocking validation of ceftaroline (core RMSD~=~\SI{1.251}{\angstrom}), enrichment benchmarking (AUC=0.949, EF$_{1\%}$=1.62, verdict=FAIL), multi-conformer consensus docking, selectivity profiling, and MMFF94 rescoring all functioned as designed. The enrichment validation FAILS to meet the standard criteria, demonstrating a key limitation of the rigid-docking approach for this target. The fact that the top candidates remain bound over the short MD windows is still a meaningful result: it validates that the rigid docked poses are plausible binding modes at these timescales, rather than artifacts. Because the simulations are brief, the primary remaining gap is quantitative -- confirming long-term stability with longer, multi-replica, unrestrained MD and induced-fit docking.
 
 
 \subsection{ALL\_QU04 and BRICS\_0022 as prioritised scaffold hypotheses}
