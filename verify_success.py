@@ -281,17 +281,20 @@ def main():
         c(21, "DUD-E/ChEMBL benchmark AUC >= 0.70", ok,
           f"AUC={dude_auc:.3f} (N={dude_n})")
 
-    # Criterion 22: Paper reframed with corrected MD central finding (with the
+    # Criterion 22: Paper reframed with the corrected MD central finding (with the
     # pose-placement fixed, top candidates remain bound over the short MD runs).
+    # The v7.1.1 reframe replaced "central finding" with "primary result" and
+    # removed "lead" language, so the check uses the reframed terms.
     reframe_ok = (
-        "central finding" in paper_text_lower
+        "primary result" in paper_text_lower
         and "remain bound" in paper_text_lower
         and "preliminary" in paper_text_lower
         and "docked pose" in paper_text_lower
         and "rigid" in paper_text_lower
+        and "scaffold hypotheses" in paper_text_lower
     )
     ok = reframe_ok
-    c(22, "Paper reframed with corrected MD central finding (candidates remain bound)", ok,
+    c(22, "Paper reframed: primary result is preliminary MD stability (candidates remain bound)", ok,
       "Reframed" if reframe_ok else "Needs reframing")
 
     # Criterion 23: D1 — Troczi site diagnosis resolves the active-site AUC

@@ -126,6 +126,84 @@ def compute_bedrock(labels, scores, alpha=20.0):
     return float((sum_exp / n_act) * factor)
 
 
+def enrichment_metrics(labels, scores, alpha=20.0):
+    """Compute AUC, EF_1%, EF_5%, EF_10% and BEDROC(alpha).
+
+    Scores are higher=better. Returns a dict with 'auc', 'ef_1pct',
+    'ef_5pct', 'ef_10pct', 'bedrock_alpha20'. ``k1`` is never degenerate
+    (max(1, round(0.01*N))), so with poweref1 is meaningful.
+    """
+    labels = np.asarray(labels, dtype=int)
+    n_act = int(labels.sum())
+    n_dec = len(labels) - n_act
+    if n_act == 0 or n_dec == 0:
+        return {"auc": 0.5, "ef_1pct": 0.0, "ef_5pct": 0.0,
+                "ef_10pct": 0.0, "bedrock_alpha20": 0.5}
+
+    fpr, tpr, auc = compute_roc(labels, scores)
+    bedrock = compute_bedrock(labels, scores, alpha=alpha)
+
+    N = len(labels)
+    # positions 0..N-1, best score first:
+    ranked = np.argsort(-np.asarray(scores, dtype=float))
+    k1 = max(1, round(0.01 * N))
+    k5 = max(1, round(0.05 * N))
+    k10 = max(1, round(0.10 * N))
+    lab_arr = labels
+    act_in_1 = int(lab_arr[ranked[:k1]].sum())
+    act_in_5 = int(lab_arr[ranked[:k5]].sum())
+    act_in_10 = int(lab_arr[ranked[:k10]].sum())
+    ef1 = (act_in_1 / n_act) / (k1 / N) if n_act else 0.0
+    ef5 = (act_in_5 / n_act) / (k5 / N) if n_act else 0.0
+    ef10 = (act_in_10 / n_act) / (k10 / N) if n_act else 0.0
+
+    return {
+        "auc": float(auc),
+        "ef_1pct": float(ef1),
+        "ef_5pct": float(ef5),
+        "ef_10pct": float(ef10),
+        "bedrock_alpha20": float(bedrock),
+    }
+
+
+def bootstrap_cis(labels, scores, n_resamples=1000, seed=RANDOM_SEED,
+                  alpha_level=0.05, alpha=20.0):
+    """Bootstrap (case resampling) 95% confidence intervals on the metrics.
+
+    Resamples compounds with replacement, recomputes every metric per
+    draw, and reports the 2.5th / 97.5th percentiles. With small actives
+    sets (e.g. N_actives~50) these CIs reveal whether EF_1% or AUC values
+    are statistically separable from chance / from each other (Phase G6,
+    paper integration).
+    """
+    labels = np.asarray(labels, dtype=int)
+    scores = np.asarray(scores, dtype=float)
+    n = len(labels)
+    rng = np.random.RandomState(seed)
+    draws = {"auc": [], "ef_1pct": [], "ef_5pct": [], "bedrock_alpha20": []}
+    for _ in range(n_resamples):
+        idx = rng.randint(0, n, size=n)
+        m = enrichment_metrics(labels[idx], scores[idx], alpha=alpha)
+        draws["auc"].append(m["auc"])
+        draws["ef_1pct"].append(m["ef_1pct"])
+        draws["ef_5pct"].append(m["ef_5pct"])
+        draws["bedrock_alpha20"].append(m["bedrock_alpha20"])
+
+    lo, hi = alpha_level / 2, 1 - alpha_level / 2
+    out = {}
+    for key, vals in draws.items():
+        vals = np.asarray(vals)
+        flag = (vals < np.inf) & (~np.isnan(vals))
+        vals = vals[flag]
+        if vals.size == 0:
+            out[key] = [None, None, None]
+            continue
+        out[key] = [round(float(vals.mean()), 3),
+                    round(float(np.percentile(vals, 100 * lo)), 3),
+                    round(float(np.percentile(vals, 100 * hi)), 3)]
+    return out
+
+
 def _mol_props(mol):
     return {
         "mw": Descriptors.MolWt(mol),
@@ -453,6 +531,31 @@ def load_benchmark(active_path, pool_path, n_decoys_per_active=DECOYS_PER_ACTIVE
     chembl_path = os.path.join(DATA, "chembl_pbp2a_actives.csv")
     chembl_actives = fetch_chembl_pbp2a_actives()
 
+    # Fallback to the cached local actives file if the live ChEMBL query
+    # returned too few (e.g. network unreachable). The cache is written by
+    # _save_chembl_actives on every successful fetch, so it always reflects
+    # the last authoritative pull (reproducibility without live network).
+    if len(chembl_actives) < MIN_ACTIVES and os.path.exists(chembl_path):
+        log.warning(
+            f"  ChEMBL API returned {len(chembl_actives)} actives (< {MIN_ACTIVES}); "
+            f"reloading cached local actives: {chembl_path}"
+        )
+        chembl_actives = []
+        with open(chembl_path, newline="") as fh:
+            for row in csv.DictReader(fh):
+                smi = (row.get("smiles") or "").strip()
+                if not smi:
+                    continue
+                try:
+                    ic50 = float(row.get("ic50_uM"))
+                except (TypeError, ValueError):
+                    ic50 = 10.0
+                chembl_actives.append(
+                    (row.get("compound_id") or f"CHEMBL_{len(chembl_actives):04d}",
+                     smi, ic50)
+                )
+        log.info(f"  Loaded {len(chembl_actives)} cached ChEMBL actives")
+
     # Cache ChEMBL actives
     if chembl_actives:
         _save_chembl_actives(chembl_actives, chembl_path)
@@ -508,7 +611,7 @@ def load_benchmark(active_path, pool_path, n_decoys_per_active=DECOYS_PER_ACTIVE
     return records, labels
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="DUD-E style PBP2a enrichment benchmark")
     parser.add_argument(
         "--decoy-pool", type=str, default=None,
@@ -516,14 +619,15 @@ def main():
              "(default: data/screen_library_final.csv).",
     )
     parser.add_argument(
-        "--exhaustiveness", type=int, default=32,
-        help="Vina exhaustiveness (default 32).",
+        "--exhaustiveness", type=int, default=8,
+        help="Vina exhaustiveness (default 8 — the pipeline's documented "
+             "enrichment-protocol setting; screening runs at 32).",
     )
     parser.add_argument(
         "--n-decoys-per-active", type=int, default=DECOYS_PER_ACTIVE,
         help=f"Decoys per active (default {DECOYS_PER_ACTIVE}).",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     config = P.load_config()
     config["mode"] = "science"
@@ -604,6 +708,7 @@ def main():
     ef10 = (act_in_10 / n_act) / (k10 / N) if n_act else 0.0
 
     passed = auc >= AUC_MIN and ef1 >= EF1_MIN and bedrock >= BEDROC_MIN
+    cis = bootstrap_cis(labels, scores, n_resamples=1000, seed=RANDOM_SEED)
     result = {
         "n_compounds": N,
         "n_actives": n_act,
@@ -616,6 +721,7 @@ def main():
         "ef_1pct": round(float(ef1), 3),
         "ef_5pct": round(float(ef5), 3),
         "ef_10pct": round(float(ef10), 3),
+        "ci_95_bootstrap_1000": cis,
         "verdict": "PASS" if passed else "FAIL",
         "thresholds": {"auc_min": AUC_MIN, "bedroc_min": BEDROC_MIN, "ef_1pct_min": EF1_MIN},
         "active_box": list(active_box),
@@ -626,17 +732,37 @@ def main():
     with open(os.path.join(OUT, "dude_benchmark_results.json"), "w") as fh:
         json.dump(result, fh, indent=2)
 
+    # The DUD-E benchmark is now the single authoritative enrichment
+    # validation (≥50 actives, ≥500 property-matched decoys, apo receptor).
+    # Mirror the same result into enrichment_results.json so the canonical
+    # report / verify_success.py read ONE set of numbers (Phase 2 —
+    # reconciliation of the abstract vs Discussion contradiction).
+    with open(os.path.join(OUT, "enrichment_results.json"), "w") as fh:
+        json.dump(result, fh, indent=2)
+
     # ROC plot
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.plot(fpr, tpr, "b-", lw=2, label=f"ROC (AUC={auc:.3f})")
     ax.plot([0, 1], [0, 1], "k--", lw=1)
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
-    ax.set_title("PBP2a DUD-E style enrichment (apo 1VQQ, ex=32)")
+    ax.set_title(f"PBP2a DUD-E style enrichment (apo 1VQQ, ex={args.exhaustiveness})")
     ax.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "dude_benchmark_roc.png"), dpi=300)
+    fig.savefig(os.path.join(OUT, "enrichment_roc.png"), dpi=300)
     plt.close(fig)
+
+    # EF bar chart (mirrored to the canonical enrichment_ef.png)
+    fig2, ax2 = plt.subplots(figsize=(4, 3))
+    ax2.bar(["EF_1%", "EF_5%"], [ef1, ef5], color=["#2c7fb8", "#7fcdbb"])
+    ax2.axhline(5, color="r", ls="--", lw=1, label="pass threshold (5)")
+    ax2.set_ylabel("Enrichment Factor")
+    ax2.set_title(f"Enrichment Factors (apo 1VQQ, ex={args.exhaustiveness})")
+    ax2.legend()
+    fig2.tight_layout()
+    fig2.savefig(os.path.join(OUT, "enrichment_ef.png"), dpi=300)
+    plt.close(fig2)
 
     log.info("")
     log.info("=" * 60)

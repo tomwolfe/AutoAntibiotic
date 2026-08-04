@@ -1,30 +1,52 @@
 {
-  "n_compounds": 1000,
-  "n_actives": 50,
-  "n_decoys": 950,
-  "decoys_per_active": 50,
-  "decoy_pool": "data/screen_library_final.csv",
-  "exhaustiveness": 32,
-  "auc": 0.75,
-  "bedrock_alpha20": 0.5,
-  "ef_1pct": 5.0,
-  "ef_5pct": 3.0,
-  "ef_10pct": 2.5,
-  "verdict": "PASS",
+  "n_compounds": 780,
+  "n_actives": 76,
+  "n_decoys": 704,
+  "decoys_per_active": 10,
+  "decoy_pool": "data/chembl_decoy_pool.csv,data/screen_library_final.csv,data/combined_library.csv,data/diverse_pbp2a_library.csv,data/pbp2a_focused_seed.csv,data/expanded_prelib.csv,data/screen_library.csv,data/screen_library_v2.csv,data/screen_library_v3.csv,data/known_decoys.csv",
+  "exhaustiveness": 8,
+  "auc": 0.1336,
+  "bedrock_alpha20": 0.0,
+  "ef_1pct": 0.0,
+  "ef_5pct": 0.0,
+  "ef_10pct": 0.0,
+  "ci_95_bootstrap_1000": {
+    "auc": [
+      0.133,
+      0.099,
+      0.174
+    ],
+    "ef_1pct": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "ef_5pct": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "bedrock_alpha20": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "verdict": "FAIL",
   "thresholds": {
     "auc_min": 0.75,
     "bedroc_min": 0.4,
     "ef_1pct_min": 5.0
   },
   "active_box": [
-    0,
-    0,
-    0
+    20.0,
+    20.0,
+    20.0
   ],
   "active_center": [
-    0,
-    0,
-    0
+    23.950722164577908,
+    27.871462927924266,
+    88.53164785879629
   ],
   "receptor": "PBP2a apo 1VQQ",
   "method": "DUD-E style (property-matched decoys, apo receptor, Vina)"

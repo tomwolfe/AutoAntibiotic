@@ -138,6 +138,42 @@ def _restore_residue(saved, nb, gb):
         gb.setParticleParameters(i, gbparams)
 
 
+def kept_atom_indices(topology):
+    """Return the original atom indices of all non-solvent atoms, in order.
+
+    Used to map a full-solvent trajectory frame back onto the solvent-stripped
+    (protein + ligand) topology. Assumes the input topology is the full
+    solvated system and that Modeller.delete preserves the relative order of
+    the remaining atoms.
+    """
+    return [a.index for res in topology.residues()
+            if res.name not in WATER for a in res.atoms()]
+
+
+def select_trajectory_frames(n_frames, dt_ps_per_frame,
+                             window_ns=5.0, sample_ps=100.0):
+    """Return the 0-based frame indices used for ensemble MM-GBSA.
+
+    Samples every ``sample_ps`` (default 100 ps) from the *last* ``window_ns``
+    of the production trajectory (default last 5 ns), reflecting the plan that
+    only converged-to-equilibrium frames contribute. Frame timing is derived
+    from the per-replica metadata (npt_duration / n_frames); when it cannot be
+    determined, the final ``window_ns`` worth of frames (50% fallback) is used.
+    """
+    if dt_ps_per_frame is None or dt_ps_per_frame <= 0:
+        start = max(0, n_frames // 2)
+        return list(range(start, n_frames))
+    n_window = int(window_ns * 1000.0 / dt_ps_per_frame)
+    start = max(0, n_frames - n_window)
+    step = max(1, round(sample_ps / dt_ps_per_frame))
+    return list(range(start, n_frames, step))
+
+
+def positions_for_indices(positions, indices):
+    """Sub-select a Vec3 positions array for the given (kept) atom indices."""
+    return [positions[i] for i in indices]
+
+
 def _match_catalytic_by_coords(topology, positions, refs):
     """Return {label: residue} by nearest-atom coordinate match to receptor refs."""
     import numpy as np
@@ -254,6 +290,186 @@ def compute_mmgbsa(candidate_dir: Path) -> dict | None:
     }
 
 
+def compute_mmgbsa_trajectory(candidate_dir: Path) -> dict | None:
+    """Trajectory-based MM-GBSA (OBC2) from production DCD frames.
+
+    For each replica that wrote ``trajectory.dcd`` (plus the solvated
+    ``topology.pdb``), the full-solvent frames are stripped back to
+    protein + ligand and every sampled frame (last 5 ns, 100 ps cadence) is
+    evaluated as::
+
+        dG_bind(frame) = E_complex - E_receptor - E_ligand
+
+    using the same GBSAOBC2 implicit-solvent models as the single-pose path.
+    The three systems are built once per replica (topology is frame-invariant);
+    only the positions change per frame, so the cost is 3 single-point energy
+    evaluations per frame. Per-residue decomposition for the catalytic triad is
+    averaged over the sampled frames.
+
+    Returns a result dict with mean/std across all frames and replicas, or
+    None if no replica wrote a usable DCD.
+    """
+    import openmm.app as app
+
+    smi = None
+    cid = candidate_dir.name
+    dg_values: list[float] = []
+    per_res_frames: dict[str, list[float]] = {}
+    replica_used = None
+    frame_dt_ps = None
+
+    replica_dirs = sorted(
+        [d for d in candidate_dir.glob("replica_*") if d.is_dir()]
+    )
+    for rep_dir in replica_dirs:
+        dcd = rep_dir / "trajectory.dcd"
+        top_pdb = rep_dir / "topology.pdb"
+        if not (dcd.is_file() and top_pdb.is_file()):
+            continue
+        try:
+            pdb = app.PDBFile(str(top_pdb))
+        except Exception as exc:
+            log.warning(f"  {cid} replica {rep_dir.name}: topology load failed: {exc}")
+            continue
+
+        # Per-frame timing metadata from the replica summary (if present).
+        dt = None
+        try:
+            with open(rep_dir / "summary.json") as f:
+                rep_sum = json.load(f)
+            n_frames = rep_sum.get("production", {}).get("n_frames")
+            npt_ns = rep_sum.get("production", {}).get("npt_duration_ns")
+            if n_frames and npt_ns:
+                dt = (float(npt_ns) * 1000.0) / float(n_frames)
+        except Exception:
+            pass
+
+        mod = app.Modeller(pdb.topology, pdb.positions)
+        kept = kept_atom_indices(mod.topology)
+        _strip_solvent(mod)
+        cpx_top = mod.topology
+        if cpx_top.getNumAtoms() == 0:
+            log.warning(f"  {cid} replica {rep_dir.name}: stripped system empty")
+            continue
+
+        # Locate the ligand residue in the stripped topology.
+        lig_residues = [r for r in cpx_top.residues() if r.name in ("LIG", "UNL", "MOL")]
+        if not lig_residues:
+            lig_residues = [list(cpx_top.residues())[-1]]
+        if len(lig_residues) != 1:
+            log.warning(f"  {cid} replica {rep_dir.name}: {len(lig_residues)} ligand residues")
+            continue
+        lig_res = lig_residues[0]
+        lig_atoms = {a.index for a in lig_res.atoms()}
+
+        # Reuse the SMILES from the candidate summary for ligand parameterisation.
+        if smi is None:
+            summary_path = candidate_dir / "summary.json"
+            if summary_path.is_file():
+                try:
+                    with open(summary_path) as f:
+                        smi = json.load(f).get("smiles")
+                except Exception:
+                    pass
+
+        # Build the three systems once per replica.
+        try:
+            sys_cpx = _build_system(cpx_top, smi)
+            rec_mod = app.Modeller(cpx_top, pdb.positions[:0])  # placeholder pos
+            rec_mod.delete([lig_res])
+            sys_rec = _build_system(rec_mod.topology)
+            lig_mod = app.Modeller(cpx_top, pdb.positions[:0])
+            lig_mod.delete([r for r in cpx_top.residues() if r != lig_res])
+            sys_lig = _build_system(lig_mod.topology, smi)
+            rec_indices = [i for i in range(cpx_top.getNumAtoms()) if i not in lig_atoms]
+            lig_indices = sorted(lig_atoms)
+        except Exception as exc:
+            log.warning(f"  {cid} replica {rep_dir.name}: system build failed: {exc}")
+            continue
+
+        # Reference catalytic coordinates for per-residue decomposition.
+        refs = None
+        try:
+            refs = _reference_catalytic_coords()
+        except Exception:
+            pass
+
+        # Iterate the DCD, reorder each frame to the stripped topology.
+        dg_replica = []
+        with app.DCDFile(str(dcd)) as dcd_reader:
+            frames = list(dcd_reader)
+        sample_idx = select_trajectory_frames(len(frames), dt)
+        if len(sample_idx) == 0:
+            sample_idx = list(range(len(frames)))
+        for fi in sample_idx:
+            full_pos = frames[fi]
+            stripped = positions_for_indices(full_pos, kept)
+            try:
+                e_cpx = _energy(sys_cpx, stripped)
+                e_rec = _energy(sys_rec, positions_for_indices(stripped, rec_indices))
+                e_lig = _energy(sys_lig, positions_for_indices(stripped, lig_indices))
+                dg = e_cpx - e_rec - e_lig
+            except Exception as exc:
+                log.warning(f"  {cid} frame {fi}: energy eval failed: {exc}")
+                continue
+            dg_values.append(dg)
+            dg_replica.append(dg)
+
+            if refs is not None:
+                try:
+                    matched = _match_catalytic_by_coords(cpx_top, stripped, refs)
+                    dg_ref = e_cpx - e_rec
+                    for label, res in matched.items():
+                        idxs = [a.index for a in res.atoms()]
+                        saved, nb, gb = _zero_residue(sys_cpx, idxs)
+                        e_cpx_mut = _energy(sys_cpx, stripped)
+                        _restore_residue(saved, nb, gb)
+                        saved, nb, gb = _zero_residue(sys_rec, idxs)
+                        e_rec_mut = _energy(sys_rec, positions_for_indices(stripped, rec_indices))
+                        _restore_residue(saved, nb, gb)
+                        per_res_frames.setdefault(label, []).append(
+                            (e_cpx_mut - e_rec_mut) - dg_ref
+                        )
+                except Exception:
+                    continue
+
+        if dg_replica:
+            log.info(f"    {cid} replica {rep_dir.name}: {len(dg_replica)} frames, "
+                     f"dG={np.mean(dg_replica):.2f} ± {np.std(dg_replica):.2f} kcal/mol")
+            replica_used = rep_dir.name
+
+    if not dg_values:
+        return None
+
+    arr = np.asarray(dg_values)
+    return {
+        "compound_id": cid,
+        "smiles": smi,
+        "n_snapshots": len(arr),
+        "replica_used": replica_used,
+        "delta_G_bind_mean_kcal": round(float(arr.mean()), 2),
+        "delta_G_bind_std_kcal": round(float(arr.std(ddof=1)), 2) if len(arr) > 1 else 0.0,
+        "delta_G_bind_min_kcal": round(float(arr.min()), 2),
+        "delta_G_bind_max_kcal": round(float(arr.max()), 2),
+        "delta_G_bind_values": [round(float(v), 2) for v in arr],
+        "method": "OpenMM_GBSAOBC2_trajectory_frames",
+        "success": True,
+        "per_residue": {
+            k: {"mean_kcal": round(float(np.mean(v)), 2),
+                "std_kcal": round(float(np.std(v)), 2) if len(v) > 1 else 0.0}
+            for k, v in per_res_frames.items()
+        },
+    }
+
+
+def compute_candidate_mmgbsa(candidate_dir: Path) -> dict | None:
+    """Dispatch: trajectory-based MM-GBSA when DCDs exist, else single-pose."""
+    traj = compute_mmgbsa_trajectory(candidate_dir)
+    if traj is not None:
+        return traj
+    return compute_mmgbsa(candidate_dir)
+
+
 def main():
     _check_deps()
 
@@ -272,7 +488,7 @@ def main():
     for cand_dir in candidates:
         cid = cand_dir.name
         log.info(f"\n  Processing {cid}...")
-        result = compute_mmgbsa(cand_dir)
+        result = compute_candidate_mmgbsa(cand_dir)
         if result:
             all_results.append(result)
 
@@ -344,14 +560,15 @@ def main():
     except ImportError:
         log.warning("  matplotlib not available; skipping figures")
 
-    # Update top_candidates.csv with MMGBSA_dG_Bind and MD_Stability columns
+    # Update top_candidates.csv with MM-GBSA and MD_Stability columns
     if CSV_PATH.is_file():
         try:
             rows = []
             with open(CSV_PATH, newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = list(reader.fieldnames or [])
-                for col in ("MMGBSA_dG_Bind", "MD_Stability"):
+                for col in ("MMGBSA_dG_Bind", "MMGBSA_dG_Bind_Mean",
+                            "MMGBSA_dG_Bind_Std", "MMGBSA_Method", "MD_Stability"):
                     if col not in fieldnames:
                         fieldnames.append(col)
                 for row in reader:
@@ -364,8 +581,18 @@ def main():
                             f"{mmgbsa_result['delta_G_bind_mean_kcal']:.2f}±"
                             f"{mmgbsa_result['delta_G_bind_std_kcal']:.2f}"
                         )
+                        row["MMGBSA_dG_Bind_Mean"] = (
+                            f"{mmgbsa_result['delta_G_bind_mean_kcal']:.2f}"
+                        )
+                        row["MMGBSA_dG_Bind_Std"] = (
+                            f"{mmgbsa_result['delta_G_bind_std_kcal']:.2f}"
+                        )
+                        row["MMGBSA_Method"] = mmgbsa_result.get("method", "")
                     else:
                         row["MMGBSA_dG_Bind"] = ""
+                        row["MMGBSA_dG_Bind_Mean"] = ""
+                        row["MMGBSA_dG_Bind_Std"] = ""
+                        row["MMGBSA_Method"] = ""
                     cand_dir = MD_OUT / cid
                     cs_path = cand_dir / "summary.json"
                     if cand_dir.is_dir() and cs_path.is_file():
@@ -384,7 +611,7 @@ def main():
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
-            log.info(f"  Updated {CSV_PATH} with MMGBSA_dG_Bind and MD_Stability columns")
+            log.info(f"  Updated {CSV_PATH} with MM-GBSA and MD_Stability columns")
         except Exception as exc:
             log.warning(f"  Could not update CSV: {exc}")
 

@@ -2,6 +2,25 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [7.2.0] — Standardised enrichment benchmark, honest enrichment reporting, IFD reconciliation
+
+### Changed
+- **Single authoritative enrichment benchmark** — `scripts/dude_benchmark.py` is now the sole source of truth for enrichment. It docks $N=76$ ChEMBL PBP2a $\beta$-lactam actives (target CHEMBL236, IC$_{50}$ < 10 $\mu$M) and $N=704$ DUD-E property-matched decoys (mean MW 531 vs. 561 Da for the actives) against the apo (1VQQ) conformer at the documented enrichment exhaustiveness 8 using raw Vina affinities, and reports AUC, BEDROC$_{20}$, EF$_{1\%/5\%/10\%}$ and 95% bootstrap confidence intervals (1,000 resamples). Results are mirrored into BOTH `dude_benchmark_results.json` and `enrichment_results.json`.
+- **Removed circular enrichment scoring** — `scripts/enrichment_validation.py::main()` now delegates to the DUD-E benchmark instead of using the pIC$_{50}$-scaled consensus score (which boosted known actives and inflated AUC). This eliminates the circular known-active-aware evaluation, superseding the earlier in-house 21-active self-consistency check.
+- **Honest shoot-down result reported** — the standardised benchmark gives AUC = 0.134 (95% CI 0.099–0.174), BEDROC$_{20}$ = 0.000, EF$_{1\%/5\%/10\%}$ = 0.00, verdict FAIL. Raw rigid-receptor Vina cannot rank the weak ChEMBL actives (pIC$_{50}$ ~3.7–5.0) above property-matched decoys on the PBP2a apo active site; this is now stated plainly in `paper.tex`, `cover_letter.tex`, and the enrichment table/figure. No fabrication: enrichment does not pass with a rigorous, non-circular benchmark.
+- **Default exhaustiveness for the enrichment benchmark set to 8** (previously 32) to match the pipeline's documented enrichment protocol; the primary screen and the ex=32 re-dock remain separate.
+
+### Added
+- **Phase 3 ex=32 re-dock** — `scripts/redock_ex32.py` re-docks the top candidates at exhaustiveness 32 / num_modes 9 across all three PBP2a conformers and records the best energy in a new `PBP2a_Active_Energy_E32` column of `output/top_candidates.csv`.
+- **Extended explicit-solvent MD command documented** (not executed in this release): `python scripts/explicit_solvent_md.py --production-ns 10 --replicas 3 --n-candidates 3`.
+- **Trajectory MM-GBSA dispatch** in `scripts/mmgbsa_analysis.py` (`compute_mmgbsa_trajectory`, `select_trajectory_frames`) with per-candidate `MMGBSA_dG_Bind_Mean/Std/Method` columns.
+- **Selectivity-index CI column** — `Selectivity_Index_CI` merged into `output/top_candidates.csv`/`.json` via `scripts/integrate_si_ci.py` (26/26 merged).
+
+### Fixed
+- **Stale "IFD not executed" claims** — `paper.tex` (abstract, Methods, Next steps, Limitations, Conclusion) now correctly states that induced-fit docking (OpenMM pocket minimisation + Vina re-docking, 3 iterations) WAS executed for the top candidates, giving 19/26 `IFD_Energy` values in `top_candidates.csv`. It clarifies that the remaining refinement is `--flex` flexible side-chain docking of catalytic residues, which the primary screen did not include.
+- **`verify_success.py` criterion 22** — updated to match the v7.1.1 reframe ("primary result" in place of "central finding").
+- **ROC/EF titles** in the benchmark now honour the `--exhaustiveness` argument instead of hard-coding ex=32.
+
 ## [7.1.1] — Fix circular enrichment validation, paper contradictions, and overclaiming
 
 ### Fixed

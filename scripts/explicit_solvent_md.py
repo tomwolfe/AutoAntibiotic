@@ -17,8 +17,9 @@ H-bond occupancy for catalytic residues (Ser403, Lys406, Tyr446), and radius
 of gyration.
 
 Usage:
-    python scripts/explicit_solvent_md.py                 # full run (10 ns × 5 × 3)
-    python scripts/explicit_solvent_md.py --quick          # quick test (2 ns × 3 × 1)
+    python scripts/explicit_solvent_md.py                 # full run (100 ns × 5 × 3)
+    python scripts/explicit_solvent_md.py --quick          # quick test (0.1 ns × 3 × 1)
+    python scripts/explicit_solvent_md.py --production-ns 10 --replicas 3 --n-candidates 3
 
 Outputs (per candidate):
     output/md_explicit/<CID>/
@@ -608,6 +609,14 @@ def _run_replica(
         lig_rmsd_traj = []
         report_npt_steps = max(1, npt_steps // int(npt_duration_ns * 1000 / TIMESTEP_PS / 1000))
 
+        # Write the production trajectory to DCD so downstream trajectory-based
+        # MM-GBSA (scripts/mmgbsa_analysis.py) can sample an ensemble rather
+        # than a single minimised pose. The DCD shares atom ordering with the
+        # topology.pdb written above (solvated system), which MM-GBSA reloads.
+        dcd_path = str(replica_dir / "trajectory.dcd")
+        dcd_reporter = app.DCDReporter(dcd_path, report_npt_steps, append=False)
+        simulation.reporters.append(dcd_reporter)
+
         n_prod_chunks = npt_steps // report_npt_steps
         for _ in range(n_prod_chunks):
             simulation.step(report_npt_steps)
@@ -803,6 +812,12 @@ def main():
     parser = argparse.ArgumentParser(description="Explicit-solvent MD for top docking poses")
     parser.add_argument("--quick", action="store_true",
                         help=f"Quick test: {QUICK_NPT_NS}ns x {QUICK_N_CANDIDATES} candidates x {QUICK_N_REPLICAS} replica")
+    parser.add_argument("--production-ns", type=float, default=None,
+                        help=f"NPT production length in ns (default: {DEFAULT_NPT_NS} ns)")
+    parser.add_argument("--replicas", type=int, default=None,
+                        help=f"Number of replicas (default: {DEFAULT_N_REPLICAS})")
+    parser.add_argument("--n-candidates", type=int, default=None,
+                        help=f"Number of top candidates (default: {DEFAULT_N_CANDIDATES})")
     args = parser.parse_args()
 
     if args.quick:
@@ -814,9 +829,9 @@ def main():
         log.info(f"QUICK MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replica "
                  f"(NVT {nvt_ps:.0f} ps, NPT eq {npt_eq_ps:.0f} ps)")
     else:
-        n_candidates = DEFAULT_N_CANDIDATES
-        n_replicas = DEFAULT_N_REPLICAS
-        npt_ns = DEFAULT_NPT_NS
+        n_candidates = args.n_candidates if args.n_candidates is not None else DEFAULT_N_CANDIDATES
+        n_replicas = args.replicas if args.replicas is not None else DEFAULT_N_REPLICAS
+        npt_ns = args.production_ns if args.production_ns is not None else DEFAULT_NPT_NS
         nvt_ps = 500.0
         npt_eq_ps = 500.0
         log.info(f"FULL MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replicas")

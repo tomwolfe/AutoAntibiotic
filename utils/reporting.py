@@ -384,6 +384,15 @@ def generate_csv_report(
                 f"{rec.si_provisional:.2f}" if getattr(rec, "si_provisional", None) is not None
                 else "N/A"
             ),
+            # Two column / one flag block for the multi-seed confidence
+            # interval (DI Phase 6): the reported SI is a single Vina run; the
+            # CI (3-seed re-dock at exhaustiveness 32) reports
+            # "mean ± std [low–high]" so the ±2 kcal/mol Vina noise does not get
+            # mistaken for a statistically meaningful Strong vs Promising split.
+            "Selectivity_Index_CI": (
+                rec.selectivity_index_ci if getattr(rec, "selectivity_index_ci", None)
+                else "N/A"
+            ),
         })
 
     df = pd.DataFrame(rows)

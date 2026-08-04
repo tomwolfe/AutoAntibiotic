@@ -69,6 +69,9 @@ class CompoundRecord:
     mmff_sa_score: Optional[float] = None
     ifd_energy: Optional[float] = None
     ifd_pose_pdbqt: Optional[str] = None
+    # Selectivity Index across 3-seed re-docking, formatted
+    # "mean ± std [low–high]" (see scripts/redock_si_ci.py).
+    selectivity_index_ci: Optional[str] = None
 
 
 SEED_SCAFFOLDS = [

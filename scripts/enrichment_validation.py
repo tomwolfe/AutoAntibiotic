@@ -560,141 +560,23 @@ def consensus_pic50_scores(energies: dict, pic50: dict, records, labels, weight:
 
 
 def main():
-    config = P.load_config()
-    config["mode"] = "science"
-    deps = P.check_dependencies()
-    if not deps["USE_VINA"]:
-        log.error("Vina required for enrichment validation. Aborting.")
-        sys.exit(1)
+    """Delegate to the single authoritative DUD-E enrichment benchmark.
 
-    pdb_dir = os.path.join(OUT, "pdb_enrich")
-    work_dir = os.path.join(OUT, "workdir_enrich")
-    os.makedirs(pdb_dir, exist_ok=True)
-    os.makedirs(work_dir, exist_ok=True)
+    The DUD-E benchmark (scripts/dude_benchmark.py) is the one source of
+    truth for enrichment validation: >=50 ChEMBL actives, >=500 property-
+    matched decoys, apo receptor, Vina at the documented enrichment
+    exhaustiveness, with bootstrap confidence intervals. It writes BOTH
+    output/dude_benchmark_results.json and output/enrichment_results.json
+    (plus the ROC/EF figures), so every downstream consumer reads the same
+    numbers.
 
-    # Target prep
-    _orig_clean = P.clean_pdb_structure
-    def _cached_clean(pdb_path, out_path, **kw):
-        pdbqt = out_path.replace(".pdb", ".pdbqt")
-        if (os.path.exists(out_path) and os.path.getsize(out_path) > 0
-                and os.path.exists(pdbqt) and os.path.getsize(pdbqt) > 0):
-            return pdbqt
-        return _orig_clean(pdb_path, out_path, **kw)
+    This entry point is retained for compatibility with the documented
+    command (AUTOANTIBIOTIC_MODE=science python scripts/enrichment_validation.py)
+    and simply invokes the benchmark.
+    """
+    import dude_benchmark as d
 
-    P.clean_pdb_structure = _cached_clean
-    targets = P.prepare_targets(pdb_dir, work_dir, deps, config=config)
-    pb2pa = targets["PBP2a"]
-    receptor_pdbqts = pb2pa["receptor_pdbqts"]
-    active_center = pb2pa["active_center"]
-    cleaned_pdb = pb2pa["cleaned_pdb"]
-    active_box = P._auto_box_size(
-        cleaned_pdb, active_center, ACTIVE_BOX_SIZE,
-        min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
-    )
-    log.info(f"  Active-site box: {active_box}; center: {active_center}")
-
-    # Load benchmark
-    records, labels = load_benchmark(DATA)
-
-    # Consensus docking against PBP2a active site
-    # NOTE: use only the apo (1VQQ) conformer for enrichment validation.
-    # Both holo conformers (3ZG0, 4DKI) have ceftaroline-expanded binding pockets
-    # that give artificially good scores to decoys, destroying enrichment signal.
-    # Using the resting-state apo structure is the standard practice for VS
-    # enrichment benchmarks (e.g. DUD-E, DEKOIS).
-    receptor_pdbqts = receptor_pdbqts[:1]
-    log.info(f"  Docking {len(records)} compounds against PBP2a active site...")
-    # The benchmark runs at exhaustiveness 8 (the pipeline's documented
-    # enrichment-protocol setting, see paper.tex); the discovery-pipeline
-    # screening runs at exhaustiveness 32.
-    from functools import partial
-    from utils.docking import dock_compound
-    dock_bench = partial(dock_compound, exhaustiveness=8)
-    best_energies = {r.compound_id: None for r in records}
-    for conf_idx, receptor_pdbqt in enumerate(receptor_pdbqts):
-        if receptor_pdbqt is None:
-            continue
-        results = P._dock_compounds_parallel(
-            records, receptor_pdbqt, active_center, active_box,
-            work_dir, f"enrich_c{conf_idx}", dock_func=dock_bench,
-        )
-        for rec, energy in results:
-            if energy is None:
-                continue
-            cur = best_energies.get(rec.compound_id)
-            if cur is None or energy < cur:
-                best_energies[rec.compound_id] = energy
-    energies = best_energies
-
-    # Consensus / pIC50-scaled scoring (see validate_active_site.py): known
-    # actives are ranked by a blend of docking pose quality (-E) and measured
-    # potency (pIC50); decoys are ranked purely by docking energy.
-    pic50 = load_pic50(DATA)
-    scores = consensus_pic50_scores(energies, pic50, records, labels, weight=1.0)
-
-    # ROC / EF with true labels (NO fallback labeling from docking energy)
-    ids = [r.compound_id for r in records]
-    fpr, tpr, auc = compute_roc(labels, scores)
-
-    N = len(ids)
-    n_act = sum(labels)
-    k1 = max(1, round(0.01 * N))
-    k5 = max(1, round(0.05 * N))
-    ranked = sorted(ids, key=lambda c: scores[ids.index(c)], reverse=True)
-    act_in_1 = sum(1 for c in ranked[:k1] if labels[ids.index(c)] == 1)
-    act_in_5 = sum(1 for c in ranked[:k5] if labels[ids.index(c)] == 1)
-    ef1 = (act_in_1 / n_act) / (k1 / N) if n_act else 0.0
-    ef5 = (act_in_5 / n_act) / (k5 / N) if n_act else 0.0
-
-    passed = (auc >= 0.7) and (ef1 >= 5.0)
-    result = {
-        "n_compounds": N,
-        "n_actives": n_act,
-        "n_decoys": N - n_act,
-        "auc": round(float(auc), 4),
-        "ef_1pct": round(float(ef1), 2),
-        "ef_5pct": round(float(ef5), 2),
-        "active_box": list(active_box),
-        "verdict": "PASS" if passed else "FAIL",
-        "label_source": "independent (active_site_actives.csv / known_decoys.csv)",
-    }
-    with open(os.path.join(OUT, "enrichment_results.json"), "w") as fh:
-        json.dump(result, fh, indent=2)
-
-    # ROC plot
-    fig, ax = plt.subplots(figsize=(5, 5))
-    ax.plot(fpr, tpr, "b-", lw=2, label=f"ROC (AUC={auc:.3f})")
-    ax.plot([0, 1], [0, 1], "k--", lw=1)
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("PBP2a Enrichment ROC (independent labels)")
-    ax.legend(loc="lower right")
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "enrichment_roc.png"), dpi=300)
-    plt.close(fig)
-
-    # EF bar chart
-    fig2, ax2 = plt.subplots(figsize=(4, 3))
-    ax2.bar(["EF_1%", "EF_5%"], [ef1, ef5], color=["#2c7fb8", "#7fcdbb"])
-    ax2.axhline(5, color="r", ls="--", lw=1, label="pass threshold (5)")
-    ax2.set_ylabel("Enrichment Factor")
-    ax2.set_title("Enrichment Factors (independent labels)")
-    ax2.legend()
-    fig2.tight_layout()
-    fig2.savefig(os.path.join(OUT, "enrichment_ef.png"), dpi=300)
-    plt.close(fig2)
-
-    log.info("=" * 50)
-    log.info(f"  Enrichment validation (independent labels): AUC={auc:.3f}  "
-             f"EF_1%={ef1:.2f}  EF_5%={ef5:.2f}")
-    log.info(f"  VERDICT: {'PASS' if passed else 'FAIL'} "
-             f"(AUC>=0.7 and EF_1%>=5 required)")
-    if not passed:
-        log.warning("  ⚠  Enrichment did not pass. Known actives have weak affinity "
-                     "(pIC50 3.7-5.0). Pipeline will continue, but docking results "
-                     "for weak binders may have limited enrichment signal.")
-    log.info("=" * 50)
-    sys.exit(0)
+    sys.exit(d.main())
 
 
 if __name__ == "__main__":
