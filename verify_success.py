@@ -367,6 +367,44 @@ def main():
     ok_27 = pdf.exists() and pdf.stat().st_size > 0
     c(27, "paper.tex compiles with xelatex", ok_27, f"PDF={pdf.stat().st_size}B")
 
+    # Criterion 28: Enrichment saturation analysis present (outputs a verdict
+    # that distinguishes undersampling from a fundamental limitation).
+    sat_path = base / "output" / "enrichment_saturation.json"
+    if sat_path.is_file():
+        try:
+            with open(sat_path) as f:
+                sat = json.load(f)
+            sat_assess = sat.get("assessment", {})
+            sat_ok = ("classification" in sat_assess
+                      and "auc_by_exhaustiveness" in sat_assess)
+            sat_detail = (f"classification={sat_assess.get('classification')}, "
+                          f"max AUC={sat_assess.get('max_auc')}")
+        except Exception as exc:
+            sat_ok, sat_detail = False, f"parse error: {exc}"
+        c(28, "Enrichment saturation analysis (AUC vs exhaustiveness)", sat_ok,
+          sat_detail)
+    else:
+        print(f"  [INFO] Criterion 28. Enrichment saturation sweep: not yet run "
+              f"(run: AUTOANTIBIOTIC_MODE=science python "
+              f"scripts/enrichment_saturation_analysis.py)")
+        criteria_results.append(False)
+
+    # Criterion 29: Conserved active-site water analysis present.
+    water_path = base / "output" / "conserved_waters.json"
+    if water_path.is_file():
+        try:
+            with open(water_path) as f:
+                wd = json.load(f)
+            water_ok = wd.get("n_conserved_water_positions") is not None
+            water_detail = (f"{wd.get('n_conserved_water_positions')} conserved "
+                            f"waters, {wd.get('classification')}")
+        except Exception as exc:
+            water_ok, water_detail = False, f"parse error: {exc}"
+    else:
+        water_ok = False
+        water_detail = "MISSING — run scripts/conserved_water_analysis.py"
+    c(29, "Conserved active-site water analysis", water_ok, water_detail)
+
     n_pass = sum(1 for i, ok in enumerate(criteria_results, 1) if ok)
     print("\n" + "=" * 60)
     if all_pass:

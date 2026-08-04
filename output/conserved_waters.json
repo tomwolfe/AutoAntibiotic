@@ -1,0 +1,169 @@
+{
+  "reference_structure": "1VQQ",
+  "catalytic_cutoff_A": 5.0,
+  "cluster_tolerance_A": 1.5,
+  "min_structures": 2,
+  "per_structure": {
+    "1VQQ": {
+      "n_waters_total": 508,
+      "n_catalytic_atoms_found": 3,
+      "n_active_site_waters": 7,
+      "superposed": true,
+      "active_site_waters": [
+        {
+          "superposed_coord_A": [
+            26.718,
+            26.699,
+            91.285
+          ],
+          "native_coord_A": [
+            26.718,
+            26.699,
+            91.285
+          ]
+        },
+        {
+          "superposed_coord_A": [
+            30.105,
+            38.113,
+            86.4
+          ],
+          "native_coord_A": [
+            30.105,
+            38.113,
+            86.4
+          ]
+        },
+        {
+          "superposed_coord_A": [
+            26.672,
+            26.97,
+            88.434
+          ],
+          "native_coord_A": [
+            26.672,
+            26.97,
+            88.434
+          ]
+        },
+        {
+          "superposed_coord_A": [
+            26.884,
+            24.388,
+            86.376
+          ],
+          "native_coord_A": [
+            26.884,
+            24.388,
+            86.376
+          ]
+        },
+        {
+          "superposed_coord_A": [
+            26.015,
+            27.015,
+            82.491
+          ],
+          "native_coord_A": [
+            26.015,
+            27.015,
+            82.491
+          ]
+        },
+        {
+          "superposed_coord_A": [
+            34.172,
+            37.074,
+            86.602
+          ],
+          "native_coord_A": [
+            34.172,
+            37.074,
+            86.602
+          ]
+        },
+        {
+          "superposed_coord_A": [
+            25.944,
+            23.071,
+            84.52
+          ],
+          "native_coord_A": [
+            25.944,
+            23.071,
+            84.52
+          ]
+        }
+      ]
+    },
+    "3ZG0": {
+      "n_waters_total": 410,
+      "n_catalytic_atoms_found": 3,
+      "n_active_site_waters": 2,
+      "superposed": true,
+      "active_site_waters": [
+        {
+          "superposed_coord_A": [
+            26.657,
+            25.882,
+            86.43
+          ],
+          "native_coord_A": [
+            25.725,
+            23.54,
+            85.703
+          ]
+        },
+        {
+          "superposed_coord_A": [
+            35.757,
+            37.818,
+            87.956
+          ],
+          "native_coord_A": [
+            35.407,
+            34.942,
+            87.664
+          ]
+        }
+      ]
+    },
+    "4DKI": {
+      "n_waters_total": 39,
+      "n_catalytic_atoms_found": 3,
+      "n_active_site_waters": 1,
+      "superposed": true,
+      "active_site_waters": [
+        {
+          "superposed_coord_A": [
+            27.229,
+            25.225,
+            85.664
+          ],
+          "native_coord_A": [
+            26.148,
+            24.092,
+            85.482
+          ]
+        }
+      ]
+    }
+  },
+  "n_conserved_water_positions": 1,
+  "conserved_waters": [
+    {
+      "coord_A": [
+        27.056,
+        24.806,
+        86.02
+      ],
+      "supporting_structures": [
+        "1VQQ",
+        "4DKI"
+      ],
+      "n_instances": 2
+    }
+  ],
+  "classification": "WATERS_PRESENT",
+  "summary": "1 conserved active-site water position(s) found across 3 PBP2a structures. The current docking protocol strips all waters before PDBQT preparation, so water-mediated contacts and displacement penalties are not modelled -- a candidate contributor to the poor rigid-docking enrichment for this target. Use output/conserved_waters.pdb to prepare a water-included receptor and re-run the benchmark."
+}

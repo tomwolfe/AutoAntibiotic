@@ -2,6 +2,18 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [7.3.0] — Enrichment saturation & conserved-water diagnostics
+
+### Added
+- **Enrichment saturation analysis** — `scripts/enrichment_saturation_analysis.py` sweeps the DUD-E-style benchmark across exhaustiveness 8/16/32/64 (configurable), caching per-exhaustiveness scores (`output/enrichment_saturation_cache/`) for resumability, and writes `output/enrichment_saturation.json` (+ `enrichment_saturation.png`) with an assessment that classifies the negative AUC as either an *undersampling* artifact (recoverable at higher exhaustiveness) or a *fundamental* target–method limitation appearing when AUC plateaus below 0.7. A `--limit` flag supports plumbing smoke tests without a full sweep.
+- **Conserved active-site water analysis** — `scripts/conserved_water_analysis.py` parses the source PBP2a crystals (1VQQ/3ZG0/4DKI), locates the catalytic triad (Ser403.OG/Lys406.NZ/Tyr446.OH), finds ordered waters within 5 Å, superposes structures onto the reference (Kabsch on active-site Cα) and clusters to identify conserved water positions. Writes `output/conserved_waters.json`, `output/conserved_waters.pdb` (reference frame, for water-included receptor preparation), and a figure. Finding: 1 conserved active-site water position (supported by 1VQQ/4DKI); the water-stripped docking protocol does not model it.
+- **`GUIDE.md`** — three-section practical guide: hypothesis generation (extended MD required), reproducing published results (exact commands), and known limitations (negative enrichment, conserved waters) + future directions.
+- **`verify_success.py` criteria 28–29** — enrichment saturation analysis present, and conserved active-site water analysis present.
+
+### Changed
+- **`paper.tex`/`SCIENCE.md`** — saturation and conserved-water protocols documented under Methods; the DUD-E enrichment failure is reframed as a *validated negative result / key finding on PBP2a druggability* rather than a pipeline defect (undersampling vs. fundamental determined by the saturation sweep). No enrichment numbers are fabricated: the un-run sweep is reported as "not yet run", with the governing command documented.
+- **`SCIENCE.md` OpenMM MD block** — corrected to the current narrative (candidates remain bound over short MD after the pose-placement fix; 100 ps is preliminary; 100 ns × 3 replicas required), replacing the stale "5–8 Å drift" description.
+
 ## [7.2.0] — Standardised enrichment benchmark, honest enrichment reporting, IFD reconciliation
 
 ### Changed

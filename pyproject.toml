@@ -7,7 +7,7 @@ include = ["config", "utils", "tests"]
 
 [project]
 name = "autoantibiotic-discovery-pipeline"
-version = "7.0.0"
+version = "7.3.0"
 description = "AutoAntibiotic Discovery Pipeline — MRSA PBP2a inhibitor screening"
 readme = "README.md"
 requires-python = ">=3.9"

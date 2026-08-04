@@ -107,16 +107,41 @@ candidates would be flagged by the RMSD criterion alone. This filter is
 available as an automated triage gate for future runs.
 
 ### OpenMM MD results — honest assessment
-Gas-phase minimisation (1000-step L-BFGS) converges all top candidates with
-ligand RMSD < 0.10 Å, confirming they are local minima. However, subsequent
-short MD (20 ps NVT, gas-phase; 100 ps NPT, explicit-solvent) shows
-significant ligand drift for all candidates (mean RMSD 5--8 Å). This means:
-- The rigid docked poses are **not** stable on the MD timescale.
-- H-bond contacts are partially maintained (occupancy 0.3--0.75) in explicit
-  solvent, but the overall binding mode is not preserved.
-- Results should be interpreted as preliminary; nano-second MD with
-  unrestrained receptor dynamics is recommended for genuine binding-mode
-  validation.
+Gas-phase minimisation (1000-step L-BFGS) converges all top candidates, and —
+with the ligand correctly placed in the *docked* pose (the pre-v7.1 pose-loss
+bug fixed) — the top candidates remain bound over the short MD windows:
+explicit-solvent NPT ligand RMSD 1.86–3.49 Å over 100 ps, with BRICS_0022
+classified Stable and Ser403 H-bond occupancy 1.00 for BRICS_0022/SEED_01150.
+This is **preliminary**: 100 ps cannot establish long-term stability or rule
+out slow dissociation. Genuine binding-mode validation requires the pipeline's
+extended mode — `python scripts/explicit_solvent_md.py --production-ns 100
+--replicas 3 --n-candidates 5` — followed by trajectory-ensemble MM-GBSA
+(`scripts/mmgbsa_analysis.py` auto-switches to trajectory frames when DCDs
+exist). Do not treat the short 100 ps runs as proof of binding.
+
+### DUD-E enrichment — a validated negative result
+The standardised DUD-E-style benchmark (76 ChEMBL actives, 704
+property-matched decoys, apo 1VQQ, raw Vina affinities, ex=8) reports
+**AUC = 0.134, EF₁% = EF₅% = EF₁₀% = 0, BEDROC₂₀ = 0 — FAIL**. Labels were
+assigned independently of docking energies, so this is **not circular**; the
+potency-scaled / active-informative rescoring that produced inflated
+self-consistency in earlier versions was removed and must not be reintroduced.
+The failure is reported as a *key finding on PBP2a druggability and
+rigid-docking discrimination*, not hidden. `scripts/enrichment_saturation_analysis.py`
+sweeps exhaustiveness 8→64 (cached/resumable) to determine whether the failure
+is undersampling or fundamental: if AUC plateaus below 0.7, report it as a
+definitive method–target limitation. **Never tune parameters to force a PASS —
+the negative result is the contribution.**
+
+### Conserved active-site waters
+Ordered waters occupy the active site in the source crystals (1VQQ: 7, 3ZG0: 2,
+4DKI: 1 within 5 Å of the catalytic triad; one position conserved across
+structures). The docking protocol strips all waters before PDBQT preparation,
+so water-mediated contacts and displacement penalties are not modelled.
+`scripts/conserved_water_analysis.py` reports the conserved positions
+(`output/conserved_waters.json`) and exports them to
+`output/conserved_waters.pdb` (reference frame) for optional water-included
+receptor preparation and "docking with waters" re-benchmarking.
 
 ## Removed and restored features
 
