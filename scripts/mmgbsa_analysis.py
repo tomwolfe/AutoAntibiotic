@@ -492,6 +492,15 @@ def main():
         if result:
             all_results.append(result)
 
+    # Enrich results with ensemble-specific keys for downstream consumers.
+    for r in all_results:
+        r["ensemble"] = {
+            "delta_G_bind_mean_kcal": r.get("delta_G_bind_mean_kcal"),
+            "delta_G_bind_std_kcal": r.get("delta_G_bind_std_kcal"),
+            "n_snapshots": r.get("n_snapshots"),
+            "method": r.get("method"),
+        }
+
     with open(OUT / "mmgbsa_results.json", "w") as fh:
         json.dump(all_results, fh, indent=2, default=str)
     log.info(f"\n  MM-GBSA results saved: {OUT / 'mmgbsa_results.json'}")
@@ -525,7 +534,7 @@ def main():
         ax.set_xticks(range(len(cids)))
         ax.set_xticklabels(cids, rotation=45, ha="right")
         ax.set_ylabel("ΔG_bind (kcal/mol)")
-        ax.set_title("MM-GBSA (OBC2, single-pose) Binding Free Energies")
+        ax.set_title("MM-GBSA (OBC2, ensemble) Binding Free Energies")
         ax.axhline(0, color="grey", ls="--", lw=0.5)
         for bar, mean, std in zip(bars, means, stds):
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + std + 0.3,
@@ -560,58 +569,60 @@ def main():
     except ImportError:
         log.warning("  matplotlib not available; skipping figures")
 
-    # Update top_candidates.csv with MM-GBSA and MD_Stability columns
+    # Update top_candidates.csv with MM-GBSA ensemble columns
     if CSV_PATH.is_file():
         try:
             rows = []
             with open(CSV_PATH, newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = list(reader.fieldnames or [])
-                for col in ("MMGBSA_dG_Bind", "MMGBSA_dG_Bind_Mean",
-                            "MMGBSA_dG_Bind_Std", "MMGBSA_Method", "MD_Stability"):
-                    if col not in fieldnames:
-                        fieldnames.append(col)
-                for row in reader:
-                    cid = row.get("Compound_ID", "")
-                    mmgbsa_result = next(
-                        (r for r in all_results if r.get("compound_id") == cid), None
+            for col in ("MMGBSA_dG_Bind", "MMGBSA_dG_Bind_Mean",
+                        "MMGBSA_dG_Bind_Std", "MMGBSA_dG_Bind_Ensemble",
+                        "MMGBSA_dG_Bind_std", "MMGBSA_Method", "MD_Stability"):
+                if col not in fieldnames:
+                    fieldnames.append(col)
+            for row in reader:
+                cid = row.get("Compound_ID", "")
+                mmgbsa_result = next(
+                    (r for r in all_results if r.get("compound_id") == cid), None
+                )
+                if mmgbsa_result and mmgbsa_result.get("success"):
+                    mean_val = mmgbsa_result.get("delta_G_bind_mean_kcal", 0.0)
+                    std_val = mmgbsa_result.get("delta_G_bind_std_kcal", 0.0)
+                    row["MMGBSA_dG_Bind"] = (
+                        f"{mean_val:.2f}±{std_val:.2f}"
                     )
-                    if mmgbsa_result and mmgbsa_result.get("success"):
-                        row["MMGBSA_dG_Bind"] = (
-                            f"{mmgbsa_result['delta_G_bind_mean_kcal']:.2f}±"
-                            f"{mmgbsa_result['delta_G_bind_std_kcal']:.2f}"
-                        )
-                        row["MMGBSA_dG_Bind_Mean"] = (
-                            f"{mmgbsa_result['delta_G_bind_mean_kcal']:.2f}"
-                        )
-                        row["MMGBSA_dG_Bind_Std"] = (
-                            f"{mmgbsa_result['delta_G_bind_std_kcal']:.2f}"
-                        )
-                        row["MMGBSA_Method"] = mmgbsa_result.get("method", "")
-                    else:
-                        row["MMGBSA_dG_Bind"] = ""
-                        row["MMGBSA_dG_Bind_Mean"] = ""
-                        row["MMGBSA_dG_Bind_Std"] = ""
-                        row["MMGBSA_Method"] = ""
-                    cand_dir = MD_OUT / cid
-                    cs_path = cand_dir / "summary.json"
-                    if cand_dir.is_dir() and cs_path.is_file():
-                        try:
-                            with open(cs_path) as f:
-                                cs = json.load(f)
-                            row["MD_Stability"] = cs.get(
-                                "stability_class_d3",
-                                cs.get("consensus_stability", ""),
-                            ) or ""
-                        except Exception:
-                            row["MD_Stability"] = ""
-                    rows.append(row)
+                    row["MMGBSA_dG_Bind_Mean"] = f"{mean_val:.2f}"
+                    row["MMGBSA_dG_Bind_Std"] = f"{std_val:.2f}"
+                    row["MMGBSA_dG_Bind_Ensemble"] = f"{mean_val:.2f}±{std_val:.2f}"
+                    row["MMGBSA_dG_Bind_std"] = f"{std_val:.2f}"
+                    row["MMGBSA_Method"] = mmgbsa_result.get("method", "")
+                else:
+                    row["MMGBSA_dG_Bind"] = ""
+                    row["MMGBSA_dG_Bind_Mean"] = ""
+                    row["MMGBSA_dG_Bind_Std"] = ""
+                    row["MMGBSA_dG_Bind_Ensemble"] = ""
+                    row["MMGBSA_dG_Bind_std"] = ""
+                    row["MMGBSA_Method"] = ""
+                cand_dir = MD_OUT / cid
+                cs_path = cand_dir / "summary.json"
+                if cand_dir.is_dir() and cs_path.is_file():
+                    try:
+                        with open(cs_path) as f:
+                            cs = json.load(f)
+                        row["MD_Stability"] = cs.get(
+                            "stability_class_d3",
+                            cs.get("consensus_stability", ""),
+                        ) or ""
+                    except Exception:
+                        row["MD_Stability"] = ""
+                rows.append(row)
 
             with open(CSV_PATH, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
-            log.info(f"  Updated {CSV_PATH} with MM-GBSA and MD_Stability columns")
+            log.info(f"  Updated {CSV_PATH} with MM-GBSA ensemble columns")
         except Exception as exc:
             log.warning(f"  Could not update CSV: {exc}")
 

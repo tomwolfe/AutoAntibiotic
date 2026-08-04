@@ -44,6 +44,7 @@ from rdkit.Chem import AllChem, Descriptors, Crippen, rdMolDescriptors, DataStru
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import discovery_pipeline as P
 from config.constants import ACTIVE_BOX_SIZE, ACTIVE_SITE_RESIDUES, BETA_LACTAM_SMARTS
+from utils.structure_prep import merge_conserved_waters
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("dude_bench")
@@ -627,6 +628,12 @@ def main(argv=None):
         "--n-decoys-per-active", type=int, default=DECOYS_PER_ACTIVE,
         help=f"Decoys per active (default {DECOYS_PER_ACTIVE}).",
     )
+    parser.add_argument(
+        "--include-conserved-waters", action="store_true",
+        help="Merge conserved active-site waters (output/conserved_waters.pdb) "
+             "into the receptor before PDBQT conversion and re-run the "
+             "water-included benchmark.",
+    )
     args = parser.parse_args(argv)
 
     config = P.load_config()
@@ -773,6 +780,81 @@ def main(argv=None):
              f"EF_1%={ef1:.2f}  EF_5%={ef5:.2f}  EF_10%={ef10:.2f}")
     log.info(f"  VERDICT: {'PASS' if passed else 'FAIL'} "
              f"(AUC>={AUC_MIN}, BEDROC>={BEDROC_MIN}, EF_1%>={EF1_MIN} required)")
+
+    # ── Water-included benchmark (optional) ──────────────────────
+    if args.include_conserved_waters:
+        water_pdb = os.path.join(OUT, "conserved_waters.pdb")
+        if not os.path.exists(water_pdb):
+            log.warning(
+                "  --include-conserved-waters set but "
+                f"{water_pdb} not found; skipping water-included benchmark"
+            )
+        else:
+            log.info("")
+            log.info("=" * 60)
+            log.info("  Water-Included DUD-E Benchmark")
+            log.info("=" * 60)
+            try:
+                water_receptor_pdb = os.path.join(
+                    work_dir, "PBP2a_apo_waters_clean.pdb"
+                )
+                merge_conserved_waters(
+                    cleaned_pdb, water_pdb, water_receptor_pdb,
+                )
+                water_pdbqt = water_receptor_pdb.replace(".pdb", ".pdbqt")
+                if not (os.path.exists(water_pdbqt) and os.path.getsize(water_pdbqt) > 0):
+                    P.clean_pdb_structure(water_receptor_pdb, water_receptor_pdb)
+                water_box = P._auto_box_size(
+                    water_receptor_pdb, active_center, ACTIVE_BOX_SIZE,
+                    min_size=15.0, max_size=20.0, site_residues=ACTIVE_SITE_RESIDUES,
+                )
+                water_results = P._dock_compounds_parallel(
+                    records, water_pdbqt, active_center, water_box,
+                    work_dir, "dude_water",
+                    dock_func=partial(dock_compound, exhaustiveness=args.exhaustiveness),
+                )
+                water_energies = {rec.compound_id: energy for rec, energy in water_results}
+                water_scores = [-(water_energies[cid] if water_energies[cid] is not None else 1e9) for cid in ids]
+                water_fpr, water_tpr, water_auc = compute_roc(labels, water_scores)
+                water_bedrock = compute_bedrock(labels, water_scores, alpha=20.0)
+                water_ranked = sorted(ids, key=lambda c: (water_energies[c] if water_energies[c] is not None else 1e9))
+                water_act_in_1 = sum(1 for c in water_ranked[:k1] if labels[ids.index(c)] == 1)
+                water_act_in_5 = sum(1 for c in water_ranked[:k5] if labels[ids.index(c)] == 1)
+                water_act_in_10 = sum(1 for c in water_ranked[:k10] if labels[ids.index(c)] == 1)
+                water_ef1 = (water_act_in_1 / n_act) / (k1 / N) if n_act else 0.0
+                water_ef5 = (water_act_in_5 / n_act) / (k5 / N) if n_act else 0.0
+                water_ef10 = (water_act_in_10 / n_act) / (k10 / N) if n_act else 0.0
+                water_passed = water_auc >= AUC_MIN and water_ef1 >= EF1_MIN and water_bedrock >= BEDROC_MIN
+                water_result = {
+                    "n_compounds": N,
+                    "n_actives": n_act,
+                    "n_decoys": N - n_act,
+                    "decoys_per_active": args.n_decoys_per_active,
+                    "decoy_pool": pool_path,
+                    "exhaustiveness": args.exhaustiveness,
+                    "auc": round(float(water_auc), 4),
+                    "bedrock_alpha20": round(float(water_bedrock), 4),
+                    "ef_1pct": round(float(water_ef1), 3),
+                    "ef_5pct": round(float(water_ef5), 3),
+                    "ef_10pct": round(float(water_ef10), 3),
+                    "ci_95_bootstrap_1000": bootstrap_cis(labels, water_scores, n_resamples=1000, seed=RANDOM_SEED),
+                    "verdict": "PASS" if water_passed else "FAIL",
+                    "thresholds": {"auc_min": AUC_MIN, "bedroc_min": BEDROC_MIN, "ef_1pct_min": EF1_MIN},
+                    "active_box": list(water_box),
+                    "active_center": [float(v) for v in active_center],
+                    "receptor": "PBP2a apo 1VQQ (with conserved waters)",
+                    "method": "DUD-E style (water-included receptor, property-matched decoys, Vina)",
+                    "water_included": True,
+                }
+                with open(os.path.join(OUT, "dude_benchmark_water_results.json"), "w") as fh:
+                    json.dump(water_result, fh, indent=2)
+                log.info(f"  Water-included AUC={water_auc:.4f}  VERDICT={'PASS' if water_passed else 'FAIL'}")
+                log.info(f"  Results saved to output/dude_benchmark_water_results.json")
+            except Exception as exc:
+                log.error(f"  Water-included benchmark failed: {exc}")
+                import traceback
+                traceback.print_exc()
+
     sys.exit(0 if passed else 1)
 
 

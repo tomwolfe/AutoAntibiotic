@@ -17,7 +17,7 @@ import logging
 import os
 import re
 import subprocess
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -522,5 +522,104 @@ def compute_residue_centroid(pdb_path: str, resid_list: List[str],
 
     centroid = np.mean(atom_coords, axis=0)
     return centroid
+
+
+def merge_conserved_waters(
+    receptor_pdb: str,
+    conserved_water_pdb: str,
+    output_pdb: str,
+) -> str:
+    """Merge conserved active-site waters from *conserved_water_pdb* into
+    the receptor structure at *receptor_pdb* and write the combined
+    structure to *output_pdb*.
+
+    The function parses both PDB files with Bio.PDB, collects all water
+    residues (HOH/WAT/SOL) from the conserved-waters file, and appends
+    them to the receptor structure before writing the combined PDB.
+    This is used to prepare a water-included receptor for docking when
+    explicit waters are known to be conserved in the active site.
+
+    Args:
+        receptor_pdb: Path to the receptor PDB (protein only, no waters).
+        conserved_water_pdb: Path to the conserved waters PDB (output of
+            ``scripts/conserved_water_analysis.py``).
+        output_pdb: Destination path for the combined receptor + waters PDB.
+
+    Returns:
+        The path to *output_pdb*.
+
+    Raises:
+        FileNotFoundError: If either input PDB does not exist.
+    """
+    from Bio.PDB import PDBParser, PDBIO, Select
+
+    if not os.path.exists(receptor_pdb):
+        raise FileNotFoundError(f"Receptor PDB not found: {receptor_pdb}")
+    if not os.path.exists(conserved_water_pdb):
+        raise FileNotFoundError(
+            f"Conserved waters PDB not found: {conserved_water_pdb}"
+        )
+
+    parser = PDBParser(QUIET=True)
+
+    # Load the receptor structure
+    rec_struct = parser.get_structure("receptor", receptor_pdb)
+
+    # Load the conserved waters structure and collect water residues
+    water_struct = parser.get_structure("waters", conserved_water_pdb)
+    water_residues = []
+    for model in water_struct:
+        for chain in model:
+            for residue in chain:
+                rname = residue.get_resname().strip().upper()
+                if rname in ("HOH", "WAT", "SOL"):
+                    water_residues.append(residue)
+
+    log.info(
+        f"  merge_conserved_waters: {len(water_residues)} conserved water "
+        f"residues found in {conserved_water_pdb}"
+    )
+
+    if not water_residues:
+        log.warning(
+            "  No conserved water residues found; writing receptor-only PDB."
+        )
+        io = PDBIO()
+        io.set_structure(rec_struct)
+        io.save(output_pdb)
+        return output_pdb
+
+    # Append water residues to the receptor structure.
+    # Bio.PDB does not provide a direct API for adding residues to an
+    # existing structure, so we work at the level of the internal
+    # child list of the Model/Chain objects.
+    # We add waters to the first chain of the first model in the receptor.
+    receptor_model = rec_struct[0]
+    receptor_chain = None
+    for chain in receptor_model:
+        receptor_chain = chain
+        break
+
+    if receptor_chain is None:
+        raise RuntimeError("Receptor structure has no chains")
+
+    # Determine the next residue ID to use (avoid ID collisions)
+    existing_ids = {r.id for r in receptor_chain}
+    next_id = 1
+    for res in water_residues:
+        # Use the original residue ID from the water structure but
+        # ensure it does not collide with existing receptor residue IDs.
+        rid = res.id
+        while rid in existing_ids:
+            rid = (" ", rid[1] + 1, " ")
+        existing_ids.add(rid)
+        receptor_chain.add(residue=res)
+
+    io = PDBIO()
+    io.set_structure(rec_struct)
+    io.save(output_pdb)
+    log.info(f"  merge_conserved_waters: wrote {output_pdb} "
+             f"({len(water_residues)} waters merged)")
+    return output_pdb
 
 
