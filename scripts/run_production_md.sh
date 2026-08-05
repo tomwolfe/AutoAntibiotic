@@ -112,12 +112,18 @@ if ! grep -q "^${CID}," "${CSV_PATH}"; then
     exit 1
 fi
 
-# Run the explicit-solvent MD pipeline
+# Run the explicit-solvent MD pipeline. Platform auto-detection (Metal →
+# CUDA → OpenCL → CPU, see utils/openmm_platform.py) picks the best backend;
+# on Apple Silicon that is the Metal-backed OpenCL runtime (~8× CPU). Use
+# --platform to force a specific backend. --resume makes a re-submitted job
+# continue unfinished replicas from their last checkpoint instead of
+# restarting (production writes checkpoints every --checkpoint-interval steps).
 cd "${REPO}"
 python3 scripts/explicit_solvent_md.py \
     --production-ns "${PRODUCTION_NS}" \
     --replicas "${REPLICAS}" \
-    --n-candidates 1
+    --n-candidates 1 \
+    --resume
 
 echo "=== Production MD for ${CID} completed ==="
 JOBHEADER

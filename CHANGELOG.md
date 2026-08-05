@@ -2,6 +2,43 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [Unreleased] — GPU acceleration, checkpointed production MD, restraint fix
+
+### Added
+- **OpenMM platform auto-detection** — new `utils/openmm_platform.py` selects
+  the best backend (`Metal → CUDA → OpenCL → CPU`) with a documented fallback
+  chain and reason string. On Apple Silicon the default is the Metal-backed
+  **OpenCL** runtime: the real 419k-atom solvated PBP2a system runs at ~9
+  ns/day vs ~1.06 ns/day on CPU (~8.5×). See `docs/metal_acceleration.md`.
+- **Checkpoint/resume production MD** — `scripts/explicit_solvent_md.py` NPT
+  production now writes OpenMM checkpoints (`production_checkpoint.cpt` +
+  `production_checkpoint.json`) plus a rolling frames/energies/RMSD file, and
+  `--resume` continues unfinished replicas from the last saved step, skipping
+  minimisation/equilibration so production never restarts from zero on
+  interruption. Per-replica `ns/day` throughput is logged and stored under
+  `production.performance`.
+- **`--platform`, `--threads`, `--checkpoint-interval`, `--benchmark` CLI** —
+  force a backend, pin CPU threads, control checkpoint frequency, and run a
+  short ns/day benchmark that writes no analysis.
+- **Production trajectory DCD** — `trajectory.dcd` per replica is serialised
+  from the reconstructed frame list at completion (resume-consistent, written
+  via mdtraj), enabling trajectory-ensemble MM-GBSA.
+
+### Fixed
+- **OpenCL/Metal NaN restraint bug** — the Cα position restraint used the
+  naive `(x-x0)^2+...` expression, which produces NaN energies on GPU
+  platforms for periodic systems (GPU wraps coordinates into the primary
+  cell). It now uses `periodicdistance(...)^2` via
+  `utils/openmm_platform.position_restraint_force`. OpenCL now runs the full
+  419k-atom system with finite energies. Non-periodic paths
+  (`scripts/openmm_minimize.py`, IFD in `utils/docking.py`) are `NoCutoff`
+  and were verified safe.
+
+### Changed
+- `scripts/run_production_md.sh` generated SLURM jobs now pass `--resume` so a
+  re-submitted job continues from checkpoints instead of restarting.
+- README documents the acceleration/checkpoint workflow.
+
 ## [7.4.0] — Water-included enrichment & extended-MD validation
 
 ### Added

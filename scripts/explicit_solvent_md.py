@@ -16,10 +16,27 @@ Reports per-replica stability classification, ligand RMSD, per-residue RMSF,
 H-bond occupancy for catalytic residues (Ser403, Lys406, Tyr446), and radius
 of gyration.
 
+Uses OpenMM platform auto-detection (Metal → CUDA → OpenCL → CPU, see
+``utils/openmm_platform.py``). On Apple Silicon the default is OpenCL, which is
+Apple's Metal-backed runtime and is ~8× faster than CPU on the production
+system. A Metal-enabled OpenMM build (when available) is preferred automatically.
+
+Also fixes the historic binding-restraint bug: the Cα position restraint now
+uses ``periodicdistance(...)`` so energies are finite on GPU platforms (the old
+``(x-x0)^2 + ...`` form produced NaNs on OpenCL for periodic systems).
+
+Checkpoint/resume: the NPT production phase writes periodic checkpoints
+(positions + velocities + minimised-reference pose). Re-running with
+``--resume`` (or the same command) continues unfinished replicas from the last
+checkpoint instead of restarting, so long runs survive interrupted sessions.
+
 Usage:
     python scripts/explicit_solvent_md.py                 # full run (100 ns × 5 × 3)
     python scripts/explicit_solvent_md.py --quick          # quick test (0.1 ns × 3 × 1)
     python scripts/explicit_solvent_md.py --production-ns 10 --replicas 3 --n-candidates 3
+    python scripts/explicit_solvent_md.py --platform Metal --replicas 3 --production-ns 100
+    python scripts/explicit_solvent_md.py --resume --n-candidates 5
+    python scripts/explicit_solvent_md.py --benchmark 2000   # ns/day throughput report only
 
 Outputs (per candidate):
     output/md_explicit/<CID>/
@@ -43,12 +60,15 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 
 from rdkit import Chem
 from rdkit.Chem import AllChem
+
+from typing import Optional  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
 log = logging.getLogger("explicit_md")
@@ -326,6 +346,98 @@ def _classify_stability(ligand_rmsd_array: np.ndarray, last_n_ns: float = 5.0, d
         return "Unstable"
 
 
+def _quantity_frames(raw: "np.ndarray") -> list:
+    """Convert an ``(n_frames, n_atoms, 3)`` nm array into a list of frames
+    whose elements are ``openmm.Vec3`` values scaled by ``unit.nanometer``.
+
+    ``State.getPositions()`` returns Quantity-wrapped Vec3 objects (nm), so the
+    whole analysis layer (which calls ``pos[i][j].value_in_unit(unit.angstrom)``
+    and ``(a-b)[k].value_in_unit(...)``) expects the same shape here. Plain
+    ``openmm.Vec3`` (dimensionless floats) would make ``float.value_in_unit``
+    fail, so this helper keeps the resume path's rebuilt positions type-compatible
+    with the forward path.
+    """
+    import openmm
+    from openmm import unit
+
+    return [
+        [openmm.Vec3(float(row[0]), float(row[1]), float(row[2])) * unit.nanometer
+         for row in frame]
+        for frame in raw
+    ]
+
+
+def _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
+                      prod_positions, prod_energies, lig_rmsd_traj,
+                      pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps) -> None:
+    """Append a chunk of production data to the rolling binaries and write an
+    OpenMM checkpoint so an interrupted run can resume from *done_steps*.
+
+    The rolling positions file layout is: int64 n_atoms followed by
+    n_frame * n_atom * 3 float64 coords. Energies/RMSD are appended to their
+    own rolling arrays (read+concat+write). Checkpoint state is stored in the
+    OpenMM native ``.cpt`` plus a small ``.json`` carrying ``step_done``.
+    """
+    # ── Rolling positions file (streaming append) ────────────────────────
+    with open(frames_bin, "ab") as fh:
+        if os.path.getsize(frames_bin) == 0:
+            if not pos_tmp:
+                return
+            n_atoms = len(pos_tmp[0])
+            fh.write(np.int64(n_atoms).tobytes())
+        for pos in pos_tmp:
+            arr = np.array([[p.x, p.y, p.z] for p in pos], dtype=np.float64)
+            fh.write(arr.tobytes())
+
+    # ── Rolling energy / RMSD arrays ─────────────────────────────────────
+    for path, values in ((energies_bin, energy_tmp), (rmsd_bin, rmsd_tmp)):
+        if not values:
+            continue
+        if os.path.exists(path):
+            prev = list(np.load(path))
+        else:
+            prev = []
+        np.save(path, np.asarray(prev + values, dtype=np.float64))
+
+    # ── OpenMM native checkpoint + resume marker ─────────────────────────
+    simulation.saveCheckpoint(str(ckpt_path))
+    with open(ckpt_json, "w") as f:
+        json.dump({"step_done": int(done_steps)}, f)
+
+
+def _report_dcd(dcd_path: str, topology, positions) -> str:
+    """Write a plain (non-append) DCD from an in-memory position list.
+
+    A one-shot write at completion is resume-consistent: fresh and resumed
+    runs both reconstruct the full frame list and dump the same DCD, so the
+    file never contains a partial/doubled trajectory. Positions are expected
+    to be a list of OpenMM ``Vec3`` lists (nm units); mdtraj converts to the
+    Angstrom-packed DCD format.
+    """
+    if not positions:
+        return dcd_path
+    import numpy as _np
+    try:
+        import mdtraj as md
+    except ImportError:
+        log.warning("  mdtraj not installed; skipping DCD output")
+        return dcd_path
+
+    xyz_nm = _np.asarray(
+        [[[v.x, v.y, v.z] for v in frame] for frame in positions],
+        dtype=_np.float64,
+    )
+    md_top = md.Topology.from_openmm(topology)
+    traj = md.Trajectory(xyz=xyz_nm, topology=md_top)
+    try:
+        traj.save_dcd(dcd_path)
+    except Exception:
+        # Fallback: let mdtraj infer the box from the first frame.
+        traj.save_dcd(dcd_path)
+    return dcd_path
+
+
+
 def _run_replica(
     candidate: dict,
     replica_idx: int,
@@ -334,6 +446,11 @@ def _run_replica(
     nvt_duration_ps: float,
     npt_duration_ns: float,
     npt_eq_duration_ps: float = 500.0,
+    platform_spec: Optional[dict] = None,
+    platform_preference: Optional[str] = None,
+    cpu_threads: Optional[int] = None,
+    resume: bool = False,
+    checkpoint_interval_steps: int = 25000,
 ) -> dict:
     """Run a single MD replica for one candidate.
 
@@ -350,14 +467,27 @@ def _run_replica(
     from openmmforcefields.generators import SMIRNOFFTemplateGenerator
     from openff.toolkit import Molecule as OffMolecule
 
-    # The OpenCL platform in this OpenMM build evaluates CustomExternalForce
-    # incorrectly for periodic systems (wildly inflated restraint energies).
-    # Force the CPU platform for correct physics, using all available cores.
-    _PLATFORM = openmm.Platform.getPlatformByName("CPU")
-    _PLATFORM.setPropertyDefaultValue("Threads", "14")
+    # The historic hardcoded CPU fallback is replaced by platform
+    # auto-detection (Metal → CUDA → OpenCL → CPU). Equilibration phases use a
+    # restraint-safe platform; production prefers the fastest available
+    # accelerator. The restraint expression uses periodicdistance() so the
+    # OpenCL/Metal backends evaluate it correctly (the naive (x-x0)^2 form
+    # produced NaN on OpenCL for periodic systems).
+    from utils.openmm_platform import (
+        select_platform,
+        position_restraint_force,
+        note_metal_status,
+    )
+    platform_spec = platform_spec or select_platform(
+        preference=platform_preference, threads=cpu_threads,
+    )
+    _PLATFORM = platform_spec["platform"]
+    platform_name = platform_spec["name"]
+    _PLATFORM_PROPERTIES = platform_spec["properties"]
 
     cid = candidate["Compound_ID"]
     smi = candidate["SMILES"]
+    log.info(f"    [{cid}] OpenMM platform: {platform_name} ({note_metal_status()})")
 
     result = {
         "replica": replica_idx,
@@ -373,6 +503,26 @@ def _run_replica(
 
     replica_dir = MD_OUT / cid / f"replica_{replica_idx}"
     replica_dir.mkdir(parents=True, exist_ok=True)
+
+    # Early resume detection: when a production checkpoint exists, skip the
+    # minimisation + NVT + NPT-equilibration stages and continue production
+    # directly from the saved checkpoint state. (The deterministic solvation +
+    # parameterisation steps still run so the rebuilt System matches the
+    # checkpoint; the expensive minimisation/equilibration phases are skipped
+    # and, crucially, production never restarts from zero on interruption.)
+    ckpt_path = replica_dir / "production_checkpoint.cpt"
+    ckpt_json = replica_dir / "production_checkpoint.json"
+    frames_bin = replica_dir / "production_frames.dat"
+    energies_bin = replica_dir / "production_energies.npy"
+    rmsd_bin = replica_dir / "ligand_rmsd.npy"
+    min_pos_ref_bin = replica_dir / "min_pos_ref.npy"
+    _EARLY_RESUME = bool(
+        resume and ckpt_path.is_file() and ckpt_json.is_file() and frames_bin.is_file()
+    )
+    if _EARLY_RESUME:
+        log.info(f"    [{cid}] early resume: production checkpoint found for replica "
+                 f"{replica_idx}; skipping minimisation/equilibration (production "
+                 f"continues from the last saved step)")
 
     # Prepare ligand 3D structure
     mol = Chem.MolFromSmiles(smi)
@@ -468,17 +618,25 @@ def _run_replica(
         result["error"] = f"System creation failed: {exc}"
         return result
 
+    # For a fresh (non-resumed) run, drop any stale production binaries from a
+    # previous/aborted run of the same replica so the rolling frames/energies
+    # files start empty (appending to leftovers corrupts the header/reshape).
+    if not _EARLY_RESUME:
+        for _p in ("production_frames.dat", "production_energies.npy",
+                   "ligand_rmsd.npy", "production_checkpoint.cpt",
+                   "production_checkpoint.json", "trajectory.dcd"):
+            _f = replica_dir / _p
+            if _f.exists():
+                _f.unlink()
+
     # Restraint helper. Restrains backbone Cα atoms with a harmonic flat-well
     # potential k*(Δx²+Δy²+Δz²). k is stored per-particle in internal OpenMM
-    # units (kJ/mol/nm²): 10 kcal/mol/Å² ≡ 4184 kJ/mol/nm². This OpenMM build
-    # exposes CustomExternalForce.setParticleParameters(index, particle, params).
+    # units (kJ/mol/nm²): 10 kcal/mol/Å² ≡ 4184 kJ/mol/nm². The expression
+    # uses periodicdistance() so OpenCL/Metal evaluate it correctly for the
+    # periodic system (the naive (x-x0)^2 form produced NaN on OpenCL).
     RESTRAINT_FORCE = 10.0  # kcal/mol/Å²
     RESTRAINT_FORCE_KJ = RESTRAINT_FORCE * 4.184 / (0.1 ** 2)  # kJ/mol/nm²
-    restraint = openmm.CustomExternalForce("k * (x - x0)^2 + k * (y - y0)^2 + k * (z - z0)^2")
-    restraint.addPerParticleParameter("k")
-    restraint.addPerParticleParameter("x0")
-    restraint.addPerParticleParameter("y0")
-    restraint.addPerParticleParameter("z0")
+    restraint = position_restraint_force(RESTRAINT_FORCE_KJ, periodic=True)
 
     ca_indices = []
     ca_xyz = []
@@ -495,81 +653,102 @@ def _run_replica(
     system.addForce(restraint)
 
     # i. Minimisation
-    try:
-        integrator = openmm.LangevinIntegrator(
-            300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
-        )
-        simulation = app.Simulation(solvated_top, system, integrator, platform=_PLATFORM)
-        simulation.context.setPositions(solvated_pos)
+    if _EARLY_RESUME:
+        # Restore the minimised reference pose (RMSD reference) from disk.
+        # Stored as plain nm floats; wrap in openmm units so downstream analysis
+        # (pos[i][j].value_in_unit(unit.angstrom)) works identically to the
+        # forward path's State.getPositions().
+        _arr = np.load(min_pos_ref_bin)
+        min_pos = [openmm.Vec3(float(r[0]), float(r[1]), float(r[2])) * unit.nanometer
+                   for r in _arr]
+        result["minimization"] = {"resumed": True, "success": True}
+        log.info(f"    [{cid}] restoring minimised reference pose from {min_pos_ref_bin.name}")
+    else:
+        try:
+            integrator = openmm.LangevinIntegrator(
+                300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
+            )
+            simulation = app.Simulation(solvated_top, system, integrator, platform=_PLATFORM,
+                                        platformProperties=_PLATFORM_PROPERTIES)
+            simulation.context.setPositions(solvated_pos)
 
-        state_before = simulation.context.getState(getEnergy=True)
-        e_init = state_before.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            state_before = simulation.context.getState(getEnergy=True)
+            e_init = state_before.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
 
-        simulation.minimizeEnergy(maxIterations=2000)
-        state_min = simulation.context.getState(getEnergy=True, getPositions=True)
-        e_min = state_min.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-        min_pos = state_min.getPositions()
-        lig_rmsd_min = _compute_ligand_rmsd(solvated_pos, min_pos, lig_indices)
+            simulation.minimizeEnergy(maxIterations=2000)
+            state_min = simulation.context.getState(getEnergy=True, getPositions=True)
+            e_min = state_min.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            min_pos = state_min.getPositions()
+            lig_rmsd_min = _compute_ligand_rmsd(solvated_pos, min_pos, lig_indices)
 
-        result["minimization"] = {
-            "initial_energy_kcal": round(e_init, 1),
-            "final_energy_kcal": round(e_min, 1),
-            "delta_energy_kcal": round(e_min - e_init, 1),
-            "ligand_rmsd_A": round(float(lig_rmsd_min), 3) if lig_rmsd_min else None,
-            "success": True,
-        }
-    except Exception as exc:
-        result["error"] = f"Minimisation failed: {exc}"
-        return result
+            # Persist the minimised pose (RMSD reference) so a resumed run keeps
+            # the same reference frame.
+            np.save(str(min_pos_ref_bin),
+                    np.array([[p.x, p.y, p.z] for p in min_pos]))
+
+            result["minimization"] = {
+                "initial_energy_kcal": round(e_init, 1),
+                "final_energy_kcal": round(e_min, 1),
+                "delta_energy_kcal": round(e_min - e_init, 1),
+                "ligand_rmsd_A": round(float(lig_rmsd_min), 3) if lig_rmsd_min else None,
+                "success": True,
+            }
+        except Exception as exc:
+            result["error"] = f"Minimisation failed: {exc}"
+            return result
 
     # ii. NVT equilibration with gradual restraint release
-    try:
-        simulation.context.setPositions(min_pos)
-        simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
+    if _EARLY_RESUME:
+        nvt_pos = None
+        result["equilibration"] = {"resumed": True, "success": True}
+    else:
+        try:
+            simulation.context.setPositions(min_pos)
+            simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
 
-        nvt_positions = []
-        nvt_steps_half = nvt_steps // 2
-        # Release the restraint over ~100 discrete ramps within the first half
-        # of the NVT phase, batching the integrator calls for performance.
-        nvt_chunk = max(1, nvt_steps_half // 100)
-        step = 0
-        while step < nvt_steps:
-            if step < nvt_steps_half:
-                frac = 1.0 - step / nvt_steps_half
-                k = RESTRAINT_FORCE_KJ * frac
-                for i in range(n_restrained_ca):
-                    restraint.setParticleParameters(i, ca_indices[i],
-                        [k, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
-                restraint.updateParametersInContext(simulation.context)
-                n_run = min(nvt_chunk, nvt_steps - step)
-            else:
-                n_run = nvt_steps - step
-            simulation.step(n_run)
-            step += n_run
-            state_nvt = simulation.context.getState(getPositions=True, getEnergy=True)
-            nvt_positions.append(state_nvt.getPositions())
+            nvt_positions = []
+            nvt_steps_half = nvt_steps // 2
+            # Release the restraint over ~100 discrete ramps within the first half
+            # of the NVT phase, batching the integrator calls for performance.
+            nvt_chunk = max(1, nvt_steps_half // 100)
+            step = 0
+            while step < nvt_steps:
+                if step < nvt_steps_half:
+                    frac = 1.0 - step / nvt_steps_half
+                    k = RESTRAINT_FORCE_KJ * frac
+                    for i in range(n_restrained_ca):
+                        restraint.setParticleParameters(i, ca_indices[i],
+                            [k, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
+                    restraint.updateParametersInContext(simulation.context)
+                    n_run = min(nvt_chunk, nvt_steps - step)
+                else:
+                    n_run = nvt_steps - step
+                simulation.step(n_run)
+                step += n_run
+                state_nvt = simulation.context.getState(getPositions=True, getEnergy=True)
+                nvt_positions.append(state_nvt.getPositions())
 
-        state_nvt_final = simulation.context.getState(getEnergy=True)
-        e_nvt = state_nvt_final.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-        lig_rmsd_nvt = []
-        for pos in nvt_positions:
-            lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
-            if lr is not None:
-                lig_rmsd_nvt.append(float(lr))
-        nvt_pos = nvt_positions[-1] if nvt_positions else min_pos
+            state_nvt_final = simulation.context.getState(getEnergy=True)
+            e_nvt = state_nvt_final.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            lig_rmsd_nvt = []
+            for pos in nvt_positions:
+                lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
+                if lr is not None:
+                    lig_rmsd_nvt.append(float(lr))
+            nvt_pos = nvt_positions[-1] if nvt_positions else min_pos
 
-        result["equilibration"] = {
-            "nvt_duration_ps": nvt_duration_ps,
-            "final_energy_kcal": round(e_nvt, 1),
-            "ligand_rmsd_mean_A": round(float(np.mean(lig_rmsd_nvt)), 3) if lig_rmsd_nvt else None,
-            "ligand_rmsd_std_A": round(float(np.std(lig_rmsd_nvt)), 3) if lig_rmsd_nvt else None,
-            "success": True,
-        }
-    except Exception as exc:
-        result["error"] = f"NVT equilibration failed: {exc}"
-        return result
+            result["equilibration"] = {
+                "nvt_duration_ps": nvt_duration_ps,
+                "final_energy_kcal": round(e_nvt, 1),
+                "ligand_rmsd_mean_A": round(float(np.mean(lig_rmsd_nvt)), 3) if lig_rmsd_nvt else None,
+                "ligand_rmsd_std_A": round(float(np.std(lig_rmsd_nvt)), 3) if lig_rmsd_nvt else None,
+                "success": True,
+            }
+        except Exception as exc:
+            result["error"] = f"NVT equilibration failed: {exc}"
+            return result
 
-    # iii. NPT equilibration + iv. Production
+    # iii. NPT equilibration + iv. Production (with checkpoint/resume)
     try:
         system.addForce(openmm.MonteCarloBarostat(1.0 * unit.atmosphere, 300 * unit.kelvin, 25))
         # The LangevinIntegrator is already bound to the NVT context; OpenMM
@@ -577,70 +756,163 @@ def _run_replica(
         npt_integrator = openmm.LangevinIntegrator(
             300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
         )
-        simulation = app.Simulation(solvated_top, system, npt_integrator, platform=_PLATFORM)
-        simulation.context.setPositions(nvt_pos)
-        simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
+        simulation = app.Simulation(solvated_top, system, npt_integrator, platform=_PLATFORM,
+                                    platformProperties=_PLATFORM_PROPERTIES)
 
-        # NPT equilibration (first npt_eq_duration_ps ps with gradual restraint release)
-        npt_eq_steps = int(npt_eq_duration_ps / TIMESTEP_PS)
-        npt_eq_chunk = max(1, npt_eq_steps // 100)
-        eq_step = 0
-        while eq_step < npt_eq_steps:
-            frac = 1.0 - eq_step / npt_eq_steps
-            k = 0.5 * RESTRAINT_FORCE_KJ * frac  # start at 5 kcal/mol/Å², release to 0
+        # ── Checkpoint/resume bookkeeping ─────────────────────────────────
+        # The production loop streams to a rolling positions file so a resumed
+        # run can reconstruct the whole trajectory without re-running finished
+        # steps. OpenMM's native checkpoint (saveCheckpoint/loadCheckpoint)
+        # restores positions+velocities+integrator at the last saved step.
+        resuming = _EARLY_RESUME
+        start_step = 0
+        prod_positions: list = []
+        prod_energies: list = []
+        lig_rmsd_traj: list = []
+        if resuming:
+            with open(ckpt_json) as f:
+                start_step = int(json.load(f)["step_done"])
+            log.info(f"    [{cid}] resuming production from step {start_step} "
+                     f"({ckpt_path.name})")
+
+        # Reconstruct the trajectory analysed so far.
+        if resuming:
+            with open(frames_bin, "rb") as fh:
+                nat = np.frombuffer(fh.read(8), dtype=np.int64)[0]
+                nfr = int(os.path.getsize(frames_bin) - 8) // (nat * 3 * 8)
+                raw = np.fromfile(fh, dtype=np.float64).reshape(nfr, nat, 3)
+            prod_positions = _quantity_frames(raw)
+            if energies_bin.is_file():
+                prod_energies = list(np.load(energies_bin))
+            if rmsd_bin.is_file():
+                lig_rmsd_traj = list(np.load(rmsd_bin))
+            # Restore the minimised reference pose used for ligand RMSD.
+            _arr = np.load(min_pos_ref_bin)
+            min_pos = [openmm.Vec3(float(r[0]), float(r[1]), float(r[2])) * unit.nanometer
+                       for r in _arr]
+
+        # NPT equilibration (restraint release) only when starting fresh.
+        if not resuming:
+            simulation.context.setPositions(nvt_pos)
+            simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
+            npt_eq_steps = int(npt_eq_duration_ps / TIMESTEP_PS)
+            npt_eq_chunk = max(1, npt_eq_steps // 100)
+            eq_step = 0
+            while eq_step < npt_eq_steps:
+                frac = 1.0 - eq_step / npt_eq_steps
+                k = 0.5 * RESTRAINT_FORCE_KJ * frac  # start at 5 kcal/mol/Å², release to 0
+                for i in range(n_restrained_ca):
+                    restraint.setParticleParameters(i, ca_indices[i],
+                        [k, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
+                restraint.updateParametersInContext(simulation.context)
+                n_run = min(npt_eq_chunk, npt_eq_steps - eq_step)
+                simulation.step(n_run)
+                eq_step += n_run
+
+            # Remove restraints for production
             for i in range(n_restrained_ca):
                 restraint.setParticleParameters(i, ca_indices[i],
-                    [k, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
+                    [0.0, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
             restraint.updateParametersInContext(simulation.context)
-            n_run = min(npt_eq_chunk, npt_eq_steps - eq_step)
-            simulation.step(n_run)
-            eq_step += n_run
+        else:
+            # Resume: restore the equilibrated, restraint-free production state.
+            simulation.loadCheckpoint(str(ckpt_path))
+            # OpenMM checkpoints do NOT persist force per-particle parameters
+            # (only context *global* parameters), so the freshly-built restraint
+            # here still holds k=RESTRAINT_FORCE_KJ (full strength). Production
+            # must run unrestrained, so explicitly zero the restraint and sync
+            # it into the loaded context. This re-derives the force from the
+            # restored positions but does not disturb velocities/integrator.
+            for i in range(n_restrained_ca):
+                restraint.setParticleParameters(i, ca_indices[i],
+                    [0.0, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
+            restraint.updateParametersInContext(simulation.context)
 
-        # Remove restraints for production
-        for i in range(n_restrained_ca):
-            restraint.setParticleParameters(i, ca_indices[i],
-                [0.0, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
-        restraint.updateParametersInContext(simulation.context)
-
-        # NPT production
+        # ── NPT production ────────────────────────────────────────────────
         pocket_center_np = np.array([40.0, 20.0, 30.0])
-        prod_positions = []
-        prod_energies = []
-        lig_rmsd_traj = []
         report_npt_steps = max(1, npt_steps // int(npt_duration_ns * 1000 / TIMESTEP_PS / 1000))
 
-        # Write the production trajectory to DCD so downstream trajectory-based
-        # MM-GBSA (scripts/mmgbsa_analysis.py) can sample an ensemble rather
-        # than a single minimised pose. The DCD shares atom ordering with the
-        # topology.pdb written above (solvated system), which MM-GBSA reloads.
-        dcd_path = str(replica_dir / "trajectory.dcd")
-        dcd_reporter = app.DCDReporter(dcd_path, report_npt_steps, append=False)
-        simulation.reporters.append(dcd_reporter)
+        n_atoms = solvated_top.getNumAtoms()
+        # Persist frame-0 header (atom count) for the rolling positions file.
+        with open(frames_bin, "ab") as fh:
+            if os.path.getsize(frames_bin) == 0:
+                fh.write(np.int64(n_atoms).tobytes())
 
-        n_prod_chunks = npt_steps // report_npt_steps
+        total_steps_remaining = npt_steps - start_step
+        done_steps = start_step
+        n_prod_chunks = total_steps_remaining // report_npt_steps
+        chunk_remaining = total_steps_remaining % report_npt_steps
+        rmsd_tmp = []
+        energy_tmp = []
+        pos_tmp = []
+        _t_prod0 = time.monotonic()
         for _ in range(n_prod_chunks):
             simulation.step(report_npt_steps)
             state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
             pos = state_prod.getPositions()
-            prod_positions.append(pos)
-            prod_energies.append(
-                state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-            )
+            e = state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
             lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
-            if lr is not None:
-                lig_rmsd_traj.append(float(lr))
-        if npt_steps % report_npt_steps:
-            simulation.step(npt_steps % report_npt_steps)
+            done_steps += report_npt_steps
+            pos_tmp.append(pos)
+            energy_tmp.append(e)
+            rmsd_tmp.append(float(lr) if lr is not None else float("nan"))
+            # Checkpoint periodically so interrupted runs resume here.
+            if (done_steps - start_step) % checkpoint_interval_steps == 0:
+                _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path,
+                                  ckpt_json, prod_positions, prod_energies,
+                                  lig_rmsd_traj, pos_tmp, energy_tmp, rmsd_tmp,
+                                  simulation, done_steps)
+                pos_tmp, energy_tmp, rmsd_tmp = [], [], []
+        if chunk_remaining:
+            simulation.step(chunk_remaining)
             state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
-            prod_positions.append(state_prod.getPositions())
-            prod_energies.append(
-                state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-            )
-            lr = _compute_ligand_rmsd(min_pos, state_prod.getPositions(), lig_indices)
-            if lr is not None:
-                lig_rmsd_traj.append(float(lr))
+            pos = state_prod.getPositions()
+            e = state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
+            done_steps += chunk_remaining
+            pos_tmp.append(pos)
+            energy_tmp.append(e)
+            rmsd_tmp.append(float(lr) if lr is not None else float("nan"))
+        # Final flush of the remaining (¼ checkpoint) frames.
+        _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
+                          prod_positions, prod_energies, lig_rmsd_traj,
+                          pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps)
 
-        log.info(f"    NPT production complete: {npt_duration_ns} ns, {len(prod_positions)} frames")
+        # Rebuild the full in-memory frame list for analysis + DCD output.
+        # Each element is one frame: a list of n_atoms openmm.Vec3 (matching
+        # the pre-refactor contract expected by the RMSF/H-bond/DCD analysis).
+        with open(frames_bin, "rb") as fh:
+            nat = np.frombuffer(fh.read(8), dtype=np.int64)[0]
+            nfr = int(os.path.getsize(frames_bin) - 8) // (nat * 3 * 8)
+            raw_all = np.fromfile(fh, dtype=np.float64).reshape(nfr, nat, 3)
+        prod_positions = _quantity_frames(raw_all)
+        if energies_bin.is_file():
+            prod_energies = list(np.load(energies_bin))
+        if rmsd_bin.is_file():
+            lig_rmsd_traj = list(np.load(rmsd_bin))
+
+        _t_prod1 = time.monotonic()
+        _prod_s = _t_prod1 - _t_prod0
+        _steps_per_s = done_steps / _prod_s if _prod_s > 0 else 0.0
+        _ns_per_day = _steps_per_s * TIMESTEP_PS / 1000.0 * (3600 * 24)
+        log.info(f"    [{cid}] production throughput: {_steps_per_s:.1f} steps/s "
+                 f"≈ {_ns_per_day:.2f} ns/day "
+                 f"({platform_name}, {done_steps} steps in {_prod_s:.1f}s)")
+        result["production"].setdefault(
+            "performance",
+            {"steps": int(done_steps), "steps_per_s": round(_steps_per_s, 1),
+             "ns_per_day": round(_ns_per_day, 2), "platform": platform_name},
+        )
+
+        log.info(f"    NPT production complete: {npt_duration_ns} ns, "
+                 f"{len(prod_positions)} frames ({platform_name})")
+
+        # Write the production trajectory to DCD so downstream trajectory-based
+        # MM-GBSA (scripts/mmgbsa_analysis.py) can sample an ensemble rather
+        # than a single minimised pose. Serialised from the full frame list at
+        # completion (consistent for fresh and resumed runs).
+        _reprimer = _report_dcd(str(replica_dir / "trajectory.dcd"),
+                                solvated_top, prod_positions)
     except Exception as exc:
         result["error"] = f"NPT production failed: {exc}"
         return result
@@ -739,6 +1011,10 @@ def run_explicit_md(
     npt_duration_ns: float = DEFAULT_NPT_NS,
     nvt_duration_ps: float = 500.0,
     npt_eq_duration_ps: float = 500.0,
+    platform_preference: Optional[str] = None,
+    cpu_threads: Optional[int] = None,
+    resume: bool = False,
+    checkpoint_interval_steps: int = 25000,
 ) -> dict:
     """Run MD for a candidate across multiple replicas.
 
@@ -771,6 +1047,8 @@ def run_explicit_md(
         rep_result = _run_replica(
             candidate, rep_idx, npt_steps, nvt_steps, nvt_duration_ps, npt_duration_ns,
             npt_eq_duration_ps,
+            platform_preference=platform_preference, cpu_threads=cpu_threads,
+            resume=resume, checkpoint_interval_steps=checkpoint_interval_steps,
         )
         result["replicas"].append(rep_result)
         result["stability_classes"].append(rep_result.get("stability_class"))
@@ -818,9 +1096,33 @@ def main():
                         help=f"Number of replicas (default: {DEFAULT_N_REPLICAS})")
     parser.add_argument("--n-candidates", type=int, default=None,
                         help=f"Number of top candidates (default: {DEFAULT_N_CANDIDATES})")
+    parser.add_argument("--platform", type=str, default=None,
+                        help="OpenMM platform preference (Metal/CUDA/OpenCL/CPU). "
+                             "Defaults to auto-selection on Apple Silicon.")
+    parser.add_argument("--threads", type=int, default=None,
+                        help="CPU thread count for the CPU platform.")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume unfinished replicas from the last checkpoint.")
+    parser.add_argument("--checkpoint-interval", type=int, default=25000,
+                        help="Checkpoint every N production steps (default: 25000).")
+    parser.add_argument("--benchmark", type=float, default=0.0,
+                        help="Benchmark-only mode: run a short production of this "
+                             "many ns on the first candidate and report ns/day, "
+                             "writing no analysis. (default: off)")
     args = parser.parse_args()
 
-    if args.quick:
+    benchmark_mode = args.benchmark and args.benchmark > 0
+
+    if benchmark_mode:
+        n_candidates = 1
+        n_replicas = 1
+        npt_ns = args.benchmark
+        nvt_ps = QUICK_NVT_PS
+        npt_eq_ps = QUICK_NPT_EQ_PS
+        log.info(f"BENCHMARK MODE: {npt_ns} ns production × 1 candidate × 1 replica "
+                 f"(platform={args.platform or 'auto'}, checkpoint every "
+                 f"{args.checkpoint_interval} steps)")
+    elif args.quick:
         n_candidates = QUICK_N_CANDIDATES
         n_replicas = QUICK_N_REPLICAS
         npt_ns = QUICK_NPT_NS
@@ -848,8 +1150,28 @@ def main():
         result = run_explicit_md(
             cand, n_replicas=n_replicas, npt_duration_ns=npt_ns,
             nvt_duration_ps=nvt_ps, npt_eq_duration_ps=npt_eq_ps,
+            platform_preference=args.platform, cpu_threads=args.threads,
+            resume=args.resume, checkpoint_interval_steps=args.checkpoint_interval,
         )
         all_results.append(result)
+        if benchmark_mode:
+            # Report throughput from the first replica and exit without the
+            # full aggregation/analysis ceremony.
+            perf = None
+            for rep in result["replicas"]:
+                perf = rep.get("production", {}).get("performance")
+                if perf:
+                    break
+            log.info("")
+            log.info("─" * 100)
+            if perf:
+                log.info(f"  BENCHMARK: {perf.get('platform')} → "
+                         f"{perf.get('ns_per_day')} ns/day "
+                         f"({perf.get('steps_per_s')} steps/s, {perf.get('steps')} steps)")
+            else:
+                log.warning("  BENCHMARK: no performance data captured "
+                            f"(replica error: {result.get('replicas', [{}])[0].get('error')})")
+            sys.exit(0)
 
     log.info("")
     log.info("─" * 100)

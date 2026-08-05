@@ -385,6 +385,35 @@ cannot run in science mode. In CI mode this is not needed (redocking is skipped)
 
 ---
 
+## Explicit-solvent MD acceleration & checkpointing
+
+The explicit-solvent MD driver (`scripts/explicit_solvent_md.py`) auto-selects
+the best OpenMM platform (`Metal → CUDA → OpenCL → CPU`, see
+`docs/metal_acceleration.md`). On Apple Silicon the default is the
+Metal-backed **OpenCL** runtime, which runs the real 419k-atom PBP2a solvated
+system at **~7–9 ns/day vs ~1.06 ns/day on CPU** (~7–8.5×). The chosen platform,
+thread count and measured `ns/day` are logged per replica and stored under
+`production.performance` in each replica's `summary.json`.
+
+```bash
+# Auto-detect (recommended): 100 ns × 3 replicas, resumable via checkpoints
+python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3
+
+# Force a platform / resume interrupted runs / quick throughput benchmark
+python scripts/explicit_solvent_md.py --platform OpenCL --resume
+python scripts/explicit_solvent_md.py --benchmark 0.01   # ns/day report only
+```
+
+Production writes OpenMM checkpoints (`.cpt` + `.json`) plus a rolling
+positions file, so interrupted runs continue from the last saved step with
+`--resume` instead of restarting. The historic binding-restraint bug on GPU
+platforms (the naive `(x-x0)^2+...` form produced NaN energies on OpenCL for
+the periodic system) is fixed pipeline-wide via
+`utils/openmm_platform.position_restraint_force`, which uses
+`periodicdistance(...)`.
+
+---
+
 ## License
 
 Released under the license in [LICENSE](LICENSE).

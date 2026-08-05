@@ -31,7 +31,11 @@ AUTOANTIBIOTIC_MODE=science python discovery_pipeline.py
 # 2. Confirm docked poses are stable with extended, multi-replica,
 #    unrestrained explicit-solvent MD (the paper's 100 ps runs are PRELIMINARY).
 #    This is compute-intensive (days on CPU) and should run on HPC/GPU.
-python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3 --n-candidates 5
+#    The driver auto-selects the best OpenMM platform (Metal → CUDA → OpenCL → CPU;
+#    on Apple Silicon that is the Metal-backed OpenCL runtime, ~7–9 ns/day on the
+#    M5 Pro 419k-atom system, ~8.5× CPU). Interrupting a run is safe: pass
+#    --resume to continue unfinished replicas from their last checkpoint.
+python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3 --n-candidates 5 --resume
 
 # 3. Score an ensemble of the production trajectory with MM-GBSA.
 #    (The script auto-switches to trajectory-based sampling when DCDs exist.)

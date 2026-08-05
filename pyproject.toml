@@ -37,6 +37,7 @@ md = [
     "openmm",
     "openmmforcefields",
     "openff-toolkit",
+    "mdtraj",
 ]
 
 [project.scripts]

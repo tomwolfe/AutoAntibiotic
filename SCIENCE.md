@@ -119,6 +119,18 @@ extended mode — `python scripts/explicit_solvent_md.py --production-ns 100
 (`scripts/mmgbsa_analysis.py` auto-switches to trajectory frames when DCDs
 exist). Do not treat the short 100 ps runs as proof of binding.
 
+### OpenMM MD infrastructure (GPU acceleration + checkpointing)
+The production driver auto-selects the best OpenMM platform
+(`Metal → CUDA → OpenCL → CPU`, `utils/openmm_platform.py`); on Apple Silicon
+the default is the Metal-backed **OpenCL** runtime, which runs the real
+419,607-atom solvated PBP2a system at **~7–9 ns/day vs ~1.06 ns/day on CPU**
+(~7–8.5×). Position restraints use `periodicdistance(...)` (the naive
+`(x-x0)^2+...` form produced NaN energies on OpenCL for the periodic system).
+NPT production writes OpenMM checkpoints plus a rolling positions file, so
+interrupted runs continue with `--resume` from the last saved step instead of
+restarting; measured `ns/day` is logged per replica and stored under
+`production.performance`. See `docs/metal_acceleration.md`.
+
 ### DUD-E enrichment — a validated negative result
 The standardised DUD-E-style benchmark (76 ChEMBL actives, 704
 property-matched decoys, apo 1VQQ, raw Vina affinities, ex=8) reports

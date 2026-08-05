@@ -1,0 +1,103 @@
+# OpenMM GPU acceleration on Apple Silicon (Metal / OpenCL)
+
+This document explains how the AutoAntibiotic MD pipeline accelerates explicit
+solvent MD on Apple Silicon, why the default is the Metal-backed **OpenCL**
+platform, and how to build a true **Metal** platform if you need it.
+
+## TL;DR
+
+* AutoAntibiotic auto-selects the best OpenMM platform
+  (`Metal → CUDA → OpenCL → CPU`) via `utils/openmm_platform.py`.
+* On Apple Silicon with stock conda/pip OpenMM the chosen platform is
+  **OpenCL** — Apple's OpenCL runtime compiles kernels to Metal under the
+  hood. On the reference M5 Pro machine this runs the real 419,607-atom
+  solvated PBP2a system at **~7–9 ns/day vs ~1.06 ns/day on CPU** (~7–8.5×).
+* OpenMM does **not** ship a native Metal platform in any prebuilt package
+  (8.5.x included). The only Metal implementation is the third-party
+  [`philipturner/openmm-metal`](https://github.com/philipturner/openmm-metal)
+  plugin, which currently targets OpenMM 8.1 and needs a source build.
+* Correctness rule: position restraints on the periodic (PME) system **must**
+  use the `periodicdistance(...)` expression. The old `(x-x0)^2+...` form
+  produced **NaN energies on OpenCL** (GPU platforms wrap coordinates into the
+  primary cell, so `x-x0` can differ by a lattice vector). This is fixed
+  pipeline-wide via `utils.openmm_platform.position_restraint_force`.
+
+## How to run
+
+```bash
+# Auto-detect (recommended) — logs the chosen platform + ns/day throughput
+python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3
+
+# Force a specific platform
+python scripts/explicit_solvent_md.py --platform OpenCL ...
+python scripts/explicit_solvent_md.py --platform CPU --threads 10 ...
+
+# Quick throughput benchmark (~10 min on OpenCL), writes no analysis:
+python scripts/explicit_solvent_md.py --benchmark 0.01 --platform OpenCL
+# ─ BENCHMARK: OpenCL → 9.02 ns/day (… steps/s, … steps)
+```
+
+The chosen platform, thread count and measured `ns/day` are logged per replica
+and recorded in `output/md_explicit/<CID>/replica_<N>/summary.json` under
+`production.performance`.
+
+## Why OpenCL and not "Metal"
+
+OpenMM's `_apple` conda build ships an **OpenCL** platform whose kernels are
+compiled to Metal by Apple's `cl2Metal` toolchain — the same software path the
+`openmm-metal` plugin used. There is no literal `Platform` named `"Metal"` in
+any prebuilt OpenMM 8.5.2 distribution, and none in the 8.5.2/master source
+tree either (`platforms/` contains only common/cpu/cuda/hip/opencl/reference).
+
+`utils/openmm_platform.select_platform()` therefore *tries* `Metal` first and
+transparently falls back to `OpenCL` → `CPU`. On Apple Silicon the log line:
+
+```
+OpenMM platform: OpenCL (No Metal platform in this OpenMM build; using OpenCL
+(Apple's Metal-backed runtime). See docs/metal_acceleration.md for a Metal-enabled build.)
+```
+
+## Building a true Metal-enabled OpenMM (optional)
+
+The third-party Metal plugin is only a performance *increment* over the
+Metal-backed OpenCL runtime and is **not required** for correctness. If you
+still want it:
+
+1. Clone OpenMM 8.1 (the plugin's supported API):
+   ```bash
+   git clone -b 8.1 https://github.com/openmm/openmm.git
+   ```
+2. Build and install OpenMM 8.1 from source (cmake + swig required), e.g.:
+   ```bash
+   cmake -S openmm -B build-openmm -DOPENMM_BUILD_OPENCL=ON -DCMAKE_INSTALL_PREFIX="$HOME/openmm81"
+   cmake --build build-openmm -j && cmake --install build-openmm
+   ```
+3. Clone and build the plugin against that tree:
+   ```bash
+   git clone https://github.com/philipturner/openmm-metal.git
+   cd openmm-metal
+   # configure with OPENMM_DIR pointing at the OpenMM 8.1 install
+   ```
+4. Install the plugin and verify:
+   ```bash
+   python -c "from utils.openmm_platform import available_platforms; print(available_platforms())"
+   # → ['Metal', 'OpenCL', 'CPU', 'Reference']
+   ```
+
+> **Status (Aug 2026):** the plugin targets the OpenMM 8.1 API and fails to
+> compile against 8.5.x (`LangevinIntegrator` / `IntegrateLangevinStepKernel`
+> API drift). Porting is out of scope; the Metal-backed OpenCL runtime is the
+> supported acceleration path for now.
+
+## Correctness notes
+
+1. **Periodic restraints** — see `utils/openmm_platform.py` docstring. Any
+   future position restraint on the periodic system must be built with
+   `position_restraint_force(k, periodic=True)`.
+2. **Precision** — Apple's OpenCL runtime exposes single precision only;
+   `mixed`/`double` OpenCL precision is unavailable on macOS, so the selectors
+   never request it.
+3. **Reproducibility** — production checkpoints (`production_checkpoint.cpt` +
+   `production_checkpoint.json` + rolling `production_frames.dat`) let
+   interrupted runs resume with `--resume` instead of restarting. Re-running
+   the same command is idempotent and continues from the last saved step.
