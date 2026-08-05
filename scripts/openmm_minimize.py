@@ -255,16 +255,14 @@ def run_simulation(candidate: dict) -> dict:
             constraints=app.HBonds,
         )
 
-        k_restraint = 10.0 * openmm.unit.kilocalories_per_mole / openmm.unit.angstrom ** 2
-        force = openmm.CustomExternalForce("k*((x-x0)^2+(y-y0)^2+(z-z0)^2)")
-        force.addGlobalParameter("k", k_restraint)
-        force.addPerParticleParameter("x0")
-        force.addPerParticleParameter("y0")
-        force.addPerParticleParameter("z0")
+        from utils.openmm_platform import position_restraint_force
+        RESTRAINT_FORCE = 10.0
+        RESTRAINT_FORCE_KJ = RESTRAINT_FORCE * 4.184 / (0.1 ** 2)
+        restraint = position_restraint_force(RESTRAINT_FORCE_KJ, periodic=True)
         for i in range(n_rec):
             pos = complex_pos[i]
-            force.addParticle(i, [pos.x, pos.y, pos.z])
-        system.addForce(force)
+            restraint.addParticle(i, [RESTRAINT_FORCE_KJ, pos.x, pos.y, pos.z])
+        system.addForce(restraint)
 
         integrator = openmm.LangevinIntegrator(
             300*openmm.unit.kelvin,

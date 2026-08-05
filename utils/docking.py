@@ -948,10 +948,11 @@ def dock_compound_induced_fit(
             )
 
             # Apply restraints: 10 kcal/mol/Å² on backbone CA of non-flexible residues
+            from utils.openmm_platform import position_restraint_force
             RESTRAINT_FORCE = 10.0  # kcal/mol/Å²
             # k is stored per-particle in internal OpenMM units (kJ/mol/nm²).
             RESTRAINT_FORCE_KJ = RESTRAINT_FORCE * 4.184 / (0.1 ** 2)
-            restraint = openmm.CustomExternalForce("k * (x - x0)^2 + k * (y - y0)^2 + k * (z - z0)^2")
+            restraint = position_restraint_force(RESTRAINT_FORCE_KJ, periodic=True)
             restraint.addPerParticleParameter("k")
             restraint.addPerParticleParameter("x0")
             restraint.addPerParticleParameter("y0")

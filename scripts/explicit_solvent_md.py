@@ -901,7 +901,11 @@ def _run_replica(
         result["production"].setdefault(
             "performance",
             {"steps": int(done_steps), "steps_per_s": round(_steps_per_s, 1),
-             "ns_per_day": round(_ns_per_day, 2), "platform": platform_name},
+             "ns_per_day": round(_ns_per_day, 2), "platform": platform_name,
+             "n_atoms": n_atoms,
+             "elapsed_s": round(_prod_s, 3),
+             "n_frames": len(prod_positions),
+             "timestep_ps": TIMESTEP_PS * 1000},
         )
 
         log.info(f"    NPT production complete: {npt_duration_ns} ns, "
@@ -1097,8 +1101,10 @@ def main():
     parser.add_argument("--n-candidates", type=int, default=None,
                         help=f"Number of top candidates (default: {DEFAULT_N_CANDIDATES})")
     parser.add_argument("--platform", type=str, default=None,
-                        help="OpenMM platform preference (Metal/CUDA/OpenCL/CPU). "
-                             "Defaults to auto-selection on Apple Silicon.")
+                         help="OpenMM platform preference (Metal/CUDA/OpenCL/CPU). "
+                              "Defaults to auto-selection on Apple Silicon. "
+                              "Can also be set via AUTOANTIBIOTIC_PLATFORM env var; "
+                              "--platform CLI flag takes precedence.")
     parser.add_argument("--threads", type=int, default=None,
                         help="CPU thread count for the CPU platform.")
     parser.add_argument("--resume", action="store_true",
@@ -1168,6 +1174,19 @@ def main():
                 log.info(f"  BENCHMARK: {perf.get('platform')} → "
                          f"{perf.get('ns_per_day')} ns/day "
                          f"({perf.get('steps_per_s')} steps/s, {perf.get('steps')} steps)")
+                # Persist benchmark to output/platform_benchmark.json
+                try:
+                    from utils.openmm_platform import log_platform_benchmark
+                    log_platform_benchmark(
+                        perf.get("platform"),
+                        perf.get("n_atoms", 0),
+                        perf.get("steps", 0),
+                        perf.get("elapsed_s", 0.0),
+                        timestep_ps=TIMESTEP_PS * 1000,
+                        output_path=str(OUT / "platform_benchmark.json"),
+                    )
+                except Exception as exc:
+                    log.warning(f"  Could not write platform benchmark: {exc}")
             else:
                 log.warning("  BENCHMARK: no performance data captured "
                             f"(replica error: {result.get('replicas', [{}])[0].get('error')})")

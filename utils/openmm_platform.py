@@ -44,10 +44,13 @@ Two important correctness rules are enforced/document here:
 
 from __future__ import annotations
 
+import json
 import logging
-import platform
+import os
+import platform as _platform_mod
 import sys
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 log = logging.getLogger("AutoAntibiotic.openmm_platform")
 
@@ -80,7 +83,22 @@ def _platform_names() -> List[str]:
 
 
 def _is_apple_silicon() -> bool:
-    return sys.platform == "darwin" and platform.machine() in ("arm64", "aarch64")
+    return sys.platform == "darwin" and _platform_mod.machine() in ("arm64", "aarch64")
+
+
+def _describe_device() -> str:
+    """Return a short human-readable description of the host device."""
+    if _is_apple_silicon():
+        mac = _platform_mod.mac_ver()[0] if sys.platform == "darwin" else ""
+        model = _platform_mod.machine()
+        return f"Apple Silicon (M-series), macOS {mac}, arch={model}"
+    if sys.platform == "linux":
+        try:
+            with open("/proc/device-tree/model", "r") as f:
+                return f.read().strip()
+        except OSError:
+            pass
+    return f"{_platform_mod.system()} {_platform_mod.machine()}"
 
 
 def available_platforms() -> List[str]:
@@ -142,6 +160,25 @@ def select_platform(
     import openmm
 
     order = PREFERENCE_ORDER
+    # Allow the AUTOANTIBIOTIC_PLATFORM environment variable to set the
+    # preferred platform when --platform is not given on the CLI. CLI
+    # explicit override always wins (checked below in the *preference* branch).
+    env_pref = os.environ.get("AUTOANTIBIOTIC_PLATFORM")
+    if env_pref and env_pref.strip():
+        env_pref = env_pref.strip()
+        if env_pref.lower() not in ("auto", "none"):
+            # Only use env var as preference if CLI --platform was not provided
+            if preference is None:
+                preference = env_pref
+                log.info(
+                    "  AUTOANTIBIOTIC_PLATFORM=%s (env preference, will use unless overridden by --platform)",
+                    env_pref,
+                )
+            else:
+                log.info(
+                    "  AUTOANTIBIOTIC_PLATFORM=%s ignored; --platform=%s takes precedence",
+                    env_pref, preference,
+                )
     if preference and preference.lower() not in ("auto", "none"):
         # Honour an explicit user override: force that exact platform.
         if has_platform(preference):
@@ -216,12 +253,19 @@ def position_restraint_force(
     force.addPerParticleParameter("x0")
     force.addPerParticleParameter("y0")
     force.addPerParticleParameter("z0")
+    
     # Set the PBC flag when the build exposes the setter; the current conda/pip
     # 8.5.x builds only expose the getter, in which case the force stays
     # non-periodic, which is the behaviour we want for position restraints.
     setter = getattr(force, "setUsesPeriodicBoundaryConditions", None)
     if callable(setter):
         setter(periodic)
+    elif hasattr(force, "usesPeriodicBoundaryConditions"):
+        # For builds that only expose a getter, we can infer the setting
+        # from the expression: periodicdistance() expressions imply PBC is enabled
+        if periodic and "periodicdistance" in expr:
+            log.debug("  Note: position restraint uses periodicdistance expression (PBC implied)")
+    
     _ = force_constant_kj_per_mole_nm2  # constant is passed per-particle by callers
     return force
 
@@ -237,3 +281,54 @@ def note_metal_status() -> str:
             "Metal-enabled build."
         )
     return "Not Apple Silicon; Metal not applicable"
+
+
+def log_platform_benchmark(
+    platform_name: str,
+    n_atoms: int,
+    steps: int,
+    elapsed_s: float,
+    timestep_ps: float = 2.0,
+    output_path: Optional[Union[str, Path]] = None,
+) -> dict:
+    """Compute and (optionally) persist a GPU/CPU throughput benchmark.
+
+    Returns a dict with ``ns_per_day``, ``steps_per_s``, and raw inputs,
+    and appends it to ``output/platform_benchmark.json`` (a JSON list of
+    benchmark records) when *output_path* is given.
+    """
+    steps_per_s = steps / elapsed_s if elapsed_s > 0 else 0.0
+    ns_per_day = steps_per_s * timestep_ps / 1000.0 * 86400.0
+    record = {
+        "platform": platform_name,
+        "n_atoms": n_atoms,
+        "steps": steps,
+        "elapsed_s": round(elapsed_s, 3),
+        "steps_per_s": round(steps_per_s, 2),
+        "ns_per_day": round(ns_per_day, 2),
+        "timestep_ps": timestep_ps,
+        "device": _PLATFORM_DEVICE_INFO,
+    }
+    if output_path:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        records = []
+        if output_path.exists():
+            try:
+                records = json.loads(output_path.read_text())
+                if not isinstance(records, list):
+                    records = []
+            except (json.JSONDecodeError, OSError):
+                records = []
+        records.append(record)
+        output_path.write_text(json.dumps(records, indent=2))
+        log.info("  Benchmark written to %s", output_path)
+    log.info(
+        "  BENCHMARK: %s → %.2f ns/day (%d atoms, %.1f steps/s)",
+        platform_name, ns_per_day, n_atoms, steps_per_s,
+    )
+    return record
+
+
+# Cached device description for benchmark logging.
+_PLATFORM_DEVICE_INFO = _describe_device()
