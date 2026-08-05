@@ -5,16 +5,16 @@
   "decoys_per_active": 5,
   "decoy_pool": "data/chembl_decoy_pool.csv,data/screen_library_final.csv,data/combined_library.csv,data/diverse_pbp2a_library.csv,data/pbp2a_focused_seed.csv,data/expanded_prelib.csv,data/screen_library.csv,data/screen_library_v2.csv,data/screen_library_v3.csv,data/known_decoys.csv",
   "exhaustiveness": 8,
-  "auc": 0.1477,
-  "bedrock_alpha20": 0.0,
+  "auc": 0.1431,
+  "bedrock_alpha20": 0.0001,
   "ef_1pct": 0.0,
   "ef_5pct": 0.0,
   "ef_10pct": 0.0,
   "ci_95_bootstrap_1000": {
     "auc": [
-      0.148,
-      0.109,
-      0.194
+      0.143,
+      0.103,
+      0.185
     ],
     "ef_1pct": [
       0.0,
@@ -48,6 +48,7 @@
     27.871462927924266,
     88.53164785879629
   ],
-  "receptor": "PBP2a apo 1VQQ",
-  "method": "DUD-E style (property-matched decoys, apo receptor, Vina)"
+  "receptor": "PBP2a apo 1VQQ (with conserved waters)",
+  "method": "DUD-E style (water-included receptor, property-matched decoys, Vina)",
+  "water_included": true
 }

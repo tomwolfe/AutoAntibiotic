@@ -1,20 +1,20 @@
 {
-  "n_compounds": 780,
+  "n_compounds": 445,
   "n_actives": 76,
-  "n_decoys": 704,
-  "decoys_per_active": 10,
+  "n_decoys": 369,
+  "decoys_per_active": 5,
   "decoy_pool": "data/chembl_decoy_pool.csv,data/screen_library_final.csv,data/combined_library.csv,data/diverse_pbp2a_library.csv,data/pbp2a_focused_seed.csv,data/expanded_prelib.csv,data/screen_library.csv,data/screen_library_v2.csv,data/screen_library_v3.csv,data/known_decoys.csv",
   "exhaustiveness": 8,
-  "auc": 0.1336,
+  "auc": 0.1477,
   "bedrock_alpha20": 0.0,
   "ef_1pct": 0.0,
   "ef_5pct": 0.0,
   "ef_10pct": 0.0,
   "ci_95_bootstrap_1000": {
     "auc": [
-      0.133,
-      0.099,
-      0.174
+      0.148,
+      0.109,
+      0.194
     ],
     "ef_1pct": [
       0.0,

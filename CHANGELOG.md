@@ -2,6 +2,15 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [7.4.0] — Water-included enrichment & extended-MD validation
+
+### Added
+- **Water-included DUD-E enrichment benchmark** — `scripts/dude_benchmark.py --include-conserved-waters` merges the conserved active-site water (HOH2001, 1VQQ/4DKI) into the receptor before PDBQT conversion and re-runs the benchmark, writing `output/dude_benchmark_water_results.json`. Establishes whether integrating the conserved water rescues rigid-receptor enrichment for PBP2a.
+- **Extended explicit-solvent MD orchestration** — `scripts/run_production_md.sh` generates SLURM job scripts for the 100 ns × 3 replica × 5 candidate production MD; `scripts/explicit_solvent_md.py` supports `--production-ns`, `--replicas`, `--n-candidates`. `scripts/mmgbsa_analysis.py` computes trajectory-based ensemble MM-GBSA ΔG (sampled every 100 ps over the last 50 ns).
+
+### Changed
+- **Version string harmonised to 7.4.0** across `pyproject.toml`, `discovery_pipeline.py`, `paper.tex`, `cover_letter.tex`, `GUIDE.md`, `CHANGELOG.md` and script User-Agent strings.
+
 ## [7.3.0] — Enrichment saturation & conserved-water diagnostics
 
 ### Added

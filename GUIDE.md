@@ -1,6 +1,6 @@
 # AutoAntibiotic Guide
 
-A practical guide to the AutoAntibiotic Discovery Pipeline v7.3.0 for three
+A practical guide to the AutoAntibiotic Discovery Pipeline v7.4.0 for three
 distinct uses:
 
 1. [Generating new binding hypotheses](#1-using-the-pipeline-for-hypothesis-generation)

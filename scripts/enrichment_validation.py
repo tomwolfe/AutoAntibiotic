@@ -328,7 +328,7 @@ def generate_chembl_benchmark(
             "standard_units=uM&"
             "limit=1000"
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "AutoAntibiotic/7.3.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "AutoAntibiotic/7.4.0"})
         with urllib.request.urlopen(req, timeout=30) as response:
             data = _json.loads(response.read().decode())
             activities = data.get("activities", [])

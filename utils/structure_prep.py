@@ -613,7 +613,7 @@ def merge_conserved_waters(
         while rid in existing_ids:
             rid = (" ", rid[1] + 1, " ")
         existing_ids.add(rid)
-        receptor_chain.add(residue=res)
+        receptor_chain.add(res)
 
     io = PDBIO()
     io.set_structure(rec_struct)
