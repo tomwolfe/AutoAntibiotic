@@ -23,6 +23,7 @@ N_CANDIDATES=5
 PARTITION="${PARTITION:-gpu}"
 TIME="${TIME:-48:00:00}"
 MEM="${MEM:-32G}"
+HMR_FLAG="${HMR_FLAG:---hmr}"
 
 echo "=== AutoAntibiotic v7.4.0 — Production MD Job Generator ==="
 echo "  Production length : ${PRODUCTION_NS} ns"
@@ -97,9 +98,11 @@ REPO="@REPO@"
 CID="@CID@"
 PRODUCTION_NS=@PRODUCTION_NS@
 REPLICAS=@REPLICAS@
+HMR_FLAG="@HMR_FLAG@"
 
 echo "=== Starting production MD for ${CID} ==="
 echo "  Production: ${PRODUCTION_NS} ns × ${REPLICAS} replicas"
+echo "  HMR: ${HMR_FLAG}"
 echo "  Working directory: $(pwd)"
 
 # Verify the top_candidates.csv exists and contains this CID
@@ -125,7 +128,7 @@ python3 scripts/explicit_solvent_md.py \
     --production-ns "${PRODUCTION_NS}" \
     --replicas "${REPLICAS}" \
     --candidates "${CID}" \
-    --resume
+    --resume ${HMR_FLAG}
 
 echo "=== Production MD for ${CID} completed ==="
 JOBHEADER
@@ -139,6 +142,7 @@ JOBHEADER
     perl -pi -e "s|\@REPO\@|${REPO}|g" "${JOB_SCRIPT}"
     perl -pi -e "s/\@PRODUCTION_NS\@/${PRODUCTION_NS}/g" "${JOB_SCRIPT}"
     perl -pi -e "s/\@REPLICAS\@/${REPLICAS}/g" "${JOB_SCRIPT}"
+    perl -pi -e "s|\@HMR_FLAG\@|${HMR_FLAG}|g" "${JOB_SCRIPT}"
 
     chmod +x "${JOB_SCRIPT}"
 

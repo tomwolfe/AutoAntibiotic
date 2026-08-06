@@ -400,7 +400,7 @@ def compute_mmgbsa_trajectory(candidate_dir: Path) -> dict | None:
         total_frames = n_frames
         dt_ps = dt
         if dt_ps is None:
-            dt_ps = 10.0  # default report interval (5000 steps x 2 fs)
+            dt_ps = 2.0  # default: ~2 ps/frame (report_npt_steps × timestep)
         sample_ps = 100.0
         window_ns = 50.0
         step = max(1, round(sample_ps / dt_ps)) if total_frames else 1

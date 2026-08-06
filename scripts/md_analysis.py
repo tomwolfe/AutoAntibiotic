@@ -81,7 +81,7 @@ def _frame_dt_ps(n_frames: int, summary: Optional[dict] = None) -> float:
     npt_ns = prod.get("npt_duration_ns")
     if npt_ns and n_frames:
         return npt_ns * 1000.0 / n_frames
-    return 10.0  # pipeline default report interval (5000 steps × 2 fs)
+    return 2.0  # pipeline default: ~2 ps/frame (report_npt_steps × timestep)
 
 
 def compute_block_stats(rmsd: np.ndarray, n_blocks: int = DEFAULT_BLOCKS) -> list[dict]:

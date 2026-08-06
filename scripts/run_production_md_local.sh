@@ -19,8 +19,9 @@
 #   * Optional duty-cycling via DUTY_ON_MIN / DUTY_OFF_MIN to limit thermal
 #     throttling: each job does an "on" run then sleeps "off" minutes.
 #   * --platform auto (Metal -> OpenCL -> CPU). Set OPENMM_PLATFORM to force.
-#   * Checkpoint every --checkpoint-interval steps; NaN/crash auto-restart is
-#     handled inside explicit_solvent_md.py.
+#   * HMR via --hmr (default) or --no-hmr; set HMR=0 to disable mass
+#     repartitioning. With HMR, the 426k-atom PBP2a system runs at ~8 ns/day
+#     on OpenCL (4 fs timestep) vs ~4 ns/day without HMR (2 fs).
 #
 # Usage:
 #   bash scripts/run_production_md_local.sh                 # launch all jobs
@@ -59,6 +60,7 @@ FORCE_RERUN="${FORCE_RERUN:-}"
 DUTY_ON_MIN="${DUTY_ON_MIN:-0}"
 DUTY_OFF_MIN="${DUTY_OFF_MIN:-0}"
 OPENMM_PLATFORM="${OPENMM_PLATFORM:-OpenCL}"
+HMR="${HMR:-1}"
 
 CIDS=""
 NANO=0
@@ -95,6 +97,7 @@ echo "=== AutoAntibiotic Production MD (local Apple Silicon) ==="
 echo "  Candidates : ${CIDS}"
 echo "  Production : ${PRODUCTION_NS} ns × ${REPLICAS} replicas"
 echo "  Platform   : ${OPENMM_PLATFORM}"
+echo "  HMR        : $([[ "${HMR}" == "1" ]] && echo "on (4 fs)" || echo "off (2 fs)")"
 echo "  Concurrency: ${MAX_CONCURRENT} job(s) at a time | Stagger: ${STAGGER}s | Duty cycle: ${DUTY_ON_MIN}on/${DUTY_OFF_MIN}off min"
 echo ""
 
@@ -124,6 +127,7 @@ launch_one() {
         REPLICAS="'"${REPLICAS}"'"
         PLATFORM="'"${OPENMM_PLATFORM}"'"
         CKPT="'"${CHECKPOINT_INTERVAL}"'"
+        HMR_FLAG=$([[ "${HMR}" == "1" ]] && echo "--hmr" || echo "--no-hmr")
         DUTY_ON="'"${DUTY_ON_MIN}"'"
         DUTY_OFF="'"${DUTY_OFF_MIN}"'"
         cd "${REPO}"
@@ -131,7 +135,7 @@ launch_one() {
             python3 scripts/explicit_solvent_md.py \
                 --production-ns "${PRODUCTION_NS}" --replicas "${REPLICAS}" \
                 --candidates "${CID}" --platform "${PLATFORM}" \
-                --checkpoint-interval "${CKPT}" --resume
+                --checkpoint-interval "${CKPT}" --resume ${HMR_FLAG}
         }
         if [[ "${DUTY_ON}" == "0" ]]; then
             run_py

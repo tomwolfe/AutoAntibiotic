@@ -78,4 +78,4 @@ def test_frame_dt_from_summary(ma):
     summary = {"production": {"npt_duration_ns": 100.0, "n_frames": 10000}}
     assert ma._frame_dt_ps(10000, summary) == pytest.approx(10.0)
     assert ma._frame_dt_ps(None, summary) == pytest.approx(10.0)
-    assert ma._frame_dt_ps(5, None) == pytest.approx(10.0)  # default fallback
+    assert ma._frame_dt_ps(5, None) == pytest.approx(2.0)  # default fallback (2 ps/frame)

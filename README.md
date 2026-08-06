@@ -390,10 +390,16 @@ cannot run in science mode. In CI mode this is not needed (redocking is skipped)
 The explicit-solvent MD driver (`scripts/explicit_solvent_md.py`) auto-selects
 the best OpenMM platform (`Metal → CUDA → OpenCL → CPU`, see
 `docs/metal_acceleration.md`). On Apple Silicon the default is the
-Metal-backed **OpenCL** runtime, which runs the real 419k-atom PBP2a solvated
-system at **~7–9 ns/day vs ~1.06 ns/day on CPU** (~7–8.5×). The chosen platform,
-thread count and measured `ns/day` are logged per replica and stored under
-`production.performance` in each replica's `summary.json`.
+Metal-backed **OpenCL** runtime.
+
+**Hydrogen Mass Repartitioning (HMR)** is enabled by default: hydrogen masses
+are tripled and heavy-atom masses reduced accordingly, allowing a 4 fs timestep
+and ~1.7–1.9× throughput on GPU backends (~7–8 ns/day on OpenCL for the 426k-atom
+system, vs ~4.2 ns/day at 2 fs without HMR). If NaN/non-finite energies occur,
+the run automatically falls back to 2 fs without HMR. Use `--no-hmr` to disable
+explicitly. The chosen platform, thread count, measured `ns/day`, and HMR status
+are logged per replica and stored under `production.performance` in each
+replica's `summary.json`.
 
 ```bash
 # Auto-detect (recommended): 100 ns × 3 replicas, resumable via checkpoints

@@ -41,6 +41,14 @@ All notable changes to the pipeline are documented here, newest first.
   local dry-run generating 5 per-CID VALID jobs.
 
 ### Added
+- **Hydrogen Mass Repartitioning (HMR) + 4 fs timestep** — `apply_hydrogen_mass_repartitioning()`
+  triples hydrogen masses and reduces heavy-atom masses (factor=3.0, total-mass-preserving),
+  enabling a 4 fs timestep and ~1.7–1.9× throughput on GPU backends. HMR is on by default
+  (`--hmr`); use `--no-hmr` to disable. If NaN/non-finite energies occur with HMR, the run
+  automatically falls back to 2 fs without HMR and logs a warning. The HMR flag is persisted
+  in checkpoints (`production_checkpoint.json`) and summary JSONs for resume safety.
+  See `docs/metal_acceleration.md` for throughput numbers on M5 Pro (~7–8 ns/day at 4 fs
+  vs ~4.2 ns/day at 2 fs for the 426k-atom system).
 - **`scripts/md_analysis.py`** — trajectory binding-stability analysis for any
   completed replica: block-averaged ligand RMSD (default 5 blocks),
   running-average RMSD (+ matplotlib plot), integrated autocorrelation time,

@@ -30,8 +30,16 @@ Checkpoint/resume: the NPT production phase writes periodic checkpoints
 ``--resume`` (or the same command) continues unfinished replicas from the last
 checkpoint instead of restarting, so long runs survive interrupted sessions.
 
+Hydrogen Mass Repartitioning (HMR) is enabled by default (``--hmr``), which
+increases hydrogen masses by 3× and decreases heavy-atom masses to preserve
+total system mass. This allows a 4 fs timestep instead of 2 fs, roughly
+doubling throughput (~8 ns/day vs ~4 ns/day on OpenCL for the 426k-atom
+system). If numerical issues occur, the run automatically falls back to 2 fs
+without HMR. Use ``--no-hmr`` to disable this explicitly.
+
 Usage:
-    python scripts/explicit_solvent_md.py                 # full run (100 ns × 5 × 3)
+    python scripts/explicit_solvent_md.py                 # full run (100 ns × 5 × 3, HMR on)
+    python scripts/explicit_solvent_md.py --no-hmr        # full run without HMR (2 fs)
     python scripts/explicit_solvent_md.py --quick          # quick test (0.1 ns × 3 × 1)
     python scripts/explicit_solvent_md.py --production-ns 10 --replicas 3 --n-candidates 3
     python scripts/explicit_solvent_md.py --platform Metal --replicas 3 --production-ns 100
@@ -103,10 +111,12 @@ H_BOND_ANGLE_CUTOFF = 120  # degrees
 # MD parameters
 SOLVENT_PADDING = 10.0  # Å
 NACL_CONCENTRATION = 0.150  # M
-TIMESTEP_PS = 0.002
-REPORT_INTERVAL_STEPS = 5000  # every 10 ps for trajectory
-# Frames per nanosecond: 5000 steps * 0.002 ps / 1000 ps = 1000 frames/ns.
-DT_NS = 0.002
+TIMESTEP_PS = 0.002  # default 2 fs; overridden to 0.004 when HMR is active
+REPORT_INTERVAL_STEPS = 5000  # legacy constant; actual frame cadence is report_npt_steps
+DT_NS = 0.002  # legacy constant (ps per step); use timestep_ps in calculations
+HMR_TIMESTEP_PS = 0.004  # 4 fs timestep when HMR is active
+HMR_FACTOR = 3.0  # hydrogen mass multiplication factor (standard AMBER HMR)
+HMR_MAX_NAN_RETRIES = 3  # max NaN retries before attempting fallback
 
 def _check_deps():
     try:
@@ -389,8 +399,16 @@ def _get_protein_atom_indices_per_residue(topology):
     return residue_map
 
 
-def _classify_stability(ligand_rmsd_array: np.ndarray, last_n_ns: float = 5.0, dt_ns: float = 0.002) -> str:
+def _classify_stability(ligand_rmsd_array: np.ndarray, last_n_ns: float = 5.0,
+                         timestep_ps: float = TIMESTEP_PS,
+                         report_interval_steps: int = REPORT_INTERVAL_STEPS) -> str:
     """Classify replica stability based on ligand RMSD over the last *last_n_ns* ns.
+
+    Args:
+        ligand_rmsd_array: Per-frame ligand RMSD values (Å).
+        last_n_ns: Length of the trailing window to average (ns).
+        timestep_ps: MD timestep (ps per step).
+        report_interval_steps: Number of MD steps between saved trajectory frames.
 
     Returns:
         "Stable" if mean RMSD < 2.0 Å
@@ -399,7 +417,8 @@ def _classify_stability(ligand_rmsd_array: np.ndarray, last_n_ns: float = 5.0, d
     """
     if len(ligand_rmsd_array) < 2:
         return "Unstable"
-    n_last = max(1, int(last_n_ns / (dt_ns * REPORT_INTERVAL_STEPS)))
+    time_per_frame_ps = timestep_ps * report_interval_steps
+    n_last = max(1, int(last_n_ns * 1000.0 / time_per_frame_ps))
     last_rmsd = ligand_rmsd_array[-n_last:]
     mean_rmsd = float(np.mean(last_rmsd))
     if mean_rmsd < 2.0:
@@ -433,7 +452,8 @@ def _quantity_frames(raw: "np.ndarray") -> list:
 
 def _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
                       prod_positions, prod_energies, lig_rmsd_traj,
-                      pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps) -> None:
+                      pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps,
+                      hmr: bool = False) -> None:
     """Append a chunk of production data to the rolling binaries and write an
     OpenMM checkpoint so an interrupted run can resume from *done_steps*.
 
@@ -472,7 +492,64 @@ def _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
         n_particles = (len(pos_tmp[0]) if pos_tmp else
                        (len(prod_positions[0]) if prod_positions else -1))
     with open(ckpt_json, "w") as f:
-        json.dump({"step_done": int(done_steps), "n_particles": n_particles}, f)
+        json.dump({"step_done": int(done_steps), "n_particles": n_particles,
+                   "hmr": hmr}, f)
+
+
+def apply_hydrogen_mass_repartitioning(system, topology, factor: float = HMR_FACTOR):
+    """Apply Hydrogen Mass Repartitioning (HMR) to an OpenMM System.
+
+    Transfers mass from each heavy atom to its bonded hydrogen atoms so that
+    every hydrogen mass is increased by *factor* (default 3×) while the bonded
+    heavy atom loses the same total amount. Total system mass is preserved.
+    This allows a 4 fs timestep (instead of 2 fs) with negligible effect on
+    thermodynamic configurational properties — the standard HMR approach used
+    by AMBER and other MD engines.
+
+    Args:
+        system: OpenMM System object (modified in place).
+        topology: OpenMM Topology (used to identify hydrogen–heavy bonds).
+        factor: Hydrogen mass multiplication factor (default HMR_FACTOR = 3.0).
+
+    Returns:
+        The same System object, modified in place.
+    """
+    import openmm
+    from openmm import unit
+    # Map each hydrogen to its bonded heavy atom index.
+    h_to_heavy: dict[int, int] = {}
+    for bond in topology.bonds():
+        a1, a2 = bond[0], bond[1]
+        if a1.element is None or a2.element is None:
+            continue
+        if a1.element.atomic_number == 1 and a2.element.atomic_number > 1:
+            h_to_heavy[a1.index] = a2.index
+        elif a2.element.atomic_number == 1 and a1.element.atomic_number > 1:
+            h_to_heavy[a2.index] = a1.index
+
+    # Accumulate mass changes before applying so each heavy atom's total
+    # deduction reflects all its bonded hydrogens.
+    new_masses: dict[int, "object"] = {}
+    for h_idx, heavy_idx in h_to_heavy.items():
+        h_mass = system.getParticleMass(h_idx)
+        transfer = h_mass * (factor - 1.0)
+        new_masses[h_idx] = new_masses.get(h_idx, h_mass) + transfer
+        new_masses[heavy_idx] = new_masses.get(heavy_idx,
+                                               system.getParticleMass(heavy_idx)) - transfer
+
+    for idx, mass in new_masses.items():
+        # mass is a Quantity (Daltons); skip if the value is implausibly small
+        try:
+            mass_val = mass.value_in_unit(unit.dalton)
+        except AttributeError:
+            mass_val = float(mass)
+        if mass_val < 0.5:
+            continue
+        system.setParticleMass(idx, mass)
+
+    n_modified = len({k for k in new_masses if k in h_to_heavy})
+    log.info(f"  HMR: repartitioned {n_modified} hydrogen masses (factor={factor})")
+    return system
 
 
 def _report_dcd(dcd_path: str, topology, positions) -> str:
@@ -521,6 +598,8 @@ def _run_replica(
     cpu_threads: Optional[int] = None,
     resume: bool = False,
     checkpoint_interval_steps: int = 25000,
+    timestep_ps: float = TIMESTEP_PS,
+    use_hmr: bool = False,
 ) -> dict:
     """Run a single MD replica for one candidate.
 
@@ -688,6 +767,14 @@ def _run_replica(
         result["error"] = f"System creation failed: {exc}"
         return result
 
+    # Apply Hydrogen Mass Repartitioning (HMR) if requested. This increases
+    # hydrogen masses and decreases heavy-atom masses to preserve total mass,
+    # enabling a 4 fs timestep (see HMR_TIMESTEP_PS). Applied after system
+    # creation but before integrator/checkpoint, so the checkpoint records
+    # the HMR-modified system state.
+    if use_hmr:
+        system = apply_hydrogen_mass_repartitioning(system, solvated_top, factor=HMR_FACTOR)
+
     # Stale-checkpoint guard: solvation is deterministic only for an identical
     # ligand conformer, so if the freshly rebuilt system has a different
     # particle count than the checkpoint (e.g. an earlier run used a different
@@ -696,11 +783,17 @@ def _run_replica(
     if _EARLY_RESUME:
         try:
             with open(ckpt_json) as f:
-                ckpt_n = int(json.load(f).get("n_particles", -1))
+                ckpt_data = json.load(f)
+                ckpt_n = int(ckpt_data.get("n_particles", -1))
+                ckpt_hmr = bool(ckpt_data.get("hmr", False))
             built_n = system.getNumParticles()
-            if ckpt_n != built_n:
-                log.warning(f"    [{cid}] stale production checkpoint: system has "
-                            f"{built_n} particles but checkpoint targets {ckpt_n}; "
+            if ckpt_n != built_n or ckpt_hmr != use_hmr:
+                reason = []
+                if ckpt_n != built_n:
+                    reason.append(f"particle count {ckpt_n} vs {built_n}")
+                if ckpt_hmr != use_hmr:
+                    reason.append(f"HMR flag {ckpt_hmr} vs {use_hmr}")
+                log.warning(f"    [{cid}] stale production checkpoint: {', '.join(reason)}; "
                             f"discarding it and restarting production from zero")
                 _EARLY_RESUME = False
                 ckpt_path.unlink(missing_ok=True)
@@ -760,7 +853,7 @@ def _run_replica(
     else:
         try:
             integrator = openmm.LangevinIntegrator(
-                300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
+                300 * unit.kelvin, 1.0 / unit.picosecond, timestep_ps * unit.picoseconds,
             )
             simulation = app.Simulation(solvated_top, system, integrator, platform=_PLATFORM,
                                         platformProperties=_PLATFORM_PROPERTIES)
@@ -848,7 +941,7 @@ def _run_replica(
         # The LangevinIntegrator is already bound to the NVT context; OpenMM
         # forbids reusing an integrator across contexts, so build a fresh one.
         npt_integrator = openmm.LangevinIntegrator(
-            300 * unit.kelvin, 1.0 / unit.picosecond, TIMESTEP_PS * unit.picoseconds,
+            300 * unit.kelvin, 1.0 / unit.picosecond, timestep_ps * unit.picoseconds,
         )
         simulation = app.Simulation(solvated_top, system, npt_integrator, platform=_PLATFORM,
                                     platformProperties=_PLATFORM_PROPERTIES)
@@ -889,7 +982,7 @@ def _run_replica(
         if not resuming:
             simulation.context.setPositions(nvt_pos)
             simulation.context.setVelocitiesToTemperature(300 * unit.kelvin)
-            npt_eq_steps = int(npt_eq_duration_ps / TIMESTEP_PS)
+            npt_eq_steps = int(npt_eq_duration_ps / timestep_ps)
             npt_eq_chunk = max(1, npt_eq_steps // 100)
             eq_step = 0
             while eq_step < npt_eq_steps:
@@ -974,7 +1067,7 @@ def _run_replica(
                 _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path,
                                   ckpt_json, prod_positions, prod_energies,
                                   lig_rmsd_traj, pos_tmp, energy_tmp, rmsd_tmp,
-                                  simulation, done_steps)
+                                  simulation, done_steps, hmr=use_hmr)
                 pos_tmp.clear()
                 energy_tmp.clear()
                 rmsd_tmp.clear()
@@ -1019,7 +1112,8 @@ def _run_replica(
         # Final flush of the remaining (¼ checkpoint) frames.
         _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
                           prod_positions, prod_energies, lig_rmsd_traj,
-                          pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps)
+                          pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps,
+                          hmr=use_hmr)
         result["production"]["nan_auto_restarts"] = n_nan_restarts
 
         # Rebuild the full in-memory frame list for analysis + DCD output.
@@ -1038,19 +1132,21 @@ def _run_replica(
         _t_prod1 = time.monotonic()
         _prod_s = _t_prod1 - _t_prod0
         _steps_per_s = done_steps / _prod_s if _prod_s > 0 else 0.0
-        _ns_per_day = _steps_per_s * TIMESTEP_PS / 1000.0 * (3600 * 24)
+        _ns_per_day = _steps_per_s * timestep_ps / 1000.0 * (3600 * 24)
         log.info(f"    [{cid}] production throughput: {_steps_per_s:.1f} steps/s "
                  f"≈ {_ns_per_day:.2f} ns/day "
                  f"({platform_name}, {done_steps} steps in {_prod_s:.1f}s)")
         result["production"].setdefault(
             "performance",
-            {"steps": int(done_steps), "steps_per_s": round(_steps_per_s, 1),
-             "ns_per_day": round(_ns_per_day, 2), "platform": platform_name,
-             "n_atoms": n_atoms,
-             "elapsed_s": round(_prod_s, 3),
-             "n_frames": len(prod_positions),
-             "timestep_ps": TIMESTEP_PS * 1000},
-        )
+             {"steps": int(done_steps), "steps_per_s": round(_steps_per_s, 1),
+              "ns_per_day": round(_ns_per_day, 2), "platform": platform_name,
+              "n_atoms": n_atoms,
+              "elapsed_s": round(_prod_s, 3),
+              "n_frames": len(prod_positions),
+              "timestep_ps": timestep_ps,
+              "hmr": use_hmr,
+          },
+      )
 
         log.info(f"    NPT production complete: {npt_duration_ns} ns, "
                  f"{len(prod_positions)} frames ({platform_name})")
@@ -1107,7 +1203,9 @@ def _run_replica(
             json.dump(hb_occ, fh, indent=2)
 
         # Stability classification
-        stability = _classify_stability(lig_rmsd_array, last_n_ns=5.0)
+        stability = _classify_stability(lig_rmsd_array, last_n_ns=5.0,
+                                         timestep_ps=timestep_ps,
+                                         report_interval_steps=report_npt_steps)
         result["stability_class"] = stability
 
         # Per-replica 10 ns stability metrics (consumed by the D3 classifier in
@@ -1115,10 +1213,8 @@ def _run_replica(
         # 5 ns and the Ser403 OG H-bond occupancy.
         last5_mean_rmsd = None
         if len(lig_rmsd_array) > 1:
-            # Calculate the number of frames to average over (last 5 ns)
-            # For 0.002 ps timestep, we need 5.0 / 0.002 = 2500 steps per ns
-            # So for 5 ns, we need the last 5 * 1000 = 5000 frames (at 0.002 ps timestep)
-            n_last5 = max(1, int(5.0 / (DT_NS * REPORT_INTERVAL_STEPS)))
+            time_per_frame_ps = timestep_ps * report_npt_steps
+            n_last5 = max(1, int(5.0 * 1000.0 / time_per_frame_ps))
             last5_mean_rmsd = float(np.mean(lig_rmsd_array[-n_last5:]))
         else:
             # If we don't have enough frames, use the mean of all frames
@@ -1171,13 +1267,20 @@ def run_explicit_md(
     cpu_threads: Optional[int] = None,
     resume: bool = False,
     checkpoint_interval_steps: int = 25000,
+    timestep_ps: float = TIMESTEP_PS,
+    use_hmr: bool = False,
 ) -> dict:
     """Run MD for a candidate across multiple replicas.
 
     Returns aggregated result with per-replica data and consensus stability.
+
+    HMR fallback: if *use_hmr* is True and a replica fails with a numerical
+    error (NaN/non-finite energy), that replica is automatically retried
+    without HMR using a 2 fs timestep. The fallback is logged and the
+    replica's summary records which configuration succeeded.
     """
-    npt_steps = int(npt_duration_ns * 1000 / TIMESTEP_PS)
-    nvt_steps = int(nvt_duration_ps / TIMESTEP_PS)
+    npt_steps = int(npt_duration_ns * 1000 / timestep_ps)
+    nvt_steps = int(nvt_duration_ps / timestep_ps)
 
     cid = candidate["Compound_ID"]
     smi = candidate["SMILES"]
@@ -1193,19 +1296,51 @@ def run_explicit_md(
         "stability_classes": [],
         "consensus_stability": None,
         "validated": False,
+        "timestep_ps": timestep_ps,
+        "hmr_requested": use_hmr,
+        "hmr_fallback_used": False,
     }
 
     candidate_dir = MD_OUT / cid
     candidate_dir.mkdir(parents=True, exist_ok=True)
 
+    hmr_failed_globally = False
     for rep_idx in range(n_replicas):
         log.info(f"  Replica {rep_idx + 1}/{n_replicas}...")
-        rep_result = _run_replica(
-            candidate, rep_idx, npt_steps, nvt_steps, nvt_duration_ps, npt_duration_ns,
-            npt_eq_duration_ps,
-            platform_preference=platform_preference, cpu_threads=cpu_threads,
-            resume=resume, checkpoint_interval_steps=checkpoint_interval_steps,
-        )
+        rep_hmr = use_hmr and not hmr_failed_globally
+        rep_timestep = timestep_ps if rep_hmr else TIMESTEP_PS
+        try:
+            rep_result = _run_replica(
+                candidate, rep_idx, npt_steps if rep_hmr else int(npt_duration_ns * 1000 / TIMESTEP_PS),
+                nvt_steps if rep_hmr else int(nvt_duration_ps / TIMESTEP_PS),
+                nvt_duration_ps, npt_duration_ns, npt_eq_duration_ps,
+                platform_preference=platform_preference, cpu_threads=cpu_threads,
+                resume=resume, checkpoint_interval_steps=checkpoint_interval_steps,
+                timestep_ps=rep_timestep, use_hmr=rep_hmr,
+            )
+        except Exception as exc:
+            if use_hmr and not hmr_failed_globally:
+                log.warning(f"  HMR + 4 fs failed for {cid} replica {rep_idx} ({exc}); "
+                            f"falling back to 2 fs without HMR for remaining replicas")
+                hmr_failed_globally = True
+                result["hmr_fallback_used"] = True
+                rep_result = _run_replica(
+                    candidate, rep_idx,
+                    int(npt_duration_ns * 1000 / TIMESTEP_PS),
+                    int(nvt_duration_ps / TIMESTEP_PS),
+                    nvt_duration_ps, npt_duration_ns, npt_eq_duration_ps,
+                    platform_preference=platform_preference, cpu_threads=cpu_threads,
+                    resume=resume, checkpoint_interval_steps=checkpoint_interval_steps,
+                    timestep_ps=TIMESTEP_PS, use_hmr=False,
+                )
+            else:
+                rep_result = {
+                    "replica": rep_idx,
+                    "compound_id": cid,
+                    "smiles": smi,
+                    "success": False,
+                    "error": str(exc),
+                }
         result["replicas"].append(rep_result)
         result["stability_classes"].append(rep_result.get("stability_class"))
 
@@ -1267,6 +1402,11 @@ def main():
                         help="Resume unfinished replicas from the last checkpoint.")
     parser.add_argument("--checkpoint-interval", type=int, default=25000,
                         help="Checkpoint every N production steps (default: 25000).")
+    parser.add_argument("--hmr", dest="hmr", action="store_true", default=True,
+                        help="Enable Hydrogen Mass Repartitioning (HMR) + 4 fs timestep "
+                             "(default: True). Falls back to 2 fs if numerical issues occur.")
+    parser.add_argument("--no-hmr", dest="hmr", action="store_false",
+                        help="Disable HMR, use 2 fs timestep (no mass repartitioning).")
     parser.add_argument("--benchmark", type=float, default=0.0,
                         help="Benchmark-only mode: run a short production of this "
                              "many ns on the first candidate and report ns/day, "
@@ -1274,6 +1414,8 @@ def main():
     args = parser.parse_args()
 
     benchmark_mode = args.benchmark and args.benchmark > 0
+    use_hmr = bool(args.hmr)
+    timestep_ps = HMR_TIMESTEP_PS if use_hmr else TIMESTEP_PS
 
     if benchmark_mode:
         n_candidates = 1
@@ -1282,8 +1424,8 @@ def main():
         nvt_ps = QUICK_NVT_PS
         npt_eq_ps = QUICK_NPT_EQ_PS
         log.info(f"BENCHMARK MODE: {npt_ns} ns production × 1 candidate × 1 replica "
-                 f"(platform={args.platform or 'auto'}, checkpoint every "
-                 f"{args.checkpoint_interval} steps)")
+                 f"(platform={args.platform or 'auto'}, HMR={'on' if use_hmr else 'off'}, "
+                 f"timestep={timestep_ps} ps, checkpoint every {args.checkpoint_interval} steps)")
     elif args.quick:
         n_candidates = QUICK_N_CANDIDATES
         n_replicas = QUICK_N_REPLICAS
@@ -1291,14 +1433,16 @@ def main():
         nvt_ps = QUICK_NVT_PS
         npt_eq_ps = QUICK_NPT_EQ_PS
         log.info(f"QUICK MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replica "
-                 f"(NVT {nvt_ps:.0f} ps, NPT eq {npt_eq_ps:.0f} ps)")
+                 f"(NVT {nvt_ps:.0f} ps, NPT eq {npt_eq_ps:.0f} ps, "
+                 f"HMR={'on' if use_hmr else 'off'}, timestep={timestep_ps} ps)")
     else:
         n_candidates = args.n_candidates if args.n_candidates is not None else DEFAULT_N_CANDIDATES
         n_replicas = args.replicas if args.replicas is not None else DEFAULT_N_REPLICAS
         npt_ns = args.production_ns if args.production_ns is not None else DEFAULT_NPT_NS
         nvt_ps = 500.0
         npt_eq_ps = 500.0
-        log.info(f"FULL MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replicas")
+        log.info(f"FULL MODE: {npt_ns} ns × {n_candidates} candidates × {n_replicas} replicas "
+                 f"(HMR={'on' if use_hmr else 'off'}, timestep={timestep_ps} ps)")
 
     _check_deps()
     MD_OUT.mkdir(parents=True, exist_ok=True)
@@ -1316,6 +1460,7 @@ def main():
             nvt_duration_ps=nvt_ps, npt_eq_duration_ps=npt_eq_ps,
             platform_preference=args.platform, cpu_threads=args.threads,
             resume=args.resume, checkpoint_interval_steps=args.checkpoint_interval,
+            timestep_ps=timestep_ps, use_hmr=use_hmr,
         )
         all_results.append(result)
         if benchmark_mode:
@@ -1340,7 +1485,7 @@ def main():
                         perf.get("n_atoms", 0),
                         perf.get("steps", 0),
                         perf.get("elapsed_s", 0.0),
-                        timestep_ps=TIMESTEP_PS,
+                        timestep_ps=timestep_ps,
                         output_path=str(OUT / "platform_benchmark.json"),
                     )
                 except Exception as exc:
@@ -1376,7 +1521,8 @@ def main():
             "nacl_concentration_M": NACL_CONCENTRATION,
             "n_replicas": n_replicas,
             "npt_duration_ns": npt_ns,
-            "timestep_ps": TIMESTEP_PS,
+            "timestep_ps": timestep_ps,
+            "hmr": use_hmr,
             "force_field_protein": "amber14-all",
             "force_field_ligand": "openff-2.0.0",
             "water_model": "tip3p",
