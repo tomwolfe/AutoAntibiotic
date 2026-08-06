@@ -11,6 +11,14 @@ output/*/
 # Generated release status badge (written by main() after redocking validation)
 status.json
 
+# Regenerable production MD binaries (summary/analysis outputs under
+# output/md_explicit are tracked; raw trajectories/checkpoints are not)
+output/md_explicit/**/replica_*/production_frames.dat
+output/md_explicit/**/replica_*/trajectory.dcd
+output/md_explicit/**/replica_*/production_checkpoint.cpt
+output/md_explicit/**/replica_*/production_checkpoint.json
+output/md_explicit/**/replica_*/production_energies.npy
+
 # Python
 __pycache__/
 *.py[cod]

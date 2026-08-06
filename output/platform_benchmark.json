@@ -1,0 +1,12 @@
+[
+  {
+    "platform": "OpenCL",
+    "n_atoms": 426003,
+    "steps": 10000,
+    "elapsed_s": 416.6,
+    "steps_per_s": 24.0,
+    "ns_per_day": 4.15,
+    "timestep_ps": 0.002,
+    "device": "Apple Silicon (M-series), macOS 26.6, arch=arm64"
+  }
+]

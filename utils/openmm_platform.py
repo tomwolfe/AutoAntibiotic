@@ -288,12 +288,14 @@ def log_platform_benchmark(
     n_atoms: int,
     steps: int,
     elapsed_s: float,
-    timestep_ps: float = 2.0,
+    timestep_ps: float = 0.002,
     output_path: Optional[Union[str, Path]] = None,
 ) -> dict:
     """Compute and (optionally) persist a GPU/CPU throughput benchmark.
 
-    Returns a dict with ``ns_per_day``, ``steps_per_s``, and raw inputs,
+    *timestep_ps* is the per-step timestep in picoseconds (the pipeline's 2 fs
+    step is 0.002). Callers that use a different timestep must pass their own.
+    Returns a dict with ``ns_per_day``, ``steps_per_s``, and the raw inputs,
     and appends it to ``output/platform_benchmark.json`` (a JSON list of
     benchmark records) when *output_path* is given.
     """

@@ -2,6 +2,34 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [Unreleased] — Metal/GPU diagnostics, benchmark honesty fixes
+
+### Diagnostics (confirmed on M5 Pro, OpenMM 8.5.2)
+- **No native Metal platform in any stock build.** OpenMM 8.5.2 registers
+  Reference / CPU / OpenCL only; `openmm-metal` is not on PyPI and its source
+  plugin targets the 8.1 API, so it does not compile against 8.5.x. The
+  accelerated GPU path on Apple Silicon is therefore **OpenCL**, whose kernels
+  Apple compiles to Metal (`cl2Metal`). `select_platform()` tries `Metal` and
+  falls back transparently.
+- **Real measured throughput:** the production 426,003-atom solvated PBP2a
+  system runs at **~4.2 ns/day on OpenCL** (24.0 steps/s; 100 ns × 3 replicas
+  × 5 candidates would take ~9–12 wall-years at this rate — see
+  `docs/metal_acceleration.md`). Recorded in `output/platform_benchmark.json`.
+
+### Fixed
+- **Benchmark ns/day 1000× inflation** — `log_platform_benchmark()` and the
+  `--benchmark` caller passed `TIMESTEP_PS * 1000` (2.0) as the per-step
+  timestep, reporting throughput ~1000× too high; now uses the real 0.002 ps
+  step. Covered by new unit tests.
+- **Benchmark capture dropped `performance`** — the analysis block overwrote
+  `result["production"]`, discarding the throughput record so `--benchmark`
+  printed "no performance data captured". The throughput dict is now preserved.
+- **Ligand standardization silently skipped** — rdkit ≥ 2023.09 moved
+  `MolStandardize.standardize.Cleanup`; `_standardize_ligand()` now uses
+  `rdMolStandardize.Cleanup(mol, params)` (with legacy fallback) so
+  pH/tautomer cleaning actually runs instead of warning and returning the raw
+  structure.
+
 ## [Unreleased] — GPU acceleration, checkpointed production MD, restraint fix
 
 ### Added

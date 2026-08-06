@@ -10,6 +10,7 @@ from utils.openmm_platform import (
     PREFERENCE_ORDER,
     available_platforms,
     has_platform,
+    log_platform_benchmark,
     note_metal_status,
     position_restraint_force,
     select_platform,
@@ -81,3 +82,43 @@ def test_gpu_platforms_require_periodic_restraints():
 def test_note_metal_status_returns_string():
     msg = note_metal_status()
     assert isinstance(msg, str) and msg
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# log_platform_benchmark — real-ns/day computation + JSON persistence
+# ─────────────────────────────────────────────────────────────────────────
+def test_log_platform_benchmark_computes_ns_per_day():
+    # 1000 steps in 1 s at 2 fs timestep == 2000 ps/s == 172.8 ns/day
+    rec = log_platform_benchmark("OpenCL", n_atoms=100, steps=1000, elapsed_s=1.0,
+                                 timestep_ps=0.002)
+    assert rec["steps_per_s"] == 1000.0
+    assert rec["ns_per_day"] == pytest.approx(172.8)
+    assert rec["platform"] == "OpenCL"
+
+
+def test_log_platform_benchmark_writes_and_appends(tmp_path):
+    out = tmp_path / "platform_benchmark.json"
+    log_platform_benchmark("OpenCL", n_atoms=100, steps=1000, elapsed_s=1.0,
+                           timestep_ps=0.002, output_path=str(out))
+    log_platform_benchmark("CPU", n_atoms=100, steps=500, elapsed_s=1.0,
+                           timestep_ps=0.002, output_path=str(out))
+    records = __import__("json").loads(out.read_text())
+    assert isinstance(records, list) and len(records) == 2
+    assert records[0]["platform"] == "OpenCL"
+    assert records[1]["platform"] == "CPU"
+    assert "device" in records[0]
+
+
+def test_select_platform_allowlist_skips_disallowed_accelerator():
+    # When only CPU is allowed, a GPU must never be auto-selected even if fast.
+    spec = select_platform(allow=["CPU"])
+    assert spec["name"] == "CPU"
+    assert spec["platform"].getName() == "CPU"
+
+
+def test_gpu_platform_auto_selection_is_an_accelerator_or_cpu():
+    # The auto path must resolve to a *real* registered platform; on a GPU-less
+    # build this degrades to CPU, which is still a correct (if slow) backend.
+    spec = select_platform()
+    assert spec["name"] in available_platforms()
+    assert spec["name"] in PREFERENCE_ORDER

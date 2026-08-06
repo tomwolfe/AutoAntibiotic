@@ -10,8 +10,9 @@ platform, and how to build a true **Metal** platform if you need it.
   (`Metal → CUDA → OpenCL → CPU`) via `utils/openmm_platform.py`.
 * On Apple Silicon with stock conda/pip OpenMM the chosen platform is
   **OpenCL** — Apple's OpenCL runtime compiles kernels to Metal under the
-  hood. On the reference M5 Pro machine this runs the real 419,607-atom
-  solvated PBP2a system at **~7–9 ns/day vs ~1.06 ns/day on CPU** (~7–8.5×).
+  hood. Measured on this machine (M5 Pro, OpenMM 8.5.2) the real
+  426,003-atom solvated PBP2a system runs at **~4.2 ns/day on OpenCL**
+  (`output/platform_benchmark.json`) versus ~1 ns/day on CPU.
 * OpenMM does **not** ship a native Metal platform in any prebuilt package
   (8.5.x included). The only Metal implementation is the third-party
   [`philipturner/openmm-metal`](https://github.com/philipturner/openmm-metal)
@@ -32,14 +33,15 @@ python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3
 python scripts/explicit_solvent_md.py --platform OpenCL ...
 python scripts/explicit_solvent_md.py --platform CPU --threads 10 ...
 
-# Quick throughput benchmark (~10 min on OpenCL), writes no analysis:
-python scripts/explicit_solvent_md.py --benchmark 0.01 --platform OpenCL
-# ─ BENCHMARK: OpenCL → 9.02 ns/day (… steps/s, … steps)
+# Quick throughput benchmark (real production system, ~50 min wall time incl. setup)
+python scripts/explicit_solvent_md.py --benchmark 0.02 --platform OpenCL
+# ─ BENCHMARK: OpenCL → 4.15 ns/day (24.0 steps/s, 426003 atoms)
 ```
 
 The chosen platform, thread count and measured `ns/day` are logged per replica
 and recorded in `output/md_explicit/<CID>/replica_<N>/summary.json` under
-`production.performance`.
+`production.performance`. `--benchmark <ns>` additionally persists a benchmark
+record to `output/platform_benchmark.json`.
 
 ## Why OpenCL and not "Metal"
 

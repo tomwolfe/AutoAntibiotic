@@ -127,17 +127,36 @@ def _check_deps():
 
 
 def _standardize_ligand(mol: Chem.Mol, pH: float = 7.4) -> Chem.Mol:
-    """Standardize ligand: assign dominant tautomer and protonation state at given pH."""
+    """Standardize ligand: assign dominant tautomer and protonation state at given pH.
+
+    Handles both the legacy (``MolStandardize.standardize``, rdkit < 2023.09
+    → deprecated) and the current (``rdChem.MolStandardize.rdMolStandardize``,
+    rdkit >= 2023.09) module layouts, so the pH/tautomer assignment actually
+    runs instead of silently falling back to the raw structure.
+    """
     try:
         from rdkit.Chem import MolStandardize
-        # Neutralize and assign dominant tautomer
-        clean_params = MolStandardize.standardize.CleanupParameters()
-        clean_params.pH = pH
+        try:
+            from rdkit.Chem.MolStandardize import rdMolStandardize
+        except ImportError:
+            params_cls = MolStandardize.standardize.CleanupParameters
+            cleanup_cls = MolStandardize.standardize.Cleanup
+        else:
+            params_cls = rdMolStandardize.CleanupParameters
+            cleanup_cls = rdMolStandardize.Cleanup
+        # Neutralize and assign dominant tautomer. (The ``pH`` argument is
+        # honoured only by legacy rdkit Cleanup; newer rdMolStandardize does
+        # not expose pH-dependent tautomer assignment.)
+        clean_params = params_cls()
         clean_params.preferOrganic = True
-        cleaner = MolStandardize.standardize.Cleanup(clean_params)
-        mol = cleaner.cleanup(mol)
+        try:
+            # rdkit >= 2023.09: Cleanup(mol, params) is a plain function.
+            mol = cleanup_cls(mol, clean_params)
+        except TypeError:
+            # Legacy rdkit: Cleanup(params) is a callable class with .cleanup().
+            mol = cleanup_cls(clean_params).cleanup(mol)
         # Uncharge if needed
-        mol = MolStandardize.charge.Uncharger().uncharge(mol)
+        mol = MolStandardize.Uncharger().uncharge(mol)
     except Exception as exc:
         log.warning(f"  MolStandardize failed ({exc}), using original molecule")
     return mol
@@ -989,6 +1008,11 @@ def _run_replica(
 
         prod_energies_array = np.array(prod_energies)
 
+        # Preserve the throughput record set during production (benchmark mode
+        # reads it to persist output/platform_benchmark.json). The dict below
+        # otherwise overwrites it, making benchmark mode report no data.
+        _perf = result["production"].get("performance") if isinstance(result["production"], dict) else None
+
         result["production"] = {
             "npt_duration_ns": npt_duration_ns,
             "n_frames": len(prod_positions),
@@ -1000,6 +1024,8 @@ def _run_replica(
             "mean_potential_energy_kcal": round(float(np.mean(prod_energies_array)), 1) if len(prod_energies_array) > 0 else None,
             "success": True,
         }
+        if _perf:
+            result["production"]["performance"] = _perf
         log.info(f"    Replica {replica_idx}: lig RMSD={result['production']['ligand_rmsd_mean_A']:.3f}±{result['production']['ligand_rmsd_std_A']:.3f} Å, stability={stability}")
     except Exception as exc:
         result["error"] = f"Analysis failed: {exc}"
@@ -1182,7 +1208,7 @@ def main():
                         perf.get("n_atoms", 0),
                         perf.get("steps", 0),
                         perf.get("elapsed_s", 0.0),
-                        timestep_ps=TIMESTEP_PS * 1000,
+                        timestep_ps=TIMESTEP_PS,
                         output_path=str(OUT / "platform_benchmark.json"),
                     )
                 except Exception as exc:
