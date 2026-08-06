@@ -399,9 +399,22 @@ thread count and measured `ns/day` are logged per replica and stored under
 # Auto-detect (recommended): 100 ns × 3 replicas, resumable via checkpoints
 python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3
 
+# Run only specific compounds (per-CID SLURM jobs use this)
+python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3 --candidates BRICS_0022,ALL_QU04
+
 # Force a platform / resume interrupted runs / quick throughput benchmark
 python scripts/explicit_solvent_md.py --platform OpenCL --resume
-python scripts/explicit_solvent_md.py --benchmark 0.01   # ns/day report only
+python scripts/explicit_solvent_md.py --benchmark 0.02   # ns/day report only
+```
+
+Trajectory binding-stability analysis (`scripts/md_analysis.py`) computes the
+review-required metrics from any completed replica — block-averaged ligand
+RMSD, running-average RMSD, integrated autocorrelation time, catalytic
+H-bond occupancy, and the D3 stability class — writing
+`output/md_explicit/<CID>/<replica_N>/analysis.json` and a running-mean plot:
+
+```bash
+python scripts/md_analysis.py --cid BRICS_0022 --replica 0 --blocks 5
 ```
 
 Production writes OpenMM checkpoints (`.cpt` + `.json`) plus a rolling

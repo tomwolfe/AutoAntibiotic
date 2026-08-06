@@ -29,6 +29,23 @@ All notable changes to the pipeline are documented here, newest first.
   `rdMolStandardize.Cleanup(mol, params)` (with legacy fallback) so
   pH/tautomer cleaning actually runs instead of warning and returning the raw
   structure.
+- **SLURM jobs all docked the same compound** — `run_production_md.sh`
+  generated every job with `--n-candidates 1`, which always selects the first
+  row of `top_candidates.csv` regardless of the `CID` in the script name.
+  `explicit_solvent_md.py` now accepts `--candidates CID[,CID...]` and the
+  launcher passes the job's specific CID.
+
+### Added
+- **`scripts/md_analysis.py`** — trajectory binding-stability analysis for any
+  completed replica: block-averaged ligand RMSD (default 5 blocks),
+  running-average RMSD (+ matplotlib plot), integrated autocorrelation time,
+  catalytic H-bond occupancy, and the D3 stability class via
+  `utils.filtering.classify_md_stability`. RMSD metrics are computed from the
+  small `ligand_rmsd.npy` trace so the same code runs on smoke and production
+  trajectories. Outputs `analysis.json` + `analysis_summary.json` under
+  `output/md_explicit/<CID>/` and plots under `output/figures/md_analysis/`.
+  Covered by new unit tests.
+
 
 ## [Unreleased] — GPU acceleration, checkpointed production MD, restraint fix
 

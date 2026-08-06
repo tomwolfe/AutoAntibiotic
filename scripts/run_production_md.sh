@@ -122,7 +122,7 @@ cd "${REPO}"
 python3 scripts/explicit_solvent_md.py \
     --production-ns "${PRODUCTION_NS}" \
     --replicas "${REPLICAS}" \
-    --n-candidates 1 \
+    --candidates "${CID}" \
     --resume
 
 echo "=== Production MD for ${CID} completed ==="

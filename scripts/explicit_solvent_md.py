@@ -182,17 +182,28 @@ def _prepare_ligand_pdb(mol: Chem.Mol, pdb_path: str, pose_pdbqt: str | None = N
     return True
 
 
-def _load_top_candidates(n: int = DEFAULT_N_CANDIDATES) -> list[dict]:
+def _load_top_candidates(n: int = DEFAULT_N_CANDIDATES, cids: Optional[list[str]] = None) -> list[dict]:
     if not CSV_PATH.is_file():
         log.error(f"CSV not found: {CSV_PATH}")
         sys.exit(1)
     with open(CSV_PATH, newline="") as f:
         reader = csv.DictReader(f)
         candidates = []
-        for i, row in enumerate(reader):
-            if i >= n:
+        cid_set = set(cids or [])
+        for row in reader:
+            if cid_set:
+                if row.get("Compound_ID") in cid_set:
+                    candidates.append(row)
+            elif len(candidates) >= n:
                 break
-            candidates.append(row)
+            else:
+                candidates.append(row)
+    if cids:
+        found = {c["Compound_ID"] for c in candidates}
+        missing = sorted(set(cids) - found)
+        if missing:
+            log.error(f"  Requested candidate(s) not found in {CSV_PATH}: {missing}")
+            sys.exit(1)
     log.info(f"  Loaded {len(candidates)} top candidates from CSV")
     return candidates
 
@@ -1126,6 +1137,10 @@ def main():
                         help=f"Number of replicas (default: {DEFAULT_N_REPLICAS})")
     parser.add_argument("--n-candidates", type=int, default=None,
                         help=f"Number of top candidates (default: {DEFAULT_N_CANDIDATES})")
+    parser.add_argument("--candidates", type=str, default=None, metavar="CID[,CID...]",
+                        help="Comma-separated compound IDs to run (e.g. BRICS_0022,ALL_QU04). "
+                             "Overrides --n-candidates; used by run_production_md.sh so each "
+                             "SLURM job targets its specific CID rather than the file's first row.")
     parser.add_argument("--platform", type=str, default=None,
                          help="OpenMM platform preference (Metal/CUDA/OpenCL/CPU). "
                               "Defaults to auto-selection on Apple Silicon. "
@@ -1173,7 +1188,7 @@ def main():
     _check_deps()
     MD_OUT.mkdir(parents=True, exist_ok=True)
 
-    candidates = _load_top_candidates(n=n_candidates)
+    candidates = _load_top_candidates(n=n_candidates, cids=args.candidates.split(",") if args.candidates else None)
 
     all_results = []
     for cand in candidates:
