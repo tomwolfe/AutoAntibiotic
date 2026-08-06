@@ -1017,7 +1017,13 @@ def _run_replica(
 
         # ── NPT production ────────────────────────────────────────────────
         pocket_center_np = np.array([40.0, 20.0, 30.0])
-        report_npt_steps = max(1, npt_steps // int(npt_duration_ns * 1000 / TIMESTEP_PS / 1000))
+        # Target ~500 evenly-spaced frames so the rolling positions file and
+        # in-memory analysis stay tractable regardless of production length.
+        # At ~420k atoms × 3 × 8 bytes ≈ 10 MB/frame, 500 frames ≈ 5 GB per
+        # replica (manageable on M5 Pro). The old formula produced ~2 ps/frame
+        # (50000 frames for a 100 ns run = ~500 GB), which exhausted disk/RAM.
+        _TARGET_FRAMES = 500
+        report_npt_steps = max(1, npt_steps // _TARGET_FRAMES)
 
         n_atoms = solvated_top.getNumAtoms()
         # Persist frame-0 header (atom count) for the rolling positions file.
