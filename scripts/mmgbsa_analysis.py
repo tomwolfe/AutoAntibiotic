@@ -407,7 +407,11 @@ def compute_mmgbsa_trajectory(candidate_dir: Path) -> dict | None:
         start = max(0, total_frames - int(window_ns * 1000.0 / dt_ps)) if total_frames else 0
 
         def _vec3_list(xyz_nm):
-            return [_openmm.Vec3(float(r[0]), float(r[1]), float(r[2])) * _unit.nanometer
+            # Plain Vec3 (nm), NOT Quantity-wrapped: Modeller.delete deep-copies
+            # positions and OpenMM's Quantity deepcopy trips a nested-Quantity
+            # assert for these stripped arrays (OpenMM 8.5+). Context.setPositions
+            # accepts plain Vec3 in nm, so no unit wrapper is needed anywhere.
+            return [_openmm.Vec3(float(r[0]), float(r[1]), float(r[2]))
                     for r in xyz_nm]
 
         # Build the three systems once per replica. Deletion is done on a

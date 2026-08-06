@@ -208,6 +208,40 @@ def _load_top_candidates(n: int = DEFAULT_N_CANDIDATES, cids: Optional[list[str]
     return candidates
 
 
+def _guard_completed(candidates: list[dict], npt_ns: float, n_replicas: int) -> None:
+    """Never re-run a candidate whose aggregated summary already reports a
+    successful run at (or beyond) the requested production length.
+
+    Re-launching a finished candidate with --resume can destroy its completed
+    trajectory when a system rebuild yields a different particle count (the
+    stale-checkpoint path unlinks the finished DCD).  Skipping here makes the
+    guard authoritative for direct invocations as well as the launcher.
+    """
+    skipped = []
+    force = set(c for c in os.environ.get("FORCE_RERUN", "").split(",") if c)
+    for cand in list(candidates):
+        cid = cand["Compound_ID"]
+        if cid in force:
+            log.info(f"  FORCE_RERUN={cid}: regenerating despite summary")
+            continue
+        summary = None
+        summary_path = MD_OUT / cid / "summary.json"
+        if summary_path.is_file():
+            try:
+                summary = json.load(open(summary_path))
+            except Exception:
+                summary = None
+        if summary and summary.get("success"):
+            got_ns = float(summary.get("npt_duration_ns", 0.0) or 0.0)
+            if got_ns >= npt_ns:
+                skipped.append(cid)
+                candidates.remove(cand)
+                log.info(f"  SKIP {cid}: aggregate summary already reports "
+                         f"success ({got_ns} ns >= {npt_ns} ns)")
+    if skipped:
+        log.info(f"  Skipped {len(skipped)} already-completed candidate(s): {', '.join(skipped)}")
+
+
 def _load_receptor_pdb():
     import openmm.app as app
     if not RECEPTOR_PDB.is_file():
@@ -1272,6 +1306,8 @@ def main():
     candidates = _load_top_candidates(n=n_candidates, cids=args.candidates.split(",") if args.candidates else None)
 
     all_results = []
+    _guard_completed(candidates, npt_ns, n_replicas)
+
     for cand in candidates:
         cid = cand["Compound_ID"]
         log.info(f"\n  Processing {cid}...")

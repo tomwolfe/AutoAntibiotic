@@ -52,6 +52,9 @@ STAGGER="${STAGGER:-60}"                 # seconds between candidate launches
 # one at a time (each candidate's replicas run sequentially inside its job).
 MAX_CONCURRENT="${MAX_CONCURRENT:-1}"
 CHECKPOINT_INTERVAL="${CHECKPOINT_INTERVAL:-25000}"
+# Comma-separated CIDs to re-run even if summary.json already reports success
+# (e.g. after a completed trajectory was lost). Empty by default.
+FORCE_RERUN="${FORCE_RERUN:-}"
 # Duty-cycle (thermal throttle mitigation). 0 disables the pause loop.
 DUTY_ON_MIN="${DUTY_ON_MIN:-0}"
 DUTY_OFF_MIN="${DUTY_OFF_MIN:-0}"
@@ -94,6 +97,18 @@ echo "  Production : ${PRODUCTION_NS} ns × ${REPLICAS} replicas"
 echo "  Platform   : ${OPENMM_PLATFORM}"
 echo "  Concurrency: ${MAX_CONCURRENT} job(s) at a time | Stagger: ${STAGGER}s | Duty cycle: ${DUTY_ON_MIN}on/${DUTY_OFF_MIN}off min"
 echo ""
+
+_md_complete() {
+    local cid="$1"
+    local s="${MD_DIR}/${cid}/summary.json"
+    [[ -f "$s" ]] || return 1
+    python3 -c '
+import json, sys
+p, target = sys.argv[1], float(sys.argv[2])
+d = json.load(open(p))
+sys.exit(0 if (d.get("success") and (d.get("npt_duration_ns") or 0) + 1e-9 >= target) else 1)
+' "$s" "${PRODUCTION_NS}"
+}
 
 launch_one() {
     local cid="$1"
@@ -158,15 +173,24 @@ OLDIFS="$IFS"; IFS=','
 active=()
 for cid in ${CIDS}; do
     [ -n "$cid" ] || continue
+    # Skip candidates whose production already completed at the requested length
+    # (summary.json success=True with npt_duration_ns >= target). Re-invoking
+    # this launcher therefore continues, not repeats, the campaign.
+    if _md_complete "${cid}" && [[ ",${FORCE_RERUN}," != *",${cid},"* ]]; then
+        echo "  SKIP ${cid} (production already complete at requested ns)"
+        continue
+    fi
     # Respect the GPU concurrency cap: wait (poll) for a slot before launching.
     # Poll instead of `wait -n` (macOS ships bash 3.2, which lacks it).
+    # NB: under `set -u`, expanding an empty array errors in bash 3.2, so every
+    # expansion uses the guarded ${arr[@]+"${arr[@]}"} idiom.
     while [[ ${#active[@]} -ge ${MAX_CONCURRENT} ]]; do
         sleep 20
-        pruned=()
-        for p in "${active[@]}"; do
-            if kill -0 "$p" 2>/dev/null; then pruned+=("$p"); fi
+        compact=()
+        for p in ${active[@]+"${active[@]}"}; do
+            if kill -0 "$p" 2>/dev/null; then compact+=("$p"); fi
         done
-        active=("${pruned[@]}")
+        active=("${compact[@]+"${compact[@]}"}")
     done
     launch_one "$cid"
     active+=("$!")
