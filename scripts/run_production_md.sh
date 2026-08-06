@@ -44,9 +44,12 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-# Extract top N candidate IDs from the CSV
-mapfile -t CANDIDATES < <(
-    python3 -c "
+# Extract top N candidate IDs from the CSV. (read-while-loop keeps this
+# compatible with macOS GNU bash 3.2, which lacks the `mapfile` builtin.)
+CANDIDATES=()
+while IFS= read -r _cid; do
+    [[ -n "$_cid" ]] && CANDIDATES+=("$_cid")
+done < <(python3 -c "
 import csv, sys
 with open('${CSV_PATH}') as f:
     reader = csv.DictReader(f)
@@ -54,8 +57,7 @@ with open('${CSV_PATH}') as f:
         if i >= ${N_CANDIDATES}:
             break
         print(row['Compound_ID'])
-"
-)
+")
 
 if [[ ${#CANDIDATES[@]} -eq 0 ]]; then
     echo "ERROR: No candidates found in ${CSV_PATH}."
@@ -128,15 +130,15 @@ python3 scripts/explicit_solvent_md.py \
 echo "=== Production MD for ${CID} completed ==="
 JOBHEADER
 
-    # Replace placeholders
-    sed -i "s/@CID@/${cid}/g" "${JOB_SCRIPT}"
-    sed -i "s/@PARTITION@/${PARTITION}/g" "${JOB_SCRIPT}"
-    sed -i "s/@TIME@/${TIME}/g" "${JOB_SCRIPT}"
-    sed -i "s/@MEM@/${MEM}/g" "${JOB_SCRIPT}"
-    sed -i "s|@LOGDIR@|${LOG_DIR}|g" "${JOB_SCRIPT}"
-    sed -i "s|@REPO@|${REPO}|g" "${JOB_SCRIPT}"
-    sed -i "s/@PRODUCTION_NS@/${PRODUCTION_NS}/g" "${JOB_SCRIPT}"
-    sed -i "s/@REPLICAS@/${REPLICAS}/g" "${JOB_SCRIPT}"
+    # Replace placeholders (perl -pi works identically on macOS BSD and GNU).
+    perl -pi -e "s/\@CID\@/${cid}/g" "${JOB_SCRIPT}"
+    perl -pi -e "s/\@PARTITION\@/${PARTITION}/g" "${JOB_SCRIPT}"
+    perl -pi -e "s/\@TIME\@/${TIME}/g" "${JOB_SCRIPT}"
+    perl -pi -e "s/\@MEM\@/${MEM}/g" "${JOB_SCRIPT}"
+    perl -pi -e "s|\@LOGDIR\@|${LOG_DIR}|g" "${JOB_SCRIPT}"
+    perl -pi -e "s|\@REPO\@|${REPO}|g" "${JOB_SCRIPT}"
+    perl -pi -e "s/\@PRODUCTION_NS\@/${PRODUCTION_NS}/g" "${JOB_SCRIPT}"
+    perl -pi -e "s/\@REPLICAS\@/${REPLICAS}/g" "${JOB_SCRIPT}"
 
     chmod +x "${JOB_SCRIPT}"
 

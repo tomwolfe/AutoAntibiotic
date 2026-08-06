@@ -34,6 +34,11 @@ All notable changes to the pipeline are documented here, newest first.
   row of `top_candidates.csv` regardless of the `CID` in the script name.
   `explicit_solvent_md.py` now accepts `--candidates CID[,CID...]` and the
   launcher passes the job's specific CID.
+- **Launcher not runnable on macOS bash** — `run_production_md.sh` used GNU-bash
+  ≥4 `mapfile` and GNU-only `sed -i`; macOS `/bin/bash` 3.2 failed on both. The
+  candidate list now uses a POSIX read-while-loop and placeholder substitution
+  uses `perl -pi` (identical on macOS BSD and GNU grep/sed hosts). Verified by a
+  local dry-run generating 5 per-CID VALID jobs.
 
 ### Added
 - **`scripts/md_analysis.py`** — trajectory binding-stability analysis for any

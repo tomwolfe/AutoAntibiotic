@@ -19,6 +19,9 @@ output/md_explicit/**/replica_*/production_checkpoint.cpt
 output/md_explicit/**/replica_*/production_checkpoint.json
 output/md_explicit/**/replica_*/production_energies.npy
 
+# Generated SLURM job scripts (regenerable via scripts/run_production_md.sh)
+scripts/slurm/
+
 # Python
 __pycache__/
 *.py[cod]
