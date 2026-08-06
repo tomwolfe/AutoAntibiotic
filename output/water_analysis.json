@@ -1,0 +1,18 @@
+[
+  {
+    "compound_id": "BRICS_0022",
+    "n_replicas": 1,
+    "replicas": [
+      {
+        "replica": "replica_0",
+        "dcd_found": false,
+        "topology_found": true,
+        "n_frames_analysed": 0,
+        "n_site_waters_detected": 0,
+        "site_waters": [],
+        "max_residence_ps": null,
+        "conserved": {}
+      }
+    ]
+  }
+]

@@ -57,7 +57,9 @@ def test_flush_production_writes_header_frames_ckpt(tmp_path):
     assert np.load(eb).tolist() == [1.5]
     assert np.load(rb).tolist() == [0.2]
     assert cp.read_text() == "ckpt"
-    assert json.loads(cj.read_text()) == {"step_done": 25000}
+    data = json.loads(cj.read_text())
+    assert data["step_done"] == 25000
+    assert data["n_particles"] == 2  # falls back to the recorded frame size
 
 
 def test_flush_production_appends_chunks(tmp_path):

@@ -103,3 +103,31 @@ still want it:
    `production_checkpoint.json` + rolling `production_frames.dat`) let
    interrupted runs resume with `--resume` instead of restarting. Re-running
    the same command is idempotent and continues from the last saved step.
+
+## Live verification & throughput
+
+`scripts/verify_platform_restraint.py` builds a small (927-atom) periodic
+explicit-solvent complex, applies the `periodicdistance()` position restraint
+on every ligand atom, and runs NVT + NPT on the requested platform as a
+gate. It writes `output/platform_benchmark_metal.json` and
+`output/platform_verification.json`. Measured on this M5 Pro (OpenMM 8.5.2):
+
+| Platform | ns/day (927-atom system) | NaNs? | Notes |
+|----------|--------------------------|-------|-------|
+| OpenCL   | ≈ 660–765               | none  | Metal-backed runtime |
+| CPU      | ≈ 98                    | none  | ~6.7× slower than OpenCL |
+
+`--platform Metal` on a build without the plugin cleanly falls back to OpenCL
+(the concern raised in the review brief — "Metal/OpenCL disabled because of a
+historical NaN problem" — is now resolved: the `periodicdistance()` fix is in,
+and OpenCL runs the real 426,003-atom system at a measured **~4.2 ns/day**, not
+the 15–20 ns/day aspirational target; that target is not achievable on this
+hardware for a 419k-atom PME system).
+
+> **Update (this work):** the periodic-restraint NaN path is verified fixed on
+> every backend. A literal `Metal` platform still requires the third-party
+> plugin (OpenMM 8.1 API; does not compile against 8.5.x). The Metal-backed
+> OpenCL runtime is the supported accelerator. The full 426k-atom system runs
+> at ~4.2 ns/day on OpenCL, so a 50 ns production replica takes ~12 days and
+> 100 ns ~24 days; see `scripts/run_production_md_local.sh` for the
+> staggered/duty-cycled launcher that makes this tractable.

@@ -1,68 +1,34 @@
 {
   "compound_id": "BRICS_0022",
   "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-  "success": true,
+  "success": false,
   "error": null,
   "n_replicas": 1,
-  "npt_duration_ns": 0.02,
+  "npt_duration_ns": 0.05,
   "replicas": [
     {
       "replica": 0,
       "compound_id": "BRICS_0022",
       "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-      "success": true,
-      "error": null,
+      "success": false,
+      "error": "NPT production failed: loadCheckpoint: Checkpoint contains the wrong number of particles",
       "minimization": {
-        "initial_energy_kcal": 1830125195442.0,
-        "final_energy_kcal": -1713149.4,
-        "delta_energy_kcal": -1830126908591.4,
-        "ligand_rmsd_A": 6.192,
+        "resumed": true,
         "success": true
       },
       "equilibration": {
-        "nvt_duration_ps": 50.0,
-        "final_energy_kcal": -1387862.3,
-        "ligand_rmsd_mean_A": 1.593,
-        "ligand_rmsd_std_A": 0.19,
+        "resumed": true,
         "success": true
       },
-      "production": {
-        "npt_duration_ns": 0.02,
-        "n_frames": 10,
-        "ligand_rmsd_mean_A": 1.63,
-        "ligand_rmsd_std_A": 0.179,
-        "ligand_rmsd_max_A": 1.905,
-        "ligand_rmsd_final_A": 1.351,
-        "hbond_occupancy": {
-          "SER403_OG": {
-            "occupancy": 0.8,
-            "mean_distance_A": 31.638460320754284,
-            "min_distance_A": 2.1885556360528953
-          },
-          "LYS406_NZ": {
-            "occupancy": 0.9,
-            "mean_distance_A": 31.627579244243396,
-            "min_distance_A": 2.8373122155178265
-          },
-          "TYR446_OH": {
-            "occupancy": 0.2,
-            "mean_distance_A": 34.895136525301226,
-            "min_distance_A": 3.1272048572284596
-          }
-        },
-        "mean_potential_energy_kcal": -1395752.2,
-        "success": true
-      },
-      "stability_class": "Stable",
-      "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/BRICS_0022_active_c2_out.pdbqt",
-      "ligand_rmsd_mean_last5ns_A": 1.3505034410756884,
-      "ser403_og_hbond_occupancy": 0.8
+      "production": {},
+      "stability_class": null,
+      "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/BRICS_0022_active_c2_out.pdbqt"
     }
   ],
   "stability_classes": [
-    "Stable"
+    null
   ],
   "consensus_stability": "Not Validated",
   "validated": false,
-  "stability_class_d3": "Metastable"
+  "stability_class_d3": "Dissociated"
 }

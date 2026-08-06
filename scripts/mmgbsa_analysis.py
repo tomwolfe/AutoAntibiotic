@@ -151,14 +151,14 @@ def kept_atom_indices(topology):
 
 
 def select_trajectory_frames(n_frames, dt_ps_per_frame,
-                             window_ns=5.0, sample_ps=100.0):
+                             window_ns=50.0, sample_ps=100.0):
     """Return the 0-based frame indices used for ensemble MM-GBSA.
 
     Samples every ``sample_ps`` (default 100 ps) from the *last* ``window_ns``
-    of the production trajectory (default last 5 ns), reflecting the plan that
-    only converged-to-equilibrium frames contribute. Frame timing is derived
-    from the per-replica metadata (npt_duration / n_frames); when it cannot be
-    determined, the final ``window_ns`` worth of frames (50% fallback) is used.
+    of the production trajectory (default last 50 ns), reflecting the review
+    protocol that only converged-to-equilibrium frames contribute. Frame timing
+    is derived from the per-replica metadata (npt_duration / n_frames); when it
+    cannot be determined, the final half (50% fallback) of the file is used.
     """
     if dt_ps_per_frame is None or dt_ps_per_frame <= 0:
         start = max(0, n_frames // 2)
@@ -334,6 +334,8 @@ def compute_mmgbsa_trajectory(candidate_dir: Path) -> dict | None:
 
         # Per-frame timing metadata from the replica summary (if present).
         dt = None
+        n_frames = None
+        npt_ns = None
         try:
             with open(rep_dir / "summary.json") as f:
                 rep_sum = json.load(f)
@@ -372,21 +374,6 @@ def compute_mmgbsa_trajectory(candidate_dir: Path) -> dict | None:
                 except Exception:
                     pass
 
-        # Build the three systems once per replica.
-        try:
-            sys_cpx = _build_system(cpx_top, smi)
-            rec_mod = app.Modeller(cpx_top, pdb.positions[:0])  # placeholder pos
-            rec_mod.delete([lig_res])
-            sys_rec = _build_system(rec_mod.topology)
-            lig_mod = app.Modeller(cpx_top, pdb.positions[:0])
-            lig_mod.delete([r for r in cpx_top.residues() if r != lig_res])
-            sys_lig = _build_system(lig_mod.topology, smi)
-            rec_indices = [i for i in range(cpx_top.getNumAtoms()) if i not in lig_atoms]
-            lig_indices = sorted(lig_atoms)
-        except Exception as exc:
-            log.warning(f"  {cid} replica {rep_dir.name}: system build failed: {exc}")
-            continue
-
         # Reference catalytic coordinates for per-residue decomposition.
         refs = None
         try:
@@ -394,44 +381,110 @@ def compute_mmgbsa_trajectory(candidate_dir: Path) -> dict | None:
         except Exception:
             pass
 
-        # Iterate the DCD, reorder each frame to the stripped topology.
+        # Iterate the DCD with a streaming reader, reorder each sampled frame to
+        # the stripped topology. We never materialise the full trajectory in
+        # RAM, so a 100 ns production DCD (10k+ frames at ~426k atoms each) is
+        # tractable. mdtraj.iterload streams chunks and honours a stride; we
+        # sample every ``sample_ps`` (default 100 ps) from the last
+        # ``window_ns`` (default 50 ns), matching select_trajectory_frames.
         dg_replica = []
-        with app.DCDFile(str(dcd)) as dcd_reader:
-            frames = list(dcd_reader)
-        sample_idx = select_trajectory_frames(len(frames), dt)
-        if len(sample_idx) == 0:
-            sample_idx = list(range(len(frames)))
-        for fi in sample_idx:
-            full_pos = frames[fi]
-            stripped = positions_for_indices(full_pos, kept)
-            try:
-                e_cpx = _energy(sys_cpx, stripped)
-                e_rec = _energy(sys_rec, positions_for_indices(stripped, rec_indices))
-                e_lig = _energy(sys_lig, positions_for_indices(stripped, lig_indices))
-                dg = e_cpx - e_rec - e_lig
-            except Exception as exc:
-                log.warning(f"  {cid} frame {fi}: energy eval failed: {exc}")
-                continue
-            dg_values.append(dg)
-            dg_replica.append(dg)
+        try:
+            import mdtraj as md
+            from openmm import unit as _unit
+            import openmm as _openmm
+        except ImportError:
+            log.warning("  %s: mdtraj not installed; skipping trajectory MM-GBSA", cid)
+            return None
 
-            if refs is not None:
-                try:
-                    matched = _match_catalytic_by_coords(cpx_top, stripped, refs)
-                    dg_ref = e_cpx - e_rec
-                    for label, res in matched.items():
-                        idxs = [a.index for a in res.atoms()]
-                        saved, nb, gb = _zero_residue(sys_cpx, idxs)
-                        e_cpx_mut = _energy(sys_cpx, stripped)
-                        _restore_residue(saved, nb, gb)
-                        saved, nb, gb = _zero_residue(sys_rec, idxs)
-                        e_rec_mut = _energy(sys_rec, positions_for_indices(stripped, rec_indices))
-                        _restore_residue(saved, nb, gb)
-                        per_res_frames.setdefault(label, []).append(
-                            (e_cpx_mut - e_rec_mut) - dg_ref
-                        )
-                except Exception:
+        md_top = md.Topology.from_openmm(pdb.topology)
+        total_frames = n_frames
+        dt_ps = dt
+        if dt_ps is None:
+            dt_ps = 10.0  # default report interval (5000 steps x 2 fs)
+        sample_ps = 100.0
+        window_ns = 50.0
+        step = max(1, round(sample_ps / dt_ps)) if total_frames else 1
+        start = max(0, total_frames - int(window_ns * 1000.0 / dt_ps)) if total_frames else 0
+
+        def _vec3_list(xyz_nm):
+            return [_openmm.Vec3(float(r[0]), float(r[1]), float(r[2])) * _unit.nanometer
+                    for r in xyz_nm]
+
+        # Build the three systems once per replica. Deletion is done on a
+        # Modeller seeded with the *real* first-frame coordinates: a placeholder
+        # list of shared Quantity objects is rejected by Modeller.delete
+        # (nested-Quantity assert), so we use a genuine position array instead.
+        try:
+            first_stripped = None
+            for _fchunk in md.iterload(str(dcd), top=md_top, chunk=1, stride=step):
+                first_stripped = positions_for_indices(_vec3_list(_fchunk.xyz[0]), kept)
+                break
+            if first_stripped is None or len(first_stripped) != cpx_top.getNumAtoms():
+                raise ValueError("could not obtain a coordinate frame matching the stripped topology")
+            rec_mod = app.Modeller(cpx_top, first_stripped)
+            rec_mod.delete([lig_res])
+            sys_rec = _build_system(rec_mod.topology)
+            # If cpx is already ligand-only there is nothing to delete and
+            # Modeller.delete([]) trips an OpenMM Quantity assert; reuse cpx_top.
+            _to_del = [r for r in cpx_top.residues() if r != lig_res]
+            if _to_del:
+                lig_mod = app.Modeller(cpx_top, first_stripped)
+                lig_mod.delete(_to_del)
+                lig_top = lig_mod.topology
+            else:
+                lig_top = cpx_top
+            sys_lig = _build_system(lig_top, smi)
+            sys_cpx = _build_system(cpx_top, smi)
+            rec_indices = [i for i in range(cpx_top.getNumAtoms()) if i not in lig_atoms]
+            lig_indices = sorted(lig_atoms)
+        except Exception as exc:
+            log.warning(f"  {cid} replica {rep_dir.name}: system build failed: {exc}")
+            continue
+
+        frame_no = 0  # DCD index of the *next* yielded frame (stride-aware)
+        for chunk in md.iterload(str(dcd), top=md_top, chunk=20, stride=step):
+            for row in chunk.xyz:
+                if frame_no * step < start:
+                    frame_no += 1
                     continue
+                frame_no += 1
+                fi = frame_no - 1
+                stripped = positions_for_indices(_vec3_list(row), kept)
+                try:
+                    def _sub_energy(system, coords):
+                        # A subsystem with no particles (degenerate/edge inputs)
+                        # contributes zero; positions must match particle count.
+                        if not coords or system.getNumParticles() == 0:
+                            return 0.0
+                        return _energy(system, coords)
+
+                    e_cpx = _sub_energy(sys_cpx, stripped)
+                    e_rec = _sub_energy(sys_rec, positions_for_indices(stripped, rec_indices))
+                    e_lig = _sub_energy(sys_lig, positions_for_indices(stripped, lig_indices))
+                    dg = e_cpx - e_rec - e_lig
+                except Exception as exc:
+                    log.warning(f"  {cid} frame {fi}: energy eval failed: {exc}")
+                    continue
+                dg_values.append(dg)
+                dg_replica.append(dg)
+
+                if refs is not None:
+                    try:
+                        matched = _match_catalytic_by_coords(cpx_top, stripped, refs)
+                        dg_ref = e_cpx - e_rec
+                        for label, res in matched.items():
+                            idxs = [a.index for a in res.atoms()]
+                            saved, nb, gb = _zero_residue(sys_cpx, idxs)
+                            e_cpx_mut = _energy(sys_cpx, stripped)
+                            _restore_residue(saved, nb, gb)
+                            saved, nb, gb = _zero_residue(sys_rec, idxs)
+                            e_rec_mut = _energy(sys_rec, positions_for_indices(stripped, rec_indices))
+                            _restore_residue(saved, nb, gb)
+                            per_res_frames.setdefault(label, []).append(
+                                (e_cpx_mut - e_rec_mut) - dg_ref
+                            )
+                    except Exception:
+                        continue
 
         if dg_replica:
             log.info(f"    {cid} replica {rep_dir.name}: {len(dg_replica)} frames, "

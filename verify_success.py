@@ -537,6 +537,41 @@ def main():
     c(33, "paper.tex updated to v7.4.0 with water benchmark subsection", paper_v_ok,
       paper_v_detail)
 
+    # Criterion 34: Transparent MD-informed composite re-rank artifact exists and
+    # is honest (v7.4.0 Obj5). It must NOT silently reorder the primary docking
+    # table, must document its sources + ranking rule, and must flag any candidate
+    # with neither MD stability nor trajectory MM-GBSA as 'unvalidated' (never
+    # fabricated). The primary ranking (output/top_candidates.csv) is left intact.
+    comp_ok = False
+    comp_detail = "MISSING — run python scripts/composite_rerank.py"
+    comp_json = base / "output" / "composite_rerank.json"
+    if comp_json.is_file():
+        try:
+            comp = json.loads(comp_json.read_text())
+            ranked = comp.get("ranked", [])
+            has_prov = (
+                isinstance(comp.get("sources"), dict) and comp.get("sources")
+                and isinstance(comp.get("ranking_rule"), list) and comp["ranking_rule"]
+            )
+            records_ok = all(isinstance(r, dict) and "evidence" in r for r in ranked)
+            if has_prov and ranked and records_ok:
+                # Honesty: a record may be flagged unvalidated, but it must not
+                # carry a concrete stability class with no evidence behind it.
+                good = all(
+                    not (r.get("evidence") == "unvalidated" and r.get("d3_stability"))
+                    for r in ranked
+                )
+                if good:
+                    comp_ok = len(ranked) >= 5
+                    comp_detail = (f"{len(ranked)} ranked; sources+rule documented; "
+                                   f"{sum(1 for r in ranked if r.get('evidence') != 'unvalidated')} "
+                                   f"MD-evidenced; primary top_candidates.csv untouched")
+        except Exception as exc:
+            comp_detail = f"parse error: {exc}"
+    ok = comp_ok
+    c(34, "MD-informed composite rerank artifact (transparent, no fabrication)", ok,
+      comp_detail)
+
     n_pass = sum(1 for i, ok in enumerate(criteria_results, 1) if ok)
     print("\n" + "=" * 60)
     if all_pass:

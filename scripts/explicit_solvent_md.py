@@ -431,8 +431,14 @@ def _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
 
     # ── OpenMM native checkpoint + resume marker ─────────────────────────
     simulation.saveCheckpoint(str(ckpt_path))
+    try:
+        n_particles = int(simulation.system.getNumParticles())
+    except Exception:
+        # Mock/edge paths without a live system: use the recorded frame size.
+        n_particles = (len(pos_tmp[0]) if pos_tmp else
+                       (len(prod_positions[0]) if prod_positions else -1))
     with open(ckpt_json, "w") as f:
-        json.dump({"step_done": int(done_steps)}, f)
+        json.dump({"step_done": int(done_steps), "n_particles": n_particles}, f)
 
 
 def _report_dcd(dcd_path: str, topology, positions) -> str:
@@ -647,6 +653,30 @@ def _run_replica(
     except Exception as exc:
         result["error"] = f"System creation failed: {exc}"
         return result
+
+    # Stale-checkpoint guard: solvation is deterministic only for an identical
+    # ligand conformer, so if the freshly rebuilt system has a different
+    # particle count than the checkpoint (e.g. an earlier run used a different
+    # conformer/box), loading the .cpt fails with "Checkpoint contains the
+    # wrong number of particles". Detect that here and start production fresh.
+    if _EARLY_RESUME:
+        try:
+            with open(ckpt_json) as f:
+                ckpt_n = int(json.load(f).get("n_particles", -1))
+            built_n = system.getNumParticles()
+            if ckpt_n != built_n:
+                log.warning(f"    [{cid}] stale production checkpoint: system has "
+                            f"{built_n} particles but checkpoint targets {ckpt_n}; "
+                            f"discarding it and restarting production from zero")
+                _EARLY_RESUME = False
+                ckpt_path.unlink(missing_ok=True)
+                ckpt_json.unlink(missing_ok=True)
+        except Exception as exc:
+            log.warning(f"    [{cid}] checkpoint validation failed ({exc}); "
+                        f"restarting production from zero")
+            _EARLY_RESUME = False
+            ckpt_path.unlink(missing_ok=True)
+            ckpt_json.unlink(missing_ok=True)
 
     # For a fresh (non-resumed) run, drop any stale production binaries from a
     # previous/aborted run of the same replica so the rolling frames/energies
@@ -876,37 +906,87 @@ def _run_replica(
         energy_tmp = []
         pos_tmp = []
         _t_prod0 = time.monotonic()
-        for _ in range(n_prod_chunks):
-            simulation.step(report_npt_steps)
+
+        # NaN/crash auto-restart: if a production chunk explodes (NaN, or any
+        # OpenMM error), reload the last good native checkpoint, zero the
+        # restraint, and continue from the saved step instead of failing the
+        # whole replica. Each replica tolerates up to *max_nan_retries*
+        # restarts (configurable via AA_MD_MAX_NAN_RETRIES). Only frames that
+        # were flushed to disk before the crash are kept (roll-back by up to
+        # one checkpoint interval). This makes long duty-cycled runs tolerant
+        # of transient numerical blowups.
+        max_nan_retries = int(os.environ.get("AA_MD_MAX_NAN_RETRIES", "3"))
+        n_nan_restarts = 0
+
+        def _collect_report_chunk(n_steps: int):
+            """Step *n_steps*, record a frame, and flush a checkpoint at the
+            configured cadence. Called inside a retry guard; raises
+            ``OpenMMException`` on non-finite energy so the caller can restart."""
+            nonlocal done_steps
+            simulation.step(n_steps)
             state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
             pos = state_prod.getPositions()
             e = state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            if not np.isfinite(float(e)):
+                raise openmm.OpenMMException(
+                    f"Non-finite potential energy ({e:#.6g} kcal/mol) at step {done_steps + n_steps}"
+                )
             lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
-            done_steps += report_npt_steps
+            done_steps += n_steps
             pos_tmp.append(pos)
             energy_tmp.append(e)
             rmsd_tmp.append(float(lr) if lr is not None else float("nan"))
-            # Checkpoint periodically so interrupted runs resume here.
             if (done_steps - start_step) % checkpoint_interval_steps == 0:
                 _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path,
                                   ckpt_json, prod_positions, prod_energies,
                                   lig_rmsd_traj, pos_tmp, energy_tmp, rmsd_tmp,
                                   simulation, done_steps)
-                pos_tmp, energy_tmp, rmsd_tmp = [], [], []
-        if chunk_remaining:
-            simulation.step(chunk_remaining)
-            state_prod = simulation.context.getState(getPositions=True, getEnergy=True)
-            pos = state_prod.getPositions()
-            e = state_prod.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-            lr = _compute_ligand_rmsd(min_pos, pos, lig_indices)
-            done_steps += chunk_remaining
-            pos_tmp.append(pos)
-            energy_tmp.append(e)
-            rmsd_tmp.append(float(lr) if lr is not None else float("nan"))
+                pos_tmp.clear()
+                energy_tmp.clear()
+                rmsd_tmp.clear()
+
+        def _restore_last_good_checkpoint() -> int:
+            """Load the last native checkpoint, return the step it was saved at."""
+            with open(ckpt_json) as f:
+                ckpt_step = int(json.load(f)["step_done"])
+            simulation.loadCheckpoint(str(ckpt_path))
+            # Checkpoints do not persist per-particle force parameters, so
+            # re-zero the (production) restraint and sync into the context.
+            for i in range(n_restrained_ca):
+                restraint.setParticleParameters(i, ca_indices[i],
+                    [0.0, ca_xyz[i][0], ca_xyz[i][1], ca_xyz[i][2]])
+            restraint.updateParametersInContext(simulation.context)
+            return ckpt_step
+
+        while True:
+            try:
+                for _ in range(n_prod_chunks):
+                    _collect_report_chunk(report_npt_steps)
+                if chunk_remaining:
+                    _collect_report_chunk(chunk_remaining)
+                    chunk_remaining = 0
+                break
+            except Exception as exc:
+                if n_nan_restarts >= max_nan_retries or not ckpt_path.is_file():
+                    raise
+                n_nan_restarts += 1
+                log.warning(
+                    f"    [{cid}] production crash/NaN at ~step {done_steps} ({exc}); "
+                    f"restarting from last checkpoint "
+                    f"(attempt {n_nan_restarts}/{max_nan_retries})")
+                done_steps = _restore_last_good_checkpoint()
+                pos_tmp.clear()
+                energy_tmp.clear()
+                rmsd_tmp.clear()
+                total_steps_remaining = npt_steps - done_steps
+                n_prod_chunks = total_steps_remaining // report_npt_steps
+                chunk_remaining = total_steps_remaining % report_npt_steps
+
         # Final flush of the remaining (¼ checkpoint) frames.
         _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
                           prod_positions, prod_energies, lig_rmsd_traj,
                           pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps)
+        result["production"]["nan_auto_restarts"] = n_nan_restarts
 
         # Rebuild the full in-memory frame list for analysis + DCD output.
         # Each element is one frame: a list of n_atoms openmm.Vec3 (matching
@@ -1033,6 +1113,7 @@ def _run_replica(
             "ligand_rmsd_final_A": round(float(lig_rmsd_array[-1]), 3) if len(lig_rmsd_array) > 0 else None,
             "hbond_occupancy": hb_occ,
             "mean_potential_energy_kcal": round(float(np.mean(prod_energies_array)), 1) if len(prod_energies_array) > 0 else None,
+            "nan_auto_restarts": n_nan_restarts,
             "success": True,
         }
         if _perf:
