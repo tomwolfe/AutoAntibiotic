@@ -1341,6 +1341,7 @@ def _run_consensus_dock(
     box_size,
     work_dir: str,
     tag: str,
+    exhaustiveness: int = 16,
 ) -> Dict[str, Optional[float]]:
     if not receptor_pdbqts or center is None:
         return {r.compound_id: None for r in records}
@@ -1351,6 +1352,7 @@ def _run_consensus_dock(
         results = _dock_compounds_parallel(
             records, receptor_pdbqt, center, box_size,
             work_dir, f"{tag}_c{conf_idx}",
+            exhaustiveness=exhaustiveness,
         )
         for rec, energy in results:
             if energy is None:
@@ -1368,6 +1370,7 @@ def screen_library(
     targets: dict,
     work_dir: str,
     deps: dict,
+    exhaustiveness: int = 16,
 ) -> List[CompoundRecord]:
     """
     Phase 3 — Virtual screening.
@@ -1405,6 +1408,7 @@ def screen_library(
 
     active_best = _run_consensus_dock(
         records, receptor_pdbqts, active_center, active_box, work_dir, "active",
+        exhaustiveness=exhaustiveness,
     )
 
     n_scored_active = 0
@@ -1458,6 +1462,7 @@ def screen_library(
         )
         allosteric_best = _run_consensus_dock(
             records, receptor_pdbqts, allosteric_center, allosteric_box, work_dir, "allosteric",
+            exhaustiveness=exhaustiveness,
         )
         for rec in records:
             rec.pb2pa_allosteric_energy = allosteric_best.get(rec.compound_id)
@@ -2421,11 +2426,185 @@ def _run_enrichment_validation(
     log.info("--- Phase 0.5 complete ---")
 
 
+def _run_validate_candidates(
+    top10: List[CompoundRecord],
+    targets: dict,
+    work_dir: str,
+    deps: dict,
+    n_candidates: int = 5,
+    md_ns: float = 1.0,
+    replicas: int = 3,
+) -> List[CompoundRecord]:
+    """Hand off top-N candidates to explicit-solvent MD + MM-GBSA rescoring.
+
+    When ``--validate-candidates`` is enabled, this function:
+      1. Invokes ``scripts/explicit_solvent_md.py`` on the top-N candidates
+         (with GPU/OpenCL detection and CPU fallback).
+      2. Runs ``scripts/mmgbsa_analysis.py`` on the resulting trajectories.
+      3. Records D3 stability classes, mean RMSD, and delta-G-bind on each
+         CompoundRecord for downstream reporting.
+
+    Args:
+        top10: Current top candidate list.
+        targets: Target preparation dict (must include PBP2a).
+        work_dir: Scratch directory.
+        deps: Dependency check dict.
+        n_candidates: Number of top candidates to validate (default 5).
+        md_ns: Nanoseconds of production MD per replica (default 1.0).
+        replicas: Number of MD replicas per candidate (default 3).
+
+    Returns:
+        Updated top10 with ``mmgbsa_dg_bind``, ``md_mean_rmsd``,
+        ``md_d3_class``, and ``hbond_occupancy`` attributes populated.
+    """
+    log.info(f"  Validating top-{n_candidates} candidates via MD + MM-GBSA")
+
+    # Check CSV exists (required by MD script)
+    csv_path = OUTPUT_DIR / "top_candidates.csv"
+    if not csv_path.exists():
+        log.warning("  top_candidates.csv not found; skipping candidate validation")
+        return top10
+
+    # Select candidates to validate (those with valid docking poses)
+    validate_targets = sorted(
+        [r for r in top10 if r.pb2pa_active_energy is not None],
+        key=lambda r: r.pb2pa_active_energy,
+    )[:n_candidates]
+
+    if not validate_targets:
+        log.warning("  No valid candidates for MD validation")
+        return top10
+
+    candidate_ids = [r.compound_id for r in validate_targets]
+    log.info(f"  MD validation candidates: {candidate_ids}")
+
+    # ── Step 1: Run explicit-solvent MD ──
+    md_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "scripts", "explicit_solvent_md.py")
+    if not os.path.exists(md_script):
+        log.warning(f"  MD script not found: {md_script}")
+        return top10
+
+    try:
+        # Build MD command with platform auto-detect and candidate selection
+        md_cmd = [
+            sys.executable, md_script,
+            "--n-candidates", str(n_candidates),
+            "--candidates", ",".join(candidate_ids),
+            "--production-ns", str(md_ns),
+            "--replicas", str(replicas),
+            "--quick" if md_ns <= 0.5 else "",
+        ]
+        # Remove empty strings from cmd list
+        md_cmd = [c for c in md_cmd if c]
+
+        log.info(f"  Running explicit-solvent MD: {' '.join(md_cmd)}")
+        md_result = subprocess.run(
+            md_cmd, capture_output=True, text=True, timeout=7200,
+        )
+        if md_result.returncode != 0:
+            log.warning(f"  MD script returned exit code {md_result.returncode}")
+            log.warning(f"  MD stderr: {md_result.stderr[:500]}")
+        else:
+            log.info("  Explicit-solvent MD completed successfully")
+    except subprocess.TimeoutExpired:
+        log.warning("  MD script timed out (2h)")
+    except Exception as exc:
+        log.warning(f"  MD script execution failed: {exc}")
+
+    # ── Step 2: Run MM-GBSA rescoring ──
+    mmgbsa_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "scripts", "mmgbsa_analysis.py")
+    if not os.path.exists(mmgbsa_script):
+        log.warning(f"  MM-GBSA script not found: {mmgbsa_script}")
+        return top10
+
+    try:
+        log.info("  Running MM-GBSA rescoring on trajectories")
+        mmgbsa_result = subprocess.run(
+            [sys.executable, mmgbsa_script],
+            capture_output=True, text=True, timeout=3600,
+        )
+        if mmgbsa_result.returncode != 0:
+            log.warning(f"  MM-GBSA returned exit code {mmgbsa_result.returncode}")
+        else:
+            log.info("  MM-GBSA rescoring completed successfully")
+    except subprocess.TimeoutExpired:
+        log.warning("  MM-GBSA script timed out (1h)")
+    except Exception as exc:
+        log.warning(f"  MM-GBSA script execution failed: {exc}")
+
+    # ── Step 3: Read back results and update records ──
+    mmgbsa_path = OUTPUT_DIR / "mmgbsa_results.json"
+    md_summary_path = OUTPUT_DIR / "md_explicit" / "summary.json"
+
+    mmgbsa_data = {}
+    if mmgbsa_path.exists():
+        try:
+            with open(mmgbsa_path) as f:
+                mg = json.load(f)
+            if isinstance(mg, list):
+                for entry in mg:
+                    cid = entry.get("compound_id")
+                    if cid and entry.get("success"):
+                        mmgbsa_data[cid] = entry
+            elif isinstance(mg, dict) and mg.get("compound_id"):
+                mmgbsa_data[mg["compound_id"]] = mg
+        except Exception as exc:
+            log.warning(f"  Could not parse MM-GBSA results: {exc}")
+
+    md_data = {}
+    if md_summary_path.exists():
+        try:
+            with open(md_summary_path) as f:
+                md_summary = json.load(f)
+            for entry in md_summary.get("candidates", []):
+                cid = entry.get("compound_id")
+                if cid:
+                    md_data[cid] = entry
+        except Exception as exc:
+            log.warning(f"  Could not parse MD summary: {exc}")
+
+    # Update records with MM-GBSA and MD metrics
+    n_updated = 0
+    for rec in top10:
+        cid = rec.compound_id
+
+        mg = mmgbsa_data.get(cid, {})
+        if mg:
+            dg = mg.get("delta_G_bind_kcal_mol")
+            if dg is not None:
+                rec.mmgbsa_dg_bind = float(dg)
+            ensemble = mg.get("ensemble", {})
+            if ensemble and ensemble.get("delta_G_bind_mean_kcal") is not None:
+                rec.mmgbsa_dg_bind = float(ensemble["delta_G_bind_mean_kcal"])
+
+        md = md_data.get(cid, {})
+        if md:
+            rec.md_mean_rmsd = md.get("ligand_rmsd_mean_last5ns_A")
+            rec.md_d3_class = md.get("stability_class_d3")
+            hb = md.get("hbond_occupancy", {})
+            if hb:
+                # Average H-bond occupancy across catalytic residues
+                occ_vals = [v for v in hb.values() if isinstance(v, (int, float))]
+                rec.hbond_occupancy = sum(occ_vals) / len(occ_vals) if occ_vals else 0.0
+
+        if mg or md:
+            n_updated += 1
+
+    log.info(f"  Updated {n_updated}/{len(top10)} candidates with MD/MM-GBSA metrics")
+    return top10
+
+
 def main(target_count: int = 500, force: bool = False, library: Optional[str] = None,
           config: Optional[dict] = None, smiles: Optional[str] = None,
           refine: bool = False,
           flex_dock: bool = False,
-          filter_md_stability: bool = False):
+          filter_md_stability: bool = False,
+          exhaustiveness: int = 16,
+          high_throughput: bool = False,
+          validate_candidates: bool = False,
+          ifd_residues: Optional[List[str]] = None):
     """Orchestrate the full discovery pipeline end-to-end.
 
     Args:
@@ -2443,10 +2622,33 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
             single compound is docked & summarised immediately.
         refine: When True, enable one round of iterative BRICS library
             refinement after Phase 3 (default: False).
+        exhaustiveness: Vina exhaustiveness for primary docking (default 16).
+            Production screening uses 32; quick tests use 8.
+        high_throughput: When True, overrides exhaustiveness to 8 for
+            rapid screening (default: False).
+        validate_candidates: When True, automatically hands off top-N
+            candidates to explicit-solvent MD, runs MM-GBSA rescoring,
+            and populates the final report with D3 stability classes,
+            mean RMSD, and delta-G-bind metrics (default: False).
+        ifd_residues: Optional list of residue names for IFD flexible
+            side-chain sampling. Defaults to the catalytic triad
+            (Ser403, Lys406, Tyr446).
     """
     assert ACTIVE_SITE_RESIDUES == ["SER403", "LYS406", "TYR446"], \
         f"ACTIVE_SITE_RESIDUES mismatch: {ACTIVE_SITE_RESIDUES}"
     ensure_output_dir()
+
+    # ── Exhaustiveness override (high-throughput mode) ──
+    if high_throughput:
+        exhaustiveness = 8
+        log.info("  High-throughput mode: exhaustiveness set to 8")
+    if exhaustiveness < 8:
+        exhaustiveness = 8
+    log.info(f"  Docking exhaustiveness: {exhaustiveness}")
+
+    # ── IFD catalytic residues ──
+    if ifd_residues is None:
+        ifd_residues = ["SER403", "LYS406", "TYR446"]
 
     # ── Configuration (explicit mode: ci | science) ──
     if config is None:
@@ -2581,7 +2783,7 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         filtered = filtered[:target_count]
 
     # ── Phase 3: Virtual screening ──
-    top10 = screen_library(filtered, targets, work_dir, deps)
+    top10 = screen_library(filtered, targets, work_dir, deps, exhaustiveness=exhaustiveness)
 
     # Exclude suspect (E < SUSPECT_SCORE_THRESHOLD) compounds from reported top-N
     non_suspect = [r for r in top10 if not getattr(r, "suspect_score", False)]
@@ -2919,6 +3121,15 @@ def main(target_count: int = 500, force: bool = False, library: Optional[str] = 
         f"{SI_PROMISING_THRESHOLD}, deduplicated to {len(top10)} total."
     )
 
+    # ── Phase 4.8: Validate Candidates (--validate-candidates) ──
+    # Automatically hands off top-N candidates to explicit-solvent MD,
+    # runs MM-GBSA rescoring over trajectory frames, and records D3
+    # stability classes, mean RMSD, and delta-G-bind on each record.
+    if validate_candidates:
+        log.info("─── Phase 4.8: Validate Candidates (--validate-candidates) ───")
+        top10 = _run_validate_candidates(top10, targets, work_dir, deps)
+        log.info("─── Phase 4.8 complete ───")
+
     # ── Phase 5: Reporting & Artifacts ──
     generate_csv_report(
         top10,
@@ -3116,6 +3327,29 @@ def cli():
             "mean ligand RMSD > 3.0 Å or zero catalytic H-bond contacts."
         ),
     )
+    parser.add_argument(
+        "--exhaustiveness", type=int, default=16,
+        help=(
+            "Vina exhaustiveness for primary docking (default 16). "
+            "Use 32 for production screening."
+        ),
+    )
+    parser.add_argument(
+        "--high-throughput", action="store_true",
+        help=(
+            "Override exhaustiveness to 8 for rapid screening. "
+            "Equivalent to --exhaustiveness 8."
+        ),
+    )
+    parser.add_argument(
+        "--validate-candidates", action="store_true",
+        help=(
+            "Automatically hand off top-N candidates to explicit-solvent MD, "
+            "run MM-GBSA rescoring over trajectory frames, and populate the "
+            "final report with D3 stability classes, mean RMSD, and "
+            "delta-G-bind metrics."
+        ),
+    )
     args = parser.parse_args()
 
     if args.check:
@@ -3126,7 +3360,10 @@ def cli():
     log.info(f"AutoAntibiotic Discovery Pipeline v{__version__}")
     main(target_count=args.count, force=args.force, library=args.library,
          smiles=args.smiles, refine=args.refine,
-         flex_dock=args.flex_dock, filter_md_stability=args.filter_md_stability)
+         flex_dock=args.flex_dock, filter_md_stability=args.filter_md_stability,
+         exhaustiveness=args.exhaustiveness,
+         high_throughput=args.high_throughput,
+         validate_candidates=args.validate_candidates)
 
 
 if __name__ == "__main__":

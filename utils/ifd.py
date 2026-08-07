@@ -39,6 +39,9 @@ def run_ifd_orchestration(
     work_dir: str,
     n_iterations: int = 3,
     output_dir: Optional[str] = None,
+    catalytic_residues: Optional[list] = None,
+    use_catalytic_ifd: bool = False,
+    exhaustiveness: int = 32,
 ) -> list:
     """Run induced-fit docking on a list of compound records.
 
@@ -50,12 +53,22 @@ def run_ifd_orchestration(
         work_dir: Scratch directory for intermediate files.
         n_iterations: Number of IFD iterations (default 3).
         output_dir: Output directory for IFD poses. If None, uses "output".
+        catalytic_residues: Optional list of ``(resname, resnum)`` tuples for
+            catalytic IFD mode.
+        use_catalytic_ifd: When True, use the light IFD variant that forces
+            the catalytic triad as flexible residues.
+        exhaustiveness: Vina exhaustiveness for re-docking.
 
     Returns:
         List of updated CompoundRecord objects with ifd_energy and
         ifd_pose_pdbqt fields populated for successful IFD runs.
     """
     from utils.docking import dock_compound_induced_fit, _parse_pdbqt_heavy_coords
+
+    if use_catalytic_ifd:
+        from utils.docking import dock_compound_ifd_catalytic as _ifd_func
+    else:
+        _ifd_func = dock_compound_induced_fit
 
     if output_dir is None:
         output_dir = "output"
@@ -72,11 +85,20 @@ def run_ifd_orchestration(
             results.append(rec)
             continue
 
-        ifd_energy, ifd_pose = dock_compound_induced_fit(
-            rec, receptor_pdb, active_center, active_box,
-            work_dir, rigid_pose_pdbqt=pose_pdbqt, tag="ifd",
-            n_iterations=n_iterations,
-        )
+        if use_catalytic_ifd:
+            ifd_energy, ifd_pose = _ifd_func(
+                rec, receptor_pdb, active_center, active_box,
+                work_dir, rigid_pose_pdbqt=pose_pdbqt,
+                catalytic_residues=catalytic_residues,
+                n_iterations=n_iterations,
+                exhaustiveness=exhaustiveness,
+            )
+        else:
+            ifd_energy, ifd_pose = _ifd_func(
+                rec, receptor_pdb, active_center, active_box,
+                work_dir, rigid_pose_pdbqt=pose_pdbqt, tag="ifd",
+                n_iterations=n_iterations,
+            )
 
         if ifd_energy is not None and ifd_pose is not None:
             rec.ifd_energy = ifd_energy

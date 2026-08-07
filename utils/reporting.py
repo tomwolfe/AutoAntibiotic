@@ -210,6 +210,41 @@ def generate_csv_report(
     below.sort(key=lambda r: r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf"))
     top10 = list(passing) + below
 
+    # ── MM-GBSA-aware re-ranking ──
+    # When MM-GBSA delta-G values are available (from --validate-candidates),
+    # re-rank candidates using MM-GBSA dG_bind as the primary key, with
+    # catalytic H-bond occupancy and Vina energy as secondary tiebreakers.
+    mmgbsa_available = any(getattr(r, "mmgbsa_dg_bind", None) is not None for r in top10)
+    if mmgbsa_available:
+        log.info("  MM-GBSA results available: ranking by dG_bind (primary), "
+                 "H-bond occupancy (secondary), Vina energy (tertiary)")
+
+        def mmgbsa_sort_key(r):
+            dg = getattr(r, "mmgbsa_dg_bind", None)
+            h_occ = getattr(r, "hbond_occupancy", 0.0) or 0.0
+            vina_e = r.pb2pa_best_energy if r.pb2pa_best_energy is not None else float("inf")
+            # Primary: dG (more negative = better), Secondary: H-bond occupancy (higher = better),
+            # Tertiary: Vina energy (more negative = better)
+            return (
+                dg if dg is not None else float("inf"),  # dG ascending
+                -h_occ,  # H-bond occupancy descending (negated)
+                vina_e,  # Vina energy ascending
+            )
+
+        # Re-rank but preserve the SI-gate priority for the report
+        passing_mmgbsa = [r for r in passing if getattr(r, "mmgbsa_dg_bind", None) is not None]
+        passing_no_mmgbsa = [r for r in passing if getattr(r, "mmgbsa_dg_bind", None) is None]
+        passing_mmgbsa.sort(key=mmgbsa_sort_key)
+        passing = passing_mmgbsa + passing_no_mmgbsa
+
+        below_mmgbsa = [r for r in below if getattr(r, "mmgbsa_dg_bind", None) is not None]
+        below_no_mmgbsa = [r for r in below if getattr(r, "mmgbsa_dg_bind", None) is None]
+        below_mmgbsa.sort(key=mmgbsa_sort_key)
+        below = below_mmgbsa + below_no_mmgbsa
+
+        top10 = passing + below
+        log.info("  Final ranking: MM-GBSA dG_bind primary with H-bond + Vina tiebreakers")
+
     for rec in top10:
         # Per-residue H-bond flags derived from the interaction fingerprint
         # captured during Phase 4 (min distance to the conserved residue; a
@@ -391,6 +426,23 @@ def generate_csv_report(
             # mistaken for a statistically meaningful Strong vs Promising split.
             "Selectivity_Index_CI": (
                 rec.selectivity_index_ci if getattr(rec, "selectivity_index_ci", None)
+                else "N/A"
+            ),
+            # ── MD/MM-GBSA validation metrics (Phase 4.8) ──
+            "MMGBSA_dG_Bind": (
+                f"{rec.mmgbsa_dg_bind:.2f}" if getattr(rec, "mmgbsa_dg_bind", None) is not None
+                else "N/A"
+            ),
+            "MD_Mean_RMSD": (
+                f"{rec.md_mean_rmsd:.2f}" if getattr(rec, "md_mean_rmsd", None) is not None
+                else "N/A"
+            ),
+            "MD_D3_Class": (
+                rec.md_d3_class if getattr(rec, "md_d3_class", None) is not None
+                else "N/A"
+            ),
+            "Hbond_Occupancy": (
+                f"{rec.hbond_occupancy:.2f}" if getattr(rec, "hbond_occupancy", None) is not None
                 else "N/A"
             ),
         })

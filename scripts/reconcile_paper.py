@@ -4,6 +4,7 @@
 Usage:
     python scripts/reconcile_paper.py          # check + fix mismatches
     python scripts/reconcile_paper.py --verify  # check only, exit 1 on mismatch
+    python scripts/reconcile_paper.py --populate  # auto-populate paper.tex with MD/MM-GBSA metrics
 """
 
 import csv
@@ -17,6 +18,8 @@ CSV_PATH = BASE / "output" / "top_candidates.csv"
 ENRICH_PATH = BASE / "output" / "enrichment_results.json"
 PAPER_PATH = BASE / "paper.tex"
 COVER_PATH = BASE / "cover_letter.tex"
+MMGBSA_PATH = BASE / "output" / "mmgbsa_results.json"
+MD_SUMMARY_PATH = BASE / "output" / "md_explicit" / "summary.json"
 
 with open(CSV_PATH) as f:
     rows = list(csv.DictReader(f))
@@ -33,6 +36,34 @@ n_strong = sum(1 for r in rows if r.get("SI_Tier") == "Strong")
 
 def si_val(r):
     return r["Selectivity_Index"].split()[0]
+
+# ── Load MD/MM-GBSA metrics if available ──
+mmgbsa_data = {}
+if MMGBSA_PATH.exists():
+    try:
+        with open(MMGBSA_PATH) as f:
+            mg = json.load(f)
+        if isinstance(mg, list):
+            for entry in mg:
+                cid = entry.get("compound_id")
+                if cid and entry.get("success"):
+                    mmgbsa_data[cid] = entry
+        elif isinstance(mg, dict) and mg.get("compound_id"):
+            mmgbsa_data[mg["compound_id"]] = mg
+    except Exception:
+        pass
+
+md_data = {}
+if MD_SUMMARY_PATH.exists():
+    try:
+        with open(MD_SUMMARY_PATH) as f:
+            md_summary = json.load(f)
+        for entry in md_summary.get("candidates", []):
+            cid = entry.get("compound_id")
+            if cid:
+                md_data[cid] = entry
+    except Exception:
+        pass
 
 paper = PAPER_PATH.read_text()
 cover = COVER_PATH.read_text()
@@ -86,6 +117,96 @@ if troczi_results.exists():
     print(f"  Troczi benchmark script present: {'scripts/troczi_benchmark.py exists'}")
 else:
     print("  ⚠  Troczi benchmark not yet run (run: AUTOANTIBIOTIC_MODE=science python scripts/troczi_benchmark.py)")
+
+# ── MD/MM-GBSA metric reconciliation ──
+print("\n--- MD/MM-GBSA Metric Reconciliation ---")
+if mmgbsa_data:
+    print(f"  MM-GBSA data available for {len(mmgbsa_data)} candidates")
+    for cid, mg in mmgbsa_data.items():
+        dg = mg.get("delta_G_bind_kcal_mol")
+        if dg is not None:
+            dg_str = f"{dg:.2f}"
+            if dg_str in paper:
+                print(f"    OK: {cid} MM-GBSA dG = {dg_str} in paper")
+            else:
+                print(f"    NOTE: {cid} MM-GBSA dG = {dg_str} (run --populate to insert)")
+        d3 = mg.get("d3_stability_class")
+        if d3 and d3 in paper:
+            print(f"    OK: {cid} D3 class '{d3}' in paper")
+else:
+    print("  No MM-GBSA data found (run --validate-candidates to generate)")
+
+if md_data:
+    print(f"  MD summary data available for {len(md_data)} candidates")
+    for cid, md_entry in md_data.items():
+        rmsd = md_entry.get("ligand_rmsd_mean_last5ns_A")
+        if rmsd is not None:
+            rmsd_str = f"{rmsd:.2f}"
+            if rmsd_str in paper:
+                print(f"    OK: {cid} MD RMSD = {rmsd_str} in paper")
+            else:
+                print(f"    NOTE: {cid} MD RMSD = {rmsd_str} (run --populate to insert)")
+else:
+    print("  No MD summary data found (run scripts/explicit_solvent_md.py)")
+
+# ── Populate mode: auto-insert MD/MM-GBSA metrics into paper.tex ──
+if "--populate" in sys.argv:
+    print("\n--- Populating paper.tex with MD/MM-GBSA metrics ---")
+    paper_text = paper
+    n_inserted = 0
+
+    for cid in list(mmgbsa_data.keys()) + list(md_data.keys()):
+        mg = mmgbsa_data.get(cid, {})
+        md_entry = md_data.get(cid, {})
+
+        # Insert MM-GBSA delta-G if not already present
+        dg = mg.get("delta_G_bind_kcal_mol")
+        if dg is not None:
+            dg_str = f"{dg:.2f}"
+            if cid in paper_text and dg_str not in paper_text:
+                # Find the paragraph mentioning this compound and append MM-GBSA info
+                pattern = rf"({re.escape(cid)}.*?)(?=\\n|\\.|$)"
+                match = re.search(pattern, paper_text, re.DOTALL)
+                if match:
+                    insert_pos = match.end()
+                    insertion = f" (MM-GBSA $\\Delta G_{{bind}}$ = {dg_str} kcal/mol)"
+                    paper_text = paper_text[:insert_pos] + insertion + paper_text[insert_pos:]
+                    n_inserted += 1
+                    print(f"  Inserted MM-GBSA dG for {cid}: {dg_str} kcal/mol")
+
+        # Insert MD RMSD if not already present
+        rmsd = md_entry.get("ligand_rmsd_mean_last5ns_A")
+        if rmsd is not None:
+            rmsd_str = f"{rmsd:.2f}"
+            if cid in paper_text and rmsd_str not in paper_text:
+                pattern = rf"({re.escape(cid)}.*?)(?=\\n|\\.|$)"
+                match = re.search(pattern, paper_text, re.DOTALL)
+                if match:
+                    insert_pos = match.end()
+                    insertion = f" (MD RMSD = {rmsd_str} \\AA)"
+                    paper_text = paper_text[:insert_pos] + insertion + paper_text[insert_pos:]
+                    n_inserted += 1
+                    print(f"  Inserted MD RMSD for {cid}: {rmsd_str} Å")
+
+        # Insert D3 stability class
+        d3 = md_entry.get("stability_class_d3")
+        if d3 and cid in paper_text:
+            if d3 not in paper_text:
+                pattern = rf"({re.escape(cid)}.*?)(?=\\n|\\.|$)"
+                match = re.search(pattern, paper_text, re.DOTALL)
+                if match:
+                    insert_pos = match.end()
+                    insertion = f" [D3: {d3}]"
+                    paper_text = paper_text[:insert_pos] + insertion + paper_text[insert_pos:]
+                    n_inserted += 1
+                    print(f"  Inserted D3 class for {cid}: {d3}")
+
+    if n_inserted > 0:
+        # Write updated paper.tex
+        PAPER_PATH.write_text(paper_text)
+        print(f"  Inserted {n_inserted} metric(s) into paper.tex")
+    else:
+        print("  No new metrics to insert (all already present or no matches)")
 
 print("\n--- Summary ---")
 if mismatches:

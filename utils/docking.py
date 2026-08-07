@@ -213,6 +213,7 @@ def _dock_compounds_parallel(
     tag: str,
     n_jobs: Optional[int] = None,
     dock_func: Optional[Callable] = None,
+    exhaustiveness: int = 16,
 ) -> List[Tuple["CompoundRecord", Optional[float]]]:
     """
     Dock a list of compounds in parallel, returning ``(record, energy)`` pairs.
@@ -241,16 +242,21 @@ def _dock_compounds_parallel(
         tag: Label for temporary files (e.g. ``"allosteric"``).
         n_jobs: Number of worker processes.
         dock_func: Docking callable; mainly useful for testing.
+        exhaustiveness: Vina exhaustiveness parameter (default 16).
 
     Returns:
         List of ``(CompoundRecord, energy_or_None)`` tuples.
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
+    from functools import partial
 
     if n_jobs is None:
         n_jobs = N_JOBS
     if dock_func is None:
         dock_func = dock_compound
+
+    # Bind exhaustiveness to the dock_func so workers use the configured value
+    dock_func_bound = partial(dock_func, exhaustiveness=exhaustiveness)
 
     # Lightweight payloads: pickling only (id, smiles) avoids shipping the Mol.
     payloads = [(rec.compound_id, rec.smiles) for rec in records]
@@ -263,7 +269,7 @@ def _dock_compounds_parallel(
     if n_jobs <= 1:
         for i, payload in enumerate(payloads):
             rec, energy, pose = _dock_worker(
-                payload, dock_func, receptor_pdbqt, center, box_size, work_dir, tag,
+                payload, dock_func_bound, receptor_pdbqt, center, box_size, work_dir, tag,
             )
             parent = by_id[rec.compound_id]
             results.append((parent, energy))
@@ -280,7 +286,7 @@ def _dock_compounds_parallel(
     with ProcessPoolExecutor(max_workers=n_jobs) as pool:
         futures = {
             pool.submit(
-                _dock_worker, payload, dock_func,
+                _dock_worker, payload, dock_func_bound,
                 receptor_pdbqt, center, box_size, work_dir, tag,
             ): payload[0]
             for payload in payloads
@@ -1093,6 +1099,258 @@ def dock_compound_induced_fit(
         log.info(f"  IFD complete: best energy = {best_energy:.2f} kcal/mol")
     else:
         log.warning(f"  IFD failed to produce any valid pose for {record.compound_id}")
+
+    return best_energy, final_pose_path
+
+
+def dock_compound_ifd_catalytic(
+    record: "CompoundRecord",
+    receptor_pdb: str,
+    center: np.ndarray,
+    box_size: Tuple[float, float, float],
+    work_dir: str,
+    rigid_pose_pdbqt: Optional[str] = None,
+    catalytic_residues: Optional[List[Tuple[str, int]]] = None,
+    n_iterations: int = 3,
+    exhaustiveness: int = 32,
+    timeout: Optional[int] = None,
+) -> Tuple[Optional[float], Optional[str]]:
+    """Light induced-fit docking with catalytic triad side-chain sampling.
+
+    Like :func:`dock_compound_induced_fit`, but guarantees the PBP2a catalytic
+    residues (Ser403, Lys406, Tyr446) are included in the flexible residue set
+    regardless of their distance from the docked pose. This addresses the
+    rigid-docking limitation where PBP2a's dynamic active-site loop prevents
+    accurate scoring without side-chain relaxation.
+
+    Algorithm (n_iterations):
+      i.   Take the current best pose.
+      ii.  Find residues within 5 Å of the ligand, UNION with catalytic_residues.
+      iii. OpenMM minimize (2000 steps, L-BFGS) with non-flexible residues
+           restrained (10 kcal/mol/Å² on backbone CA).
+      iv.  Re-dock the ligand into the minimized pocket (Vina).
+
+    Args:
+        record: Compound record.
+        receptor_pdb: Path to receptor PDB file.
+        center: Grid box centre for docking.
+        box_size: Grid box dimensions.
+        work_dir: Scratch directory.
+        rigid_pose_pdbqt: Initial docked pose PDBQT.
+        catalytic_residues: List of ``(resname, resnum)`` tuples to always
+            treat as flexible. Defaults to PBP2a catalytic triad.
+        n_iterations: Number of IFD iterations (default 3).
+        exhaustiveness: Vina exhaustiveness for re-docking (default 32).
+        timeout: Per-call Vina timeout override.
+
+    Returns:
+        ``(best_energy, final_pose_pdbqt)`` or ``(None, None)`` on failure.
+    """
+    if catalytic_residues is None:
+        catalytic_residues = [("SER", 403), ("LYS", 406), ("TYR", 446)]
+
+    ligand_pdbqt = rigid_pose_pdbqt or getattr(record, "active_docked_pdbqt", None)
+    if ligand_pdbqt is None or not os.path.exists(ligand_pdbqt):
+        log.warning(f"  No initial pose for {record.compound_id}; skipping IFD")
+        return None, None
+
+    current_coords = _parse_pdbqt_heavy_coords(ligand_pdbqt)
+    if not current_coords:
+        log.warning(f"  Could not parse pose coordinates for {record.compound_id}")
+        return None, None
+
+    safe_id = record.compound_id.replace("/", "_").replace(" ", "_")
+    current_pose_path = ligand_pdbqt
+    best_energy = None
+    final_pose_path = None
+
+    mol = Chem.MolFromSmiles(record.smiles)
+    if mol is None:
+        return None, None
+    mol = Chem.AddHs(mol)
+    params = AllChem.ETKDGv3()
+    params.randomSeed = RANDOM_SEED
+    status = AllChem.EmbedMolecule(mol, params)
+    if status != 0:
+        return None, None
+    AllChem.UFFOptimizeMolecule(mol, maxIters=200)
+    conf = mol.GetConformer()
+    for i, coord in enumerate(current_coords):
+        if i < mol.GetNumAtoms():
+            conf.SetAtomPosition(i, Chem.rdGeometry.Point3D(
+                float(coord[0]), float(coord[1]), float(coord[2])
+            ))
+
+    try:
+        import openmm
+        from openmm import app, unit
+        from openmmforcefields.generators import SMIRNOFFTemplateGenerator
+        from openff.toolkit import Molecule as OffMolecule
+        from utils.structure_prep import assign_protonation_states, build_openmm_variant_list
+        from utils.openmm_platform import position_restraint_force
+    except ImportError as exc:
+        log.warning(f"  OpenMM dependencies missing for IFD: {exc}")
+        return None, None
+
+    RESTRAINT_FORCE = 10.0
+    RESTRAINT_FORCE_KJ = RESTRAINT_FORCE * 4.184 / (0.1 ** 2)
+
+    for iteration in range(n_iterations):
+        log.info(f"  IFD-catalytic iteration {iteration + 1}/{n_iterations}")
+
+        # Find residues near ligand AND force catalytic residues as flexible
+        flex_near = _find_flexible_residues(
+            receptor_pdb, current_coords, distance_cutoff=5.0
+        )
+        flex_set = set(flex_near) | set(catalytic_residues)
+
+        log.info(f"    Flexible residues: {len(flex_set)} "
+                 f"({len(flex_near)} near ligand + {len(catalytic_residues)} catalytic)")
+
+        try:
+            pdb = app.PDBFile(receptor_pdb)
+            propka_variants = assign_protonation_states(receptor_pdb, pH=7.4)
+            modeller = app.Modeller(pdb.topology, pdb.positions)
+            variant_list = build_openmm_variant_list(modeller.topology, propka_variants)
+            modeller.addHydrogens(pH=7.4, variants=variant_list)
+
+            n_rec_atoms = modeller.topology.getNumAtoms()
+
+            lig_pdb_path = os.path.join(work_dir, f"{safe_id}_ifdc_it{iteration}_lig.pdb")
+            Chem.MolToPDBFile(mol, lig_pdb_path)
+            lig_pdb = app.PDBFile(lig_pdb_path)
+            modeller.add(lig_pdb.topology, lig_pdb.positions)
+            complex_top = modeller.topology
+            complex_pos = modeller.positions
+
+            off_mol = OffMolecule.from_rdkit(mol, allow_undefined_stereo=True)
+            off_mol.assign_partial_charges(partial_charge_method="gasteiger")
+            tg = SMIRNOFFTemplateGenerator(molecules=off_mol, forcefield="openff-2.0.0")
+            ff = app.ForceField("amber14-all.xml")
+            ff.registerTemplateGenerator(tg.generator)
+            system = ff.createSystem(
+                complex_top,
+                nonbondedMethod=app.NoCutoff,
+                constraints=app.HBonds,
+            )
+
+            restraint = position_restraint_force(RESTRAINT_FORCE_KJ, periodic=True)
+            restraint.addPerParticleParameter("k")
+            restraint.addPerParticleParameter("x0")
+            restraint.addPerParticleParameter("y0")
+            restraint.addPerParticleParameter("z0")
+
+            for residue in pdb.topology.residues():
+                res_key = (residue.name, int(residue.id))
+                if res_key in flex_set:
+                    continue
+                for atom in residue.atoms():
+                    if atom.name == "CA":
+                        pos = complex_pos[atom.index]
+                        restraint.addParticle(
+                            atom.index,
+                            [RESTRAINT_FORCE_KJ, pos.x, pos.y, pos.z]
+                        )
+                        break
+
+            n_lig_atoms = mol.GetNumAtoms()
+            for i in range(n_lig_atoms):
+                idx = n_rec_atoms + i
+                pos = complex_pos[idx]
+                restraint.addParticle(
+                    idx,
+                    [RESTRAINT_FORCE_KJ, pos.x, pos.y, pos.z]
+                )
+
+            system.addForce(restraint)
+
+            integrator = openmm.LangevinIntegrator(
+                300 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picoseconds
+            )
+            simulation = app.Simulation(complex_top, system, integrator)
+            simulation.context.setPositions(complex_pos)
+            simulation.minimizeEnergy(maxIterations=2000)
+            state_min = simulation.context.getState(getPositions=True)
+            min_pos = state_min.getPositions()
+
+            min_complex_pdb = os.path.join(work_dir, f"{safe_id}_ifdc_it{iteration}_cx.pdb")
+            with open(min_complex_pdb, "w") as fh:
+                app.PDBFile.writeFile(complex_top, min_pos, fh)
+
+            rec_top_pdb = os.path.join(work_dir, f"{safe_id}_ifdc_it{iteration}_rec.pdb")
+            try:
+                with open(rec_top_pdb, "w") as fh_out:
+                    n_written = 0
+                    with open(min_complex_pdb) as fh_in:
+                        for line in fh_in:
+                            if line.startswith(("ATOM", "HETATM")):
+                                if n_written >= n_rec_atoms:
+                                    break
+                                fh_out.write(line)
+                                n_written += 1
+                            else:
+                                fh_out.write(line)
+            except Exception as exc:
+                log.warning(f"    Could not write minimized receptor: {exc}")
+                continue
+
+            for i in range(n_lig_atoms):
+                if i < mol.GetNumAtoms():
+                    pos = min_pos[n_rec_atoms + i]
+                    conf.SetAtomPosition(i, Chem.rdGeometry.Point3D(
+                        float(pos[0].value_in_unit(unit.angstrom)),
+                        float(pos[1].value_in_unit(unit.angstrom)),
+                        float(pos[2].value_in_unit(unit.angstrom)),
+                    ))
+
+            rec_pdbqt = os.path.join(work_dir, f"{safe_id}_ifdc_it{iteration}_rec.pdbqt")
+            try:
+                subprocess.run(
+                    ["obabel", rec_top_pdb, "-O", rec_pdbqt, "-xr"],
+                    capture_output=True, timeout=300,
+                )
+            except Exception as exc:
+                log.warning(f"    obabel failed: {exc}")
+                continue
+
+            if not os.path.exists(rec_pdbqt) or os.path.getsize(rec_pdbqt) == 0:
+                log.warning(f"    Receptor PDBQT not created for iteration {iteration}")
+                continue
+
+            lig_pdbqt_path = os.path.join(work_dir, f"{safe_id}_ifdc_it{iteration}_lig.pdbqt")
+            if not prepare_ligand_pdbqt(mol, lig_pdbqt_path):
+                continue
+
+            out_pdbqt = os.path.join(work_dir, f"{safe_id}_ifdc_it{iteration}_out.pdbqt")
+            energy = _run_vina_docking(
+                rec_pdbqt, lig_pdbqt_path, out_pdbqt,
+                center, box_size,
+                timeout=timeout,
+                exhaustiveness=exhaustiveness,
+                num_modes=9,
+            )
+
+            if energy is not None and (best_energy is None or energy < best_energy):
+                best_energy = energy
+                final_pose_path = out_pdbqt
+                current_pose_path = out_pdbqt
+                current_coords = _parse_pdbqt_heavy_coords(out_pdbqt)
+                if current_coords:
+                    for i, coord in enumerate(current_coords):
+                        if i < mol.GetNumAtoms():
+                            conf.SetAtomPosition(i, Chem.rdGeometry.Point3D(
+                                float(coord[0]), float(coord[1]), float(coord[2])
+                            ))
+                log.info(f"    Iteration {iteration + 1}: IFD-energy = {energy:.2f} kcal/mol")
+
+        except Exception as exc:
+            log.warning(f"    IFD-catalytic iteration {iteration + 1} failed: {exc}")
+            continue
+
+    if best_energy is not None:
+        log.info(f"  IFD-catalytic complete: best energy = {best_energy:.2f} kcal/mol")
+    else:
+        log.warning(f"  IFD-catalytic failed for {record.compound_id}")
 
     return best_energy, final_pose_path
 

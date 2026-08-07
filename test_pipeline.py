@@ -671,7 +671,7 @@ class TestRealPDBSmoke:
         def mock_filters(records, **kwargs):
             return list(records)
 
-        def mock_screen_library(records, targets, work_dir, deps):
+        def mock_screen_library(records, targets, work_dir, deps, **kwargs):
             out = []
             for i, rec in enumerate(records):
                 out.append(CompoundRecord(
@@ -925,7 +925,7 @@ class TestIntegrationPipeline:
 
         # Mock screen_library to return 5 records with valid docking scores
         # records may be a tuple (records_list, funnel_dict) if from apply_filters with return_counts
-        def mock_screen_library(records, targets, work_dir, deps):
+        def mock_screen_library(records, targets, work_dir, deps, **kwargs):
             from utils.library_gen import CompoundRecord
             recs = records[0] if isinstance(records, tuple) else records
             top5 = []
@@ -1014,7 +1014,7 @@ class TestMainRedockingGate:
             "CES1": {"pdbqt": "/dev/null", "active_center": np.array([0.0, 0.0, 0.0]), "cleaned_pdb": "/dev/null"},
         }
 
-        def mock_screen_library(records, targets, work_dir, deps):
+        def mock_screen_library(records, targets, work_dir, deps, **kwargs):
             out = []
             for i, rec in enumerate(records):
                 out.append(CompoundRecord(
@@ -1071,7 +1071,7 @@ class TestMainRedockingGate:
             "CES1": {"pdbqt": "/dev/null", "active_center": np.array([0.0, 0.0, 0.0]), "cleaned_pdb": "/dev/null"},
         }
 
-        def mock_screen_library(records, targets, work_dir, deps):
+        def mock_screen_library(records, targets, work_dir, deps, **kwargs):
             out = []
             for i, rec in enumerate(records):
                 out.append(CompoundRecord(
@@ -1786,7 +1786,7 @@ class TestConsensusDocking:
                            mol=Chem.MolFromSmiles("Cc1ccccc1")),
         ]
 
-        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag):
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, **kwargs):
             conf_idx = int(tag.rsplit("_c", 1)[-1])
             e = -5.0 if conf_idx == 0 else -9.0
             return [(r, e) for r in recs]
@@ -1807,7 +1807,7 @@ class TestConsensusDocking:
         records = [CompoundRecord(compound_id="AA-0001", smiles="c1ccccc1",
                                  mol=Chem.MolFromSmiles("c1ccccc1"))]
 
-        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag):
+        def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, **kwargs):
             return [(r, -6.0) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -1962,7 +1962,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": trypsin_e, "ces1": ces1_e}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None):
+                          dock_func=None, **kwargs):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -1992,7 +1992,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": -4.0, "ces1": -3.0}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None):
+                          dock_func=None, **kwargs):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -2023,7 +2023,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": -9.0, "ces1": -3.0}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None):
+                          dock_func=None, **kwargs):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -2052,7 +2052,7 @@ class TestMechanismRestrictedSelectivity:
         fixed = {"trypsin": 5.0, "ces1": -3.0}
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None):
+                          dock_func=None, **kwargs):
             return [(r, fixed[tag]) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
@@ -2515,7 +2515,7 @@ class TestMinBindingEnergyThreshold:
         }
 
         def fake_parallel(recs, receptor_pdbqt, center, box, wd, tag, n_jobs=1,
-                          dock_func=None):
+                          dock_func=None, **kwargs):
             return [(r, getattr(r, f"human_{tag}_energy")) for r in recs]
 
         with patch("discovery_pipeline._dock_compounds_parallel", side_effect=fake_parallel):
