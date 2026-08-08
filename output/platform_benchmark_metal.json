@@ -58,5 +58,25 @@
     "restraint_expr": "periodicdistance()",
     "success": true,
     "note": "Native 'Metal' platform requires openmm-metal plugin; OpenCL is Apple's Metal-backed runtime (cl2Metal)."
+  },
+  {
+    "platform": "OpenCL",
+    "n_atoms": 927,
+    "n_restrained": 34,
+    "nvt_ps": 20.0,
+    "npt_ps": 100.0,
+    "benchmark_ps": 60.0,
+    "steps": 30000,
+    "elapsed_s": 11.817,
+    "steps_per_s": 2538.82,
+    "ns_per_day": 438.71,
+    "timestep_ps": 0.002,
+    "nvt_energy_kcal": -2895.01,
+    "npt_energy_mean_kcal": -2951.83,
+    "npt_energy_std_kcal": 22.14,
+    "all_energies_finite": true,
+    "restraint_expr": "periodicdistance()",
+    "success": true,
+    "note": "Native 'Metal' platform requires openmm-metal plugin; OpenCL is Apple's Metal-backed runtime (cl2Metal)."
   }
 ]

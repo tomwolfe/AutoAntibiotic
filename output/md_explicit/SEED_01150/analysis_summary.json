@@ -1,0 +1,92 @@
+{
+  "compound_id": "SEED_01150",
+  "n_replicas_analysed": 1,
+  "replicas": [
+    {
+      "replica": 0,
+      "compound_id": "SEED_01150",
+      "n_frames": 500,
+      "overall_rmsd_mean_A": 4.6407605542505825,
+      "dt_ps": 2.0,
+      "n_blocks": 5,
+      "block_averaged_rmsd_A": [
+        {
+          "block": 0,
+          "start_frame": 0,
+          "end_frame": 99,
+          "frames": 100,
+          "mean_A": 4.636923571933608,
+          "std_A": 0.21280295462207963,
+          "min_A": 4.020429482900772,
+          "max_A": 5.064208252216474
+        },
+        {
+          "block": 1,
+          "start_frame": 100,
+          "end_frame": 199,
+          "frames": 100,
+          "mean_A": 4.069102515789919,
+          "std_A": 0.20512111677833983,
+          "min_A": 3.691549605468277,
+          "max_A": 4.950038385440456
+        },
+        {
+          "block": 2,
+          "start_frame": 200,
+          "end_frame": 299,
+          "frames": 100,
+          "mean_A": 4.356045104200967,
+          "std_A": 0.22496376798196385,
+          "min_A": 3.8362513568160357,
+          "max_A": 4.851013291872393
+        },
+        {
+          "block": 3,
+          "start_frame": 300,
+          "end_frame": 399,
+          "frames": 100,
+          "mean_A": 4.611028675183918,
+          "std_A": 0.43968852529398655,
+          "min_A": 3.934841454262043,
+          "max_A": 5.7020532029918645
+        },
+        {
+          "block": 4,
+          "start_frame": 400,
+          "end_frame": 499,
+          "frames": 100,
+          "mean_A": 5.5307029041444995,
+          "std_A": 0.47712799332067446,
+          "min_A": 4.757199672457071,
+          "max_A": 6.6766152234636875
+        }
+      ],
+      "running_mean_window_ns": 1.0,
+      "running_mean_window_frames": 500,
+      "autocorrelation_time_ps": 95.76534283130074,
+      "autocorrelation_lags_used": 126,
+      "hbond_occupancy": {
+        "SER403_OG": {
+          "occupancy": 0.908,
+          "mean_distance_A": 35.046630396499225,
+          "min_distance_A": 2.351400660051692
+        },
+        "LYS406_NZ": {
+          "occupancy": 0.54,
+          "mean_distance_A": 35.23790303338973,
+          "min_distance_A": 2.333731738915731
+        },
+        "TYR446_OH": {
+          "occupancy": 0.338,
+          "mean_distance_A": 38.54743559638347,
+          "min_distance_A": 2.719451189047147
+        }
+      },
+      "ser403_occ": 0.908,
+      "ser403_mean_dist_A": 35.046630396499225,
+      "stable_class": "Unstable",
+      "stability_class_reported": "Unstable",
+      "d3_class": "Metastable"
+    }
+  ]
+}
