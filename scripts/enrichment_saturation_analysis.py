@@ -127,7 +127,7 @@ def _dock_and_score(
     results = P._dock_compounds_parallel(
         dock_records, receptor_pdbqt, active_center, active_box,
         work_dir, tag,
-        dock_func=partial(dock_compound, exhaustiveness=exhaustiveness),
+        exhaustiveness=exhaustiveness,
     )
     energies = {rec.compound_id: energy for rec, energy in results}
     ids = [r.compound_id for r in dock_records]
@@ -151,7 +151,7 @@ def _dock_and_score(
         "bedrock_alpha20": metrics["bedrock_alpha20"],
         "ci_95_bootstrap_1000": cis,
         "scores": {cid: energies.get(cid) for cid in ids},
-        "labels": {cid: int(labels[ids.index(c)]) for cid in ids},
+        "labels": {cid: int(labels[ids.index(cid)]) for cid in ids},
     }
     _save_cache(exhaustiveness, data)
     log.info(f"  ex={exhaustiveness}: AUC={metrics['auc']:.3f} "
