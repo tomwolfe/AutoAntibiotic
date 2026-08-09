@@ -29,12 +29,12 @@ A credible hypothesis chain requires the post-screening validation stages:
 AUTOANTIBIOTIC_MODE=science python discovery_pipeline.py
 
 # 2. Confirm docked poses are stable with extended, multi-replica,
-#    unrestrained explicit-solvent MD (the paper's 100 ps runs are PRELIMINARY).
-#    This is compute-intensive (days on CPU) and should run on HPC/GPU.
+#    unrestrained explicit-solvent MD. The paper's 1–ns single-replica runs
+#    are PRELIMINARY (100 ns × 3 replica campaign in progress).
 #    The driver auto-selects the best OpenMM platform (Metal → CUDA → OpenCL → CPU;
-#    on Apple Silicon that is the Metal-backed OpenCL runtime, ~7–9 ns/day on the
-#    M5 Pro 419k-atom system, ~8.5× CPU). Interrupting a run is safe: pass
-#    --resume to continue unfinished replicas from their last checkpoint.
+#    on Apple Silicon that is the Metal-backed OpenCL runtime, ~13.7 ns/day with HMR
+#    on the M5 Pro 422k-atom system, ~3.3× the 2-fs OpenCL rate). Interrupting a run
+#    is safe: pass --resume to continue unfinished replicas from their last checkpoint.
 python scripts/explicit_solvent_md.py --production-ns 100 --replicas 3 --n-candidates 5 --resume
 
 # 3. Score an ensemble of the production trajectory with MM-GBSA.
@@ -49,7 +49,8 @@ AUTOANTIBIOTIC_MODE=science python scripts/run_ifd_top20.py
 replicas) of unrestrained explicit-solvent MD per candidate, low ligand RMSD
 relative to the docked pose over the *equilibrated* window, ≥ 2 replicas with
 stable/metastable classification, and a trajectory-ensemble MM-GBSA ΔG that is
-not grossly unfavourable. A 100 ps run is only a smoke test.
+not grossly unfavourable. A 1–ns run is only a smoke test; the 100 ns
+multi-replica campaign is the minimum for a defensible short-list.
 
 ---
 
@@ -141,9 +142,10 @@ retaining conserved waters.
 - **Shallow primary-screen exhaustiveness (ex=8):** ~±2 kcal/mol energy noise;
   the 1–2 kcal/mol spread among top hits is within the noise window. Top
   candidates were re-docked at ex=32, which closely reproduced ex=8 ranking.
-- **Short MD:** published explicit-solvent MD is 100 ps; candidates remain
-  bound but this is preliminary. Long (100 ns × 3) production MM-GBSA remains
-  the strongest outstanding validation step.
+- **Short MD:** published explicit-solvent MD is 1 ns (single replica);
+  at 1 ns one of three candidates (SEED_01150) is Metastable, but BRICS_0022
+  dissociates and ALL_QU04 loses its catalytic contact. The 100 ns × 3
+  replica campaign is in progress on the M5 Pro OpenCL platform (~13.7 ns/day).
 
 ### Future directions (in priority order)
 

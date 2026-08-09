@@ -169,6 +169,7 @@ def main():
     c(8, ">= 8 figures in output/figures/publication/", ok, f"{len(pngs)} PNGs, {len(pdfs)} PDFs")
 
     xelatex = shutil.which("xelatex") or shutil.which("pdflatex")
+    result = None
     if xelatex:
         result = subprocess.run(
             [xelatex, "-interaction=nonstopmode", paper_path.name],
@@ -176,8 +177,10 @@ def main():
         )
     pdf = paper_path.with_suffix(".pdf")
     pdf_ok = pdf.exists() and pdf.stat().st_size > 0
-    ok = xelatex is not None and result.returncode == 0 and pdf_ok
-    c(9, "paper.tex compiles", ok, f"PDF={pdf.stat().st_size}B" if ok else f"xelatex not found")
+    compile_ok = result is not None and result.returncode == 0
+    ok = xelatex is not None and compile_ok and pdf_ok
+    c(9, "paper.tex compiles", ok,
+      f"PDF={pdf.stat().st_size}B" if ok else (f"xelatex not found" if not xelatex else f"compile failed"))
 
     paper_text_lower = paper_text.lower()
     issues = []

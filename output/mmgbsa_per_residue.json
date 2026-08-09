@@ -1,56 +1,56 @@
 {
   "ALL_QU04": {
-    "delta_G_bind_mean_kcal": 0.13,
+    "delta_G_bind_mean_kcal": -1687.22,
     "per_residue": {
       "LYS406": {
-        "mean_kcal": 0.01,
+        "mean_kcal": -0.01,
         "std_kcal": 0.0
       },
       "TYR446": {
-        "mean_kcal": 0.0,
+        "mean_kcal": -0.0,
         "std_kcal": 0.0
       },
       "SER403": {
-        "mean_kcal": -0.0,
+        "mean_kcal": -0.01,
         "std_kcal": 0.0
       }
     },
     "method": "OpenMM_GBSAOBC2_single_pose_minimized"
   },
   "BRICS_0022": {
-    "delta_G_bind_mean_kcal": 0.45,
+    "delta_G_bind_mean_kcal": -523.46,
     "per_residue": {
       "LYS406": {
-        "mean_kcal": 0.0,
-        "std_kcal": 0.0
-      },
-      "TYR446": {
         "mean_kcal": -0.0,
         "std_kcal": 0.0
       },
+      "TYR446": {
+        "mean_kcal": -21.9,
+        "std_kcal": 0.0
+      },
       "SER403": {
-        "mean_kcal": 0.01,
+        "mean_kcal": -0.01,
         "std_kcal": 0.0
       }
     },
     "method": "OpenMM_GBSAOBC2_single_pose_minimized"
   },
   "SEED_01150": {
-    "delta_G_bind_mean_kcal": 0.12,
+    "delta_G_bind_mean_kcal": -29.57,
     "per_residue": {
       "LYS406": {
         "mean_kcal": 0.0,
         "std_kcal": 0.0
       },
       "TYR446": {
-        "mean_kcal": 0.0,
+        "mean_kcal": -0.01,
         "std_kcal": 0.0
       },
       "SER403": {
-        "mean_kcal": 0.0,
+        "mean_kcal": -0.0,
         "std_kcal": 0.0
       }
     },
-    "method": "OpenMM_GBSAOBC2_single_pose_minimized"
+    "method": "OpenMM_GBSAOBC2_trajectory_frames"
   }
 }

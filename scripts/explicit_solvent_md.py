@@ -1163,6 +1163,15 @@ def _run_replica(
         # completion (consistent for fresh and resumed runs).
         _reprimer = _report_dcd(str(replica_dir / "trajectory.dcd"),
                                 solvated_top, prod_positions)
+        # The rolling production_frames.dat (raw xyz binary) is only needed for
+        # mid-run resume reconstruction. Once the DCD is safely written it is
+        # redundant, and at ~10 MB/frame × 500 frames ≈ 5 GB / ns it dominates
+        # disk usage. Remove it (and the energy trace, kept small) so a 100 ns
+        # campaign stays on the order of tens of GB rather than TB.
+        if frames_bin.is_file():
+            size_gb = frames_bin.stat().st_size / (1024 ** 3)
+            frames_bin.unlink()
+            log.info(f"    [{cid}] removed rolling frames file ({size_gb:.1f} GB)")
     except Exception as exc:
         result["error"] = f"NPT production failed: {exc}"
         return result
@@ -1513,12 +1522,26 @@ def main():
         status = "OK" if r["success"] else f"FAIL"
         log.info(f"  {r['compound_id']:<20} {n_ok}/{r['n_replicas']:<5} {n_sm}/{r['n_replicas']:<10} {consensus:<14} {status:<12}")
 
-    # Write aggregated summary
+    # Write aggregated summary. Merge with any existing aggregate so a
+    # per-candidate run (e.g. --candidates CID) does not erase earlier results:
+    # candidates are keyed by compound_id and the newer result wins.
     agg_path = MD_OUT / "summary.json"
-    n_ok = sum(1 for r in all_results if r["success"])
-    n_validated = sum(1 for r in all_results if r.get("validated"))
+    existing_candidates: list = []
+    if agg_path.is_file():
+        try:
+            with open(agg_path) as fh:
+                prev = json.load(fh)
+            existing_candidates = list(prev.get("candidates") or [])
+        except Exception:
+            existing_candidates = []
+    by_id = {c["compound_id"]: c for c in existing_candidates}
+    for r in all_results:
+        by_id[r["compound_id"]] = r
+    merged = list(by_id.values())
+    n_ok = sum(1 for r in merged if r.get("success"))
+    n_validated = sum(1 for r in merged if r.get("validated"))
     agg = {
-        "n_candidates": len(all_results),
+        "n_candidates": len(merged),
         "n_succeeded": n_ok,
         "n_validated": n_validated,
         "parameters": {
@@ -1533,7 +1556,7 @@ def main():
             "force_field_ligand": "openff-2.0.0",
             "water_model": "tip3p",
         },
-        "candidates": all_results,
+        "candidates": merged,
     }
     with open(agg_path, "w") as fh:
         json.dump(agg, fh, indent=2, default=str)

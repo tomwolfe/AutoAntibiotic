@@ -2,6 +2,45 @@
 
 All notable changes to the pipeline are documented here, newest first.
 
+## [Unreleased] — Paper corrections, MD campaign launch, code fixes
+
+### Paper corrections (match claims to measured data)
+- **§md_hpc_gap rewrite** — the section previously claimed OpenCL was disabled
+  due to a `CustomExternalForce` restraint bug and that the 100 ns campaign was
+  infeasible on CPU-only hardware (~0.5 ns/day). Both claims were stale: the
+  restraint bug was fixed (`periodicdistance(...)`) and OpenCL runs at
+  **~13.7 ns/day with HMR** on the M5 Pro for the ~422k-atom system. The section
+  now reports the campaign as **in progress** (1 ns × 3 candidates completed,
+  100 ns × 3 replicas × 5 candidates queued) and documents the real throughput.
+- **MD validation numbers updated** — replaced the stale 100 ps values
+  (1.86/2.64/3.49 Å) with the measured 1 ns production values
+  (BRICS_0022 6.01 Å / Dissociated; SEED_01150 4.64 Å / Metastable, Ser403
+  occupancy 0.91; ALL_QU04 3.49 Å / Dissociated). The D3 classifier now
+  correctly identifies two candidates as Dissociated at 1 ns.
+- **Table tab:openmm updated** — added D3 class and Ser403 occupancy columns;
+  removed the "placeholder TODO" language for the 100 ns metrics.
+- **Abstract, Introduction, Discussion, Conclusion, Limitations** — all
+  reference the real 1 ns data and the in-progress 100 ns campaign. Removed
+  claims that BRICS_0022 is "Stable" (it dissociates by 1 ns).
+
+### Fixed
+- **summary.json aggregation bug** — `explicit_solvent_md.py main()` overwrote
+  the aggregate `output/md_explicit/summary.json` on each run, so per-candidate
+  runs (`--candidates CID`) erased earlier results (n_candidates=1 regardless of
+  how many were run). Now merges by `compound_id`, new result wins.
+- **Disk cleanup after DCD write** — the rolling `production_frames.dat` (~5 GB/ns)
+  is now deleted after the DCD is safely written, since it is only needed for
+  mid-run resume reconstruction. This keeps a 100 ns campaign at tens of GB
+  rather than TB.
+- **verify_success.py NameError** — criterion 9 referenced `result` when
+  `xelatex` was `None` (compiler not installed), raising `NameError`. Now
+  guards the subprocess call.
+
+### Added
+- **MD_D3_Class + Hbond_Occupancy CSV columns** — `output/top_candidates.csv`
+  now carries the D3 stability class and per-residue H-bond occupancy for all
+  candidates with MD results (populated from `output/md_explicit/<CID>/summary.json`).
+
 ## [Unreleased] — Metal/GPU diagnostics, benchmark honesty fixes
 
 ### Diagnostics (confirmed on M5 Pro, OpenMM 8.5.2)

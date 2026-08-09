@@ -107,17 +107,18 @@ candidates would be flagged by the RMSD criterion alone. This filter is
 available as an automated triage gate for future runs.
 
 ### OpenMM MD results — honest assessment
-Gas-phase minimisation (1000-step L-BFGS) converges all top candidates, and —
-with the ligand correctly placed in the *docked* pose (the pre-v7.1 pose-loss
-bug fixed) — the top candidates remain bound over the short MD windows:
-explicit-solvent NPT ligand RMSD 1.86–3.49 Å over 100 ps, with BRICS_0022
-classified Stable and Ser403 H-bond occupancy 1.00 for BRICS_0022/SEED_01150.
-This is **preliminary**: 100 ps cannot establish long-term stability or rule
-out slow dissociation. Genuine binding-mode validation requires the pipeline's
-extended mode — `python scripts/explicit_solvent_md.py --production-ns 100
---replicas 3 --n-candidates 5` — followed by trajectory-ensemble MM-GBSA
-(`scripts/mmgbsa_analysis.py` auto-switches to trajectory frames when DCDs
-exist). Do not treat the short 100 ps runs as proof of binding.
+Gas-phase minimisation (1000-step L-BFGS) converges all top candidates. With
+the ligand correctly placed in the *docked* pose, the 100 ps explicit-solvent
+runs showed all three tested candidates bound (ligand RMSD 1.86–3.49 Å).
+The 1~ns extensions (OpenCL + HMR, ~13.7 ns/day) reveal a more nuanced
+picture: SEED\_01150 is **Metastable** (RMSD~4.64 Å, Ser403
+H-bond occupancy~0.91), but BRICS\_0022 **dissociates** (RMSD~6.01 Å,
+Ser403 occupancy~0.24) and ALL\_QU04 loses its catalytic contact
+(Ser403 occupancy~0.04). The 100~ns $\times$ 3 replica campaign is **in
+progress** on the M5 Pro. Do not treat the 100~ps–1~ns single-replica runs
+as proof of binding — they are preliminary. Genuine binding-mode validation
+requires the 100~ns multi-replica campaign followed by trajectory-ensemble
+MM-GBSA.
 
 ### OpenMM MD infrastructure (GPU acceleration + checkpointing)
 The production driver auto-selects the best OpenMM platform
