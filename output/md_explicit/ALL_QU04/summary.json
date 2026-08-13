@@ -3,8 +3,8 @@
   "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
   "success": true,
   "error": null,
-  "n_replicas": 1,
-  "npt_duration_ns": 0.1,
+  "n_replicas": 3,
+  "npt_duration_ns": 10.0,
   "replicas": [
     {
       "replica": 0,
@@ -13,56 +13,201 @@
       "success": true,
       "error": null,
       "minimization": {
-        "initial_energy_kcal": 335396370650.0,
-        "final_energy_kcal": -1667419.4,
-        "delta_energy_kcal": -335398038069.4,
-        "ligand_rmsd_A": 3.733,
+        "initial_energy_kcal": 335354744128.7,
+        "final_energy_kcal": -1708190.1,
+        "delta_energy_kcal": -335356452318.8,
+        "ligand_rmsd_A": 3.742,
         "success": true
       },
       "equilibration": {
-        "nvt_duration_ps": 50.0,
-        "final_energy_kcal": -1379478.5,
-        "ligand_rmsd_mean_A": 1.915,
-        "ligand_rmsd_std_A": 0.347,
+        "nvt_duration_ps": 500.0,
+        "final_energy_kcal": -1382873.7,
+        "ligand_rmsd_mean_A": 4.486,
+        "ligand_rmsd_std_A": 1.668,
         "success": true
       },
       "production": {
-        "npt_duration_ns": 0.1,
-        "n_frames": 50,
-        "ligand_rmsd_mean_A": 3.493,
-        "ligand_rmsd_std_A": 0.387,
-        "ligand_rmsd_max_A": 4.399,
-        "ligand_rmsd_final_A": 3.039,
+        "npt_duration_ns": 10.0,
+        "n_frames": 500,
+        "ligand_rmsd_mean_A": 7.845,
+        "ligand_rmsd_std_A": 1.257,
+        "ligand_rmsd_max_A": 10.361,
+        "ligand_rmsd_final_A": 9.797,
         "hbond_occupancy": {
           "SER403_OG": {
-            "occupancy": 0.04,
-            "mean_distance_A": 38.29424763295756,
-            "min_distance_A": 3.437126139605732
+            "occupancy": 0.008,
+            "mean_distance_A": 34.91741974377178,
+            "min_distance_A": 3.2573180327717397
+          },
+          "LYS406_NZ": {
+            "occupancy": 0.024,
+            "mean_distance_A": 34.6846842971568,
+            "min_distance_A": 2.699241366995882
+          },
+          "TYR446_OH": {
+            "occupancy": 0.376,
+            "mean_distance_A": 37.26930754178532,
+            "min_distance_A": 2.481323960739439
+          }
+        },
+        "mean_potential_energy_kcal": -1391551.3,
+        "nan_auto_restarts": 0,
+        "success": true,
+        "performance": {
+          "steps": 2500000,
+          "steps_per_s": 46.4,
+          "ns_per_day": 16.04,
+          "platform": "OpenCL",
+          "n_atoms": 424412,
+          "elapsed_s": 53875.271,
+          "n_frames": 500,
+          "timestep_ps": 0.004,
+          "hmr": true
+        }
+      },
+      "stability_class": "Unstable",
+      "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/ALL_QU04_active_c2_out.pdbqt",
+      "ligand_rmsd_mean_last5ns_A": 8.15359871036326,
+      "ser403_og_hbond_occupancy": 0.008
+    },
+    {
+      "replica": 1,
+      "compound_id": "ALL_QU04",
+      "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
+      "success": true,
+      "error": null,
+      "minimization": {
+        "initial_energy_kcal": 335354751226.8,
+        "final_energy_kcal": -1695699.9,
+        "delta_energy_kcal": -335356446926.7,
+        "ligand_rmsd_A": 3.658,
+        "success": true
+      },
+      "equilibration": {
+        "nvt_duration_ps": 500.0,
+        "final_energy_kcal": -1373814.7,
+        "ligand_rmsd_mean_A": 2.581,
+        "ligand_rmsd_std_A": 0.466,
+        "success": true
+      },
+      "production": {
+        "npt_duration_ns": 10.0,
+        "n_frames": 500,
+        "ligand_rmsd_mean_A": 7.335,
+        "ligand_rmsd_std_A": 1.566,
+        "ligand_rmsd_max_A": 11.12,
+        "ligand_rmsd_final_A": 6.613,
+        "hbond_occupancy": {
+          "SER403_OG": {
+            "occupancy": 0.428,
+            "mean_distance_A": 34.698515389230785,
+            "min_distance_A": 2.350250769790719
+          },
+          "LYS406_NZ": {
+            "occupancy": 0.08,
+            "mean_distance_A": 35.151341046852934,
+            "min_distance_A": 2.9068943490968095
+          },
+          "TYR446_OH": {
+            "occupancy": 0.448,
+            "mean_distance_A": 37.75511515182116,
+            "min_distance_A": 2.5522275340477187
+          }
+        },
+        "mean_potential_energy_kcal": -1381904.6,
+        "nan_auto_restarts": 0,
+        "success": true,
+        "performance": {
+          "steps": 2500000,
+          "steps_per_s": 44.1,
+          "ns_per_day": 15.23,
+          "platform": "OpenCL",
+          "n_atoms": 421562,
+          "elapsed_s": 56740.213,
+          "n_frames": 500,
+          "timestep_ps": 0.004,
+          "hmr": true
+        }
+      },
+      "stability_class": "Unstable",
+      "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/ALL_QU04_active_c2_out.pdbqt",
+      "ligand_rmsd_mean_last5ns_A": 8.684838363821985,
+      "ser403_og_hbond_occupancy": 0.428
+    },
+    {
+      "replica": 2,
+      "compound_id": "ALL_QU04",
+      "smiles": "O=S(=O)(c1ccc2ncccc2c1)Nc1ccc(-c2ccccc2)cc1",
+      "success": true,
+      "error": null,
+      "minimization": {
+        "initial_energy_kcal": 335354795910.1,
+        "final_energy_kcal": -1712546.0,
+        "delta_energy_kcal": -335356508456.1,
+        "ligand_rmsd_A": 3.734,
+        "success": true
+      },
+      "equilibration": {
+        "nvt_duration_ps": 500.0,
+        "final_energy_kcal": -1385858.6,
+        "ligand_rmsd_mean_A": 3.021,
+        "ligand_rmsd_std_A": 0.527,
+        "success": true
+      },
+      "production": {
+        "npt_duration_ns": 10.0,
+        "n_frames": 500,
+        "ligand_rmsd_mean_A": 5.873,
+        "ligand_rmsd_std_A": 1.675,
+        "ligand_rmsd_max_A": 10.252,
+        "ligand_rmsd_final_A": 6.65,
+        "hbond_occupancy": {
+          "SER403_OG": {
+            "occupancy": 0.014,
+            "mean_distance_A": 35.88736203478734,
+            "min_distance_A": 2.644061578222996
           },
           "LYS406_NZ": {
             "occupancy": 0.0,
-            "mean_distance_A": 38.89461151441701,
-            "min_distance_A": 5.346119655625541
+            "mean_distance_A": 36.18101902281394,
+            "min_distance_A": 3.712133934538048
           },
           "TYR446_OH": {
-            "occupancy": 0.32,
-            "mean_distance_A": 40.06128664579816,
-            "min_distance_A": 2.486706390327488
+            "occupancy": 0.08,
+            "mean_distance_A": 39.14025111562714,
+            "min_distance_A": 3.0375741070779116
           }
         },
-        "mean_potential_energy_kcal": -1389060.2,
-        "success": true
+        "mean_potential_energy_kcal": -1395102.0,
+        "nan_auto_restarts": 0,
+        "success": true,
+        "performance": {
+          "steps": 2500000,
+          "steps_per_s": 44.3,
+          "ns_per_day": 15.3,
+          "platform": "OpenCL",
+          "n_atoms": 425479,
+          "elapsed_s": 56486.437,
+          "n_frames": 500,
+          "timestep_ps": 0.004,
+          "hmr": true
+        }
       },
-      "stability_class": "Metastable",
+      "stability_class": "Unstable",
       "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/ALL_QU04_active_c2_out.pdbqt",
-      "ligand_rmsd_mean_last5ns_A": 3.039362695144752,
-      "ser403_og_hbond_occupancy": 0.04
+      "ligand_rmsd_mean_last5ns_A": 6.578957204977289,
+      "ser403_og_hbond_occupancy": 0.014
     }
   ],
   "stability_classes": [
-    "Metastable"
+    "Unstable",
+    "Unstable",
+    "Unstable"
   ],
   "consensus_stability": "Not Validated",
   "validated": false,
+  "timestep_ps": 0.004,
+  "hmr_requested": true,
+  "hmr_fallback_used": false,
   "stability_class_d3": "Dissociated"
 }

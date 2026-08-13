@@ -1,29 +1,29 @@
 {
   "compound_id": "BRICS_0022",
   "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
-  "success": false,
+  "success": true,
   "error": null,
-  "n_replicas": 1,
-  "npt_duration_ns": 0.5,
+  "n_replicas": 3,
+  "npt_duration_ns": 10.0,
   "replicas": [
     {
       "replica": 0,
       "compound_id": "BRICS_0022",
       "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
       "success": false,
-      "error": "NPT production failed: cannot reshape array of size 671937210 into shape (526,425119,3)",
+      "error": "NPT production failed: cannot reshape array of size 793096125 into shape (621,425119,3)",
       "minimization": {
-        "initial_energy_kcal": 1830124933857.6,
-        "final_energy_kcal": -1698474.1,
-        "delta_energy_kcal": -1830126632331.7,
-        "ligand_rmsd_A": 4.91,
+        "initial_energy_kcal": 1830124969312.0,
+        "final_energy_kcal": -1709502.0,
+        "delta_energy_kcal": -1830126678813.9,
+        "ligand_rmsd_A": 6.162,
         "success": true
       },
       "equilibration": {
-        "nvt_duration_ps": 50.0,
-        "final_energy_kcal": -1374409.1,
-        "ligand_rmsd_mean_A": 2.432,
-        "ligand_rmsd_std_A": 0.68,
+        "nvt_duration_ps": 500.0,
+        "final_energy_kcal": -1385387.9,
+        "ligand_rmsd_mean_A": 2.448,
+        "ligand_rmsd_std_A": 0.247,
         "success": true
       },
       "production": {
@@ -31,10 +31,140 @@
       },
       "stability_class": null,
       "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/BRICS_0022_active_c2_out.pdbqt"
+    },
+    {
+      "replica": 1,
+      "compound_id": "BRICS_0022",
+      "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
+      "success": true,
+      "error": null,
+      "minimization": {
+        "initial_energy_kcal": 1830125176211.6,
+        "final_energy_kcal": -1712821.0,
+        "delta_energy_kcal": -1830126889032.7,
+        "ligand_rmsd_A": 5.891,
+        "success": true
+      },
+      "equilibration": {
+        "nvt_duration_ps": 500.0,
+        "final_energy_kcal": -1388706.7,
+        "ligand_rmsd_mean_A": 2.137,
+        "ligand_rmsd_std_A": 0.259,
+        "success": true
+      },
+      "production": {
+        "npt_duration_ns": 10.0,
+        "n_frames": 500,
+        "ligand_rmsd_mean_A": 7.055,
+        "ligand_rmsd_std_A": 1.937,
+        "ligand_rmsd_max_A": 11.885,
+        "ligand_rmsd_final_A": 10.914,
+        "hbond_occupancy": {
+          "SER403_OG": {
+            "occupancy": 0.0,
+            "mean_distance_A": 34.42349943379352,
+            "min_distance_A": 4.0012153597000975
+          },
+          "LYS406_NZ": {
+            "occupancy": 0.028,
+            "mean_distance_A": 34.021305013252146,
+            "min_distance_A": 2.440775301093374
+          },
+          "TYR446_OH": {
+            "occupancy": 0.556,
+            "mean_distance_A": 35.94101069695655,
+            "min_distance_A": 2.3731626984624925
+          }
+        },
+        "mean_potential_energy_kcal": -1397582.1,
+        "nan_auto_restarts": 0,
+        "success": true,
+        "performance": {
+          "steps": 2500000,
+          "steps_per_s": 44.4,
+          "ns_per_day": 15.34,
+          "platform": "OpenCL",
+          "n_atoms": 426270,
+          "elapsed_s": 56312.885,
+          "n_frames": 500,
+          "timestep_ps": 0.004,
+          "hmr": true
+        }
+      },
+      "stability_class": "Unstable",
+      "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/BRICS_0022_active_c2_out.pdbqt",
+      "ligand_rmsd_mean_last5ns_A": 7.985474120535512,
+      "ser403_og_hbond_occupancy": 0.0
+    },
+    {
+      "replica": 2,
+      "compound_id": "BRICS_0022",
+      "smiles": "COc1ccc(C=Cc2cn(Cc3ccnc(C4CCNC4=O)n3)c(=O)[nH]c2=O)cc1O",
+      "success": true,
+      "error": null,
+      "minimization": {
+        "initial_energy_kcal": 1830125098917.4,
+        "final_energy_kcal": -1699614.9,
+        "delta_energy_kcal": -1830126798532.3,
+        "ligand_rmsd_A": 5.468,
+        "success": true
+      },
+      "equilibration": {
+        "nvt_duration_ps": 500.0,
+        "final_energy_kcal": -1376829.1,
+        "ligand_rmsd_mean_A": 2.931,
+        "ligand_rmsd_std_A": 0.355,
+        "success": true
+      },
+      "production": {
+        "npt_duration_ns": 10.0,
+        "n_frames": 500,
+        "ligand_rmsd_mean_A": 10.695,
+        "ligand_rmsd_std_A": 3.858,
+        "ligand_rmsd_max_A": 17.423,
+        "ligand_rmsd_final_A": 15.452,
+        "hbond_occupancy": {
+          "SER403_OG": {
+            "occupancy": 0.996,
+            "mean_distance_A": 33.87494610295733,
+            "min_distance_A": 1.7758071098584642
+          },
+          "LYS406_NZ": {
+            "occupancy": 0.444,
+            "mean_distance_A": 34.814510396311206,
+            "min_distance_A": 2.3475606946429988
+          },
+          "TYR446_OH": {
+            "occupancy": 0.566,
+            "mean_distance_A": 37.903477358403876,
+            "min_distance_A": 2.4804291427128877
+          }
+        },
+        "mean_potential_energy_kcal": -1385374.2,
+        "nan_auto_restarts": 0,
+        "success": true,
+        "performance": {
+          "steps": 2500000,
+          "steps_per_s": 47.6,
+          "ns_per_day": 16.46,
+          "platform": "OpenCL",
+          "n_atoms": 422616,
+          "elapsed_s": 52494.9,
+          "n_frames": 500,
+          "timestep_ps": 0.004,
+          "hmr": true
+        }
+      },
+      "stability_class": "Unstable",
+      "pose_pdbqt": "/Users/tom/Documents/apps/AutoAntibiotic/output/workdir/BRICS_0022_active_c2_out.pdbqt",
+      "ligand_rmsd_mean_last5ns_A": 14.012952326505427,
+      "ser403_og_hbond_occupancy": 0.996
     }
   ],
   "stability_classes": [
-    null
+    null,
+    "Unstable",
+    "Unstable"
   ],
   "consensus_stability": "Not Validated",
   "validated": false,
