@@ -1,17 +1,17 @@
 {
   "SER403_OG": {
-    "occupancy": 0.54,
-    "mean_distance_A": 35.466631753681376,
-    "min_distance_A": 2.2789133467597655
+    "occupancy": 0.0,
+    "mean_distance_A": null,
+    "min_distance_A": null
   },
   "LYS406_NZ": {
-    "occupancy": 0.264,
-    "mean_distance_A": 35.693844632262696,
-    "min_distance_A": 2.4669438556915098
+    "occupancy": 0.0,
+    "mean_distance_A": null,
+    "min_distance_A": null
   },
   "TYR446_OH": {
-    "occupancy": 0.312,
-    "mean_distance_A": 39.21672944069334,
-    "min_distance_A": 2.797515929658213
+    "occupancy": 0.0,
+    "mean_distance_A": null,
+    "min_distance_A": null
   }
 }

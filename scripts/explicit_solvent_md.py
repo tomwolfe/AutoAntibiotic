@@ -665,9 +665,27 @@ def _run_replica(
     energies_bin = replica_dir / "production_energies.npy"
     rmsd_bin = replica_dir / "ligand_rmsd.npy"
     min_pos_ref_bin = replica_dir / "min_pos_ref.npy"
+    dcd_path = replica_dir / "trajectory.dcd"
     _EARLY_RESUME = bool(
         resume and ckpt_path.is_file() and ckpt_json.is_file() and frames_bin.is_file()
     )
+    # Post-cleanup resume: production is complete (checkpoint at final step)
+    # and trajectory.dcd already exists (frames.dat was deleted during cleanup).
+    # Skip production entirely and re-derive analysis from the DCD.
+    _POST_CLEANUP_RESUME = bool(
+        resume and ckpt_path.is_file() and ckpt_json.is_file()
+        and dcd_path.is_file() and not frames_bin.is_file()
+    )
+    if _POST_CLEANUP_RESUME:
+        with open(ckpt_json) as _f:
+            _ckpt = json.load(_f)
+        if int(_ckpt.get("step_done", 0)) >= npt_steps:
+            log.info(f"    [{cid}] post-cleanup resume: production already complete for "
+                     f"replica {replica_idx} (checkpoint at full step); "
+                     f"re-deriving analysis from existing DCD")
+        else:
+            _POST_CLEANUP_RESUME = False
+    _EARLY_RESUME = _EARLY_RESUME or _POST_CLEANUP_RESUME
     if _EARLY_RESUME:
         log.info(f"    [{cid}] early resume: production checkpoint found for replica "
                  f"{replica_idx}; skipping minimisation/equilibration (production "
@@ -779,8 +797,10 @@ def _run_replica(
     # ligand conformer, so if the freshly rebuilt system has a different
     # particle count than the checkpoint (e.g. an earlier run used a different
     # conformer/box), loading the .cpt fails with "Checkpoint contains the
-    # wrong number of particles". Detect that here and start production fresh.
-    if _EARLY_RESUME:
+    # wrong number of particles". Detect that here and start production fresh,
+    # EXCEPT when we're in a post-cleanup resume where the DCD already exists
+    # and we need to re-derive analysis from it rather than re-run production.
+    if _EARLY_RESUME and not _POST_CLEANUP_RESUME:
         try:
             with open(ckpt_json) as f:
                 ckpt_data = json.load(f)
@@ -798,6 +818,20 @@ def _run_replica(
                 _EARLY_RESUME = False
                 ckpt_path.unlink(missing_ok=True)
                 ckpt_json.unlink(missing_ok=True)
+                # Also delete any partially-written rolling frames so a fresh run
+                # starts with a clean header (avoids the reshape corruption bug).
+                frames_bin = replica_dir / "production_frames.dat"
+                if frames_bin.is_file():
+                    frames_bin.unlink(missing_ok=True)
+        except Exception as exc:
+            log.warning(f"    [{cid}] checkpoint validation failed ({exc}); "
+                        f"restarting production from zero")
+            _EARLY_RESUME = False
+            ckpt_path.unlink(missing_ok=True)
+            ckpt_json.unlink(missing_ok=True)
+            frames_bin = replica_dir / "production_frames.dat"
+            if frames_bin.is_file():
+                frames_bin.unlink(missing_ok=True)
         except Exception as exc:
             log.warning(f"    [{cid}] checkpoint validation failed ({exc}); "
                         f"restarting production from zero")
@@ -964,19 +998,41 @@ def _run_replica(
 
         # Reconstruct the trajectory analysed so far.
         if resuming:
-            with open(frames_bin, "rb") as fh:
-                nat = np.frombuffer(fh.read(8), dtype=np.int64)[0]
-                nfr = int(os.path.getsize(frames_bin) - 8) // (nat * 3 * 8)
-                raw = np.fromfile(fh, dtype=np.float64).reshape(nfr, nat, 3)
-            prod_positions = _quantity_frames(raw)
-            if energies_bin.is_file():
-                prod_energies = list(np.load(energies_bin))
-            if rmsd_bin.is_file():
-                lig_rmsd_traj = list(np.load(rmsd_bin))
+            if frames_bin.is_file():
+                with open(frames_bin, "rb") as fh:
+                    nat = np.frombuffer(fh.read(8), dtype=np.int64)[0]
+                    nfr = int(os.path.getsize(frames_bin) - 8) // (nat * 3 * 8)
+                    raw = np.fromfile(fh, dtype=np.float64).reshape(nfr, nat, 3)
+                prod_positions = _quantity_frames(raw)
+                if energies_bin.is_file():
+                    prod_energies = list(np.load(energies_bin))
+                if rmsd_bin.is_file():
+                    lig_rmsd_traj = list(np.load(rmsd_bin))
+            elif dcd_path.is_file():
+                # Post-cleanup resume: reconstruct from the DCD.
+                import mdtraj as md
+                traj = md.load_dcd(str(dcd_path), topology=solvated_top)
+                n_frames = traj.n_frames
+                n_atoms = solvated_top.getNumAtoms()
+                raw = np.ascontiguousarray(
+                    traj.xyz.reshape(n_frames, n_atoms, 3)
+                )
+                prod_positions = [
+                    [openmm.Vec3(float(raw[f, a, 0]),
+                                  float(raw[f, a, 1]),
+                                  float(raw[f, a, 2])) * unit.nanometer
+                     for a in range(n_atoms)]
+                    for f in range(n_frames)
+                ]
+                if energies_bin.is_file():
+                    prod_energies = list(np.load(energies_bin))
+                if rmsd_bin.is_file():
+                    lig_rmsd_traj = list(np.load(rmsd_bin))
             # Restore the minimised reference pose used for ligand RMSD.
-            _arr = np.load(min_pos_ref_bin)
-            min_pos = [openmm.Vec3(float(r[0]), float(r[1]), float(r[2])) * unit.nanometer
-                       for r in _arr]
+            if min_pos_ref_bin.is_file():
+                _arr = np.load(min_pos_ref_bin)
+                min_pos = [openmm.Vec3(float(r[0]), float(r[1]), float(r[2])) * unit.nanometer
+                           for r in _arr]
 
         # NPT equilibration (restraint release) only when starting fresh.
         if not resuming:
@@ -1027,9 +1083,10 @@ def _run_replica(
 
         n_atoms = solvated_top.getNumAtoms()
         # Persist frame-0 header (atom count) for the rolling positions file.
-        with open(frames_bin, "ab") as fh:
-            if os.path.getsize(frames_bin) == 0:
-                fh.write(np.int64(n_atoms).tobytes())
+        if not _POST_CLEANUP_RESUME:
+            with open(frames_bin, "ab") as fh:
+                if os.path.getsize(frames_bin) == 0:
+                    fh.write(np.int64(n_atoms).tobytes())
 
         total_steps_remaining = npt_steps - start_step
         done_steps = start_step
@@ -1116,24 +1173,26 @@ def _run_replica(
                 chunk_remaining = total_steps_remaining % report_npt_steps
 
         # Final flush of the remaining (¼ checkpoint) frames.
-        _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
-                          prod_positions, prod_energies, lig_rmsd_traj,
-                          pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps,
-                          hmr=use_hmr)
+        if not _POST_CLEANUP_RESUME:
+            _flush_production(frames_bin, energies_bin, rmsd_bin, ckpt_path, ckpt_json,
+                              prod_positions, prod_energies, lig_rmsd_traj,
+                              pos_tmp, energy_tmp, rmsd_tmp, simulation, done_steps,
+                              hmr=use_hmr)
         result["production"]["nan_auto_restarts"] = n_nan_restarts
 
         # Rebuild the full in-memory frame list for analysis + DCD output.
         # Each element is one frame: a list of n_atoms openmm.Vec3 (matching
         # the pre-refactor contract expected by the RMSF/H-bond/DCD analysis).
-        with open(frames_bin, "rb") as fh:
-            nat = np.frombuffer(fh.read(8), dtype=np.int64)[0]
-            nfr = int(os.path.getsize(frames_bin) - 8) // (nat * 3 * 8)
-            raw_all = np.fromfile(fh, dtype=np.float64).reshape(nfr, nat, 3)
-        prod_positions = _quantity_frames(raw_all)
-        if energies_bin.is_file():
-            prod_energies = list(np.load(energies_bin))
-        if rmsd_bin.is_file():
-            lig_rmsd_traj = list(np.load(rmsd_bin))
+        if not _POST_CLEANUP_RESUME and frames_bin.is_file():
+            with open(frames_bin, "rb") as fh:
+                nat = np.frombuffer(fh.read(8), dtype=np.int64)[0]
+                nfr = int(os.path.getsize(frames_bin) - 8) // (nat * 3 * 8)
+                raw_all = np.fromfile(fh, dtype=np.float64).reshape(nfr, nat, 3)
+            prod_positions = _quantity_frames(raw_all)
+            if energies_bin.is_file():
+                prod_energies = list(np.load(energies_bin))
+            if rmsd_bin.is_file():
+                lig_rmsd_traj = list(np.load(rmsd_bin))
 
         _t_prod1 = time.monotonic()
         _prod_s = _t_prod1 - _t_prod0
@@ -1151,27 +1210,31 @@ def _run_replica(
               "n_frames": len(prod_positions),
               "timestep_ps": timestep_ps,
               "hmr": use_hmr,
-          },
-      )
+            },
+
+        )
 
         log.info(f"    NPT production complete: {npt_duration_ns} ns, "
-                 f"{len(prod_positions)} frames ({platform_name})")
+                f"{len(prod_positions)} frames ({platform_name})")
 
         # Write the production trajectory to DCD so downstream trajectory-based
         # MM-GBSA (scripts/mmgbsa_analysis.py) can sample an ensemble rather
         # than a single minimised pose. Serialised from the full frame list at
         # completion (consistent for fresh and resumed runs).
-        _reprimer = _report_dcd(str(replica_dir / "trajectory.dcd"),
-                                solvated_top, prod_positions)
-        # The rolling production_frames.dat (raw xyz binary) is only needed for
-        # mid-run resume reconstruction. Once the DCD is safely written it is
-        # redundant, and at ~10 MB/frame × 500 frames ≈ 5 GB / ns it dominates
-        # disk usage. Remove it (and the energy trace, kept small) so a 100 ns
-        # campaign stays on the order of tens of GB rather than TB.
-        if frames_bin.is_file():
-            size_gb = frames_bin.stat().st_size / (1024 ** 3)
-            frames_bin.unlink()
-            log.info(f"    [{cid}] removed rolling frames file ({size_gb:.1f} GB)")
+        if not _POST_CLEANUP_RESUME:
+            _reprimer = _report_dcd(str(replica_dir / "trajectory.dcd"),
+                                    solvated_top, prod_positions)
+            # The rolling production_frames.dat (raw xyz binary) is only needed for
+            # mid-run resume reconstruction. Once the DCD is safely written it is
+            # redundant, and at ~10 MB/frame × 500 frames ≈ 5 GB / ns it dominates
+            # disk usage. Remove it (and the energy trace, kept small) so a 100 ns
+            # campaign stays on the order of tens of GB rather than TB.
+            if frames_bin.is_file():
+                size_gb = frames_bin.stat().st_size / (1024 ** 3)
+                frames_bin.unlink()
+                log.info(f"    [{cid}] removed rolling frames file ({size_gb:.1f} GB)")
+        else:
+            log.info(f"    [{cid}] DCD + cleanup already complete; skipping re-write")
     except Exception as exc:
         result["error"] = f"NPT production failed: {exc}"
         return result
